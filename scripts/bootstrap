@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WITH_ALL_TOOLS=0
+RUN_DOCTOR=1
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/bootstrap [options]
+
+Set up the local development environment for Yule Studio Agent.
+
+Options:
+  --all           Install optional AI CLI tools as well.
+  --skip-doctor   Skip the final yule doctor check.
+  -h, --help      Show this help.
+
+Default setup:
+  - Homebrew check
+  - Python and GitHub CLI
+  - .venv creation
+  - editable install
+
+Manual steps still required:
+  - GitHub login
+  - Claude/Codex/Gemini/Copilot login
+  - Starting Ollama when needed
+EOF
+}
+
+log() {
+  printf "\033[1;34m==>\033[0m %s\n" "$*"
+}
+
+warn() {
+  printf "\033[1;33mWARN\033[0m %s\n" "$*"
+}
+
+fail() {
+  printf "\033[1;31mERROR\033[0m %s\n" "$*" >&2
+  exit 1
+}
+
+has_command() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --all)
+      WITH_ALL_TOOLS=1
+      ;;
+    --skip-doctor)
+      RUN_DOCTOR=0
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "Unknown option: $arg"
+      ;;
+  esac
+done
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  fail "This bootstrap script currently targets macOS with Homebrew."
+fi
+
+if ! has_command brew; then
+  cat <<'EOF'
+Homebrew is required.
+
+Install Homebrew first:
+
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+Then rerun:
+
+  ./scripts/bootstrap
+EOF
+  exit 1
+fi
+
+install_brew_if_missing() {
+  local command_name="$1"
+  local formula="$2"
+
+  if has_command "$command_name"; then
+    log "Found $command_name: $(command -v "$command_name")"
+    return
+  fi
+
+  log "Installing $formula with Homebrew"
+  brew install "$formula"
+}
+
+python_is_supported() {
+  "$1" - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 9) else 1)
+PY
+}
+
+select_python() {
+  if has_command python3.11; then
+    echo "python3.11"
+    return
+  fi
+
+  if has_command python3 && python_is_supported python3; then
+    echo "python3"
+    return
+  fi
+
+  log "Installing python@3.11 with Homebrew"
+  brew install python@3.11
+
+  if has_command python3.11; then
+    echo "python3.11"
+    return
+  fi
+
+  if has_command python3 && python_is_supported python3; then
+    echo "python3"
+    return
+  fi
+
+  fail "Could not find a supported Python after installing python@3.11."
+}
+
+install_claude_code_if_missing() {
+  if has_command claude; then
+    log "Found claude: $(command -v claude)"
+    return
+  fi
+
+  if ! has_command npm; then
+    install_brew_if_missing node node
+  fi
+
+  log "Installing Claude Code with npm"
+  npm install -g @anthropic-ai/claude-code
+}
+
+install_optional_ai_tools() {
+  log "Installing optional AI CLI tools"
+  install_claude_code_if_missing
+  install_brew_if_missing codex codex
+  install_brew_if_missing gemini gemini-cli
+  install_brew_if_missing ollama ollama
+  install_brew_if_missing copilot copilot-cli
+
+  if has_command ollama; then
+    if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+      log "Pulling Ollama model gemma3"
+      ollama pull gemma3
+    else
+      warn "Ollama is installed but not running. Start it with 'open -a Ollama' or 'ollama serve', then run 'ollama pull gemma3'."
+    fi
+  fi
+}
+
+log "Installing base tools"
+install_brew_if_missing gh gh
+PYTHON_BIN="$(select_python)"
+log "Using Python: $PYTHON_BIN ($("$PYTHON_BIN" --version))"
+
+if [[ ! -d .venv ]]; then
+  log "Creating .venv"
+  "$PYTHON_BIN" -m venv .venv
+else
+  log "Found .venv"
+fi
+
+log "Installing project in editable mode"
+.venv/bin/python -m pip install -U pip
+.venv/bin/python -m pip install -e .
+
+if [[ "$WITH_ALL_TOOLS" -eq 1 ]]; then
+  install_optional_ai_tools
+fi
+
+cat <<'EOF'
+
+Manual authentication steps:
+
+  gh auth login
+  claude
+  codex
+  gemini
+  copilot
+
+Ollama server:
+
+  open -a Ollama
+  # or
+  ollama serve
+
+EOF
+
+if [[ "$RUN_DOCTOR" -eq 1 ]]; then
+  log "Running yule doctor"
+  .venv/bin/yule doctor || true
+fi
+
+log "Bootstrap completed"
