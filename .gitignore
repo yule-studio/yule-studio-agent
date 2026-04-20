@@ -19,3 +19,8 @@ id_ed25519
 
 # OS/editor
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yule-studio-agent"
+version = "0.1.0"
+description = "Personal agent orchestration platform for Yule Studio workflows."
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+yule = "yule_orchestrator.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
