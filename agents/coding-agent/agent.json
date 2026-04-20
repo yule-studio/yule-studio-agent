@@ -1,0 +1,104 @@
+{
+  "id": "coding-agent",
+  "name": "Coding Agent",
+  "description": "Implements approved development tasks with a single executor and multiple AI advisors.",
+  "execution_mode": "single_executor_multi_advisor",
+  "default_executor": "claude",
+  "instruction_entry": "agents/coding-agent/CLAUDE.md",
+  "policies": [
+    "policies/common/safety.md",
+    "policies/common/context-loading.md",
+    "policies/coding/workflow.md",
+    "policies/coding/testing.md"
+  ],
+  "write_policy": {
+    "max_write_executors_per_run": 1,
+    "require_user_approval_before_write": true,
+    "allow_advisor_patch_proposals": true,
+    "allow_parallel_writes": false,
+    "require_human_review_before_publish": true
+  },
+  "participants": [
+    {
+      "id": "claude",
+      "provider": "anthropic",
+      "roles": ["executor", "planner"],
+      "permissions": ["read", "propose", "write"],
+      "allowed_tools": [
+        "filesystem.read",
+        "filesystem.write_after_approval",
+        "git.status",
+        "git.diff",
+        "git.branch",
+        "tests.run",
+        "github.issue.read",
+        "github.pull_request.prepare"
+      ],
+      "notes": "Primary coding partner for implementation work during the initial MVP."
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "roles": ["advisor", "reviewer", "patch_proposer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.status",
+        "git.diff",
+        "tests.run",
+        "github.issue.read"
+      ],
+      "notes": "Used for implementation review, patch suggestions, and test-focused feedback."
+    },
+    {
+      "id": "gemini",
+      "provider": "google",
+      "roles": ["requirements_reviewer", "long_context_advisor", "planner"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.status",
+        "git.diff",
+        "github.issue.read"
+      ],
+      "notes": "Used for long-context analysis, requirement review, and planning support."
+    },
+    {
+      "id": "ollama",
+      "provider": "local",
+      "model": "gemma3:latest",
+      "endpoint": "http://localhost:11434",
+      "roles": ["local_private_assistant", "classifier", "summarizer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.diff"
+      ],
+      "notes": "Runs on the user's machine or home server for private local assistance."
+    }
+  ],
+  "integrations": [
+    {
+      "id": "github-copilot",
+      "provider": "github",
+      "type": "github_workflow_assistant",
+      "roles": ["github_native_executor"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "github.issue.read",
+        "github.pull_request.prepare"
+      ],
+      "notes": "Works through GitHub issue, branch, and pull request workflows rather than direct local execution."
+    }
+  ],
+  "tool_catalog": [
+    "filesystem.read",
+    "filesystem.write_after_approval",
+    "git.status",
+    "git.diff",
+    "git.branch",
+    "tests.run",
+    "github.issue.read",
+    "github.pull_request.prepare"
+  ]
+}
