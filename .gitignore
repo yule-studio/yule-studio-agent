@@ -1,0 +1,21 @@
+# Local agent runtime/state
+.claude/plans/
+.claude/settings.local.json
+.codex/
+.gemini/
+runs/*
+!runs/.gitkeep
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# OS/editor
+.DS_Store
