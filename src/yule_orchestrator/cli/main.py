@@ -5,9 +5,11 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .context_loader import ContextError, load_agent_context, render_context
-from .doctor import doctor_exit_code, render_doctor_report, run_doctor
-from .github_issues import GitHubIssueError, list_open_issues, render_open_issues
+from ..core.context_loader import ContextError
+from ..integrations.github.issues import GitHubIssueError
+from .context import run_context_command
+from .doctor import run_doctor_command
+from .github import run_github_issues_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,27 +68,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_context_command(repo_root: Path, agent_id: str, output: Optional[str]) -> int:
-    loaded_context = load_agent_context(repo_root=repo_root, agent_id=agent_id)
-    rendered = render_context(loaded_context)
-
-    if output:
-        output_path = Path(output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-        print(str(output_path))
-        return 0
-
-    print(rendered)
-    return 0
-
-
-def run_github_issues_command(limit: int) -> int:
-    issues = list_open_issues(limit=limit)
-    print(render_open_issues(issues), end="")
-    return 0
-
-
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -96,9 +77,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if args.command == "context":
             return run_context_command(repo_root, args.agent_id, args.output)
         if args.command == "doctor":
-            checks = run_doctor(repo_root=repo_root, agent_id=args.agent_id)
-            print(render_doctor_report(checks), end="")
-            return doctor_exit_code(checks)
+            return run_doctor_command(repo_root, args.agent_id)
         if args.command == "github" and args.github_command == "issues":
             return run_github_issues_command(args.limit)
     except ContextError as exc:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .context_loader import ContextError, load_agent_context
+from ..core.context_loader import ContextError, load_agent_context
 
 
 @dataclass(frozen=True)
