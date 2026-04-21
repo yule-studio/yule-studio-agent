@@ -44,14 +44,56 @@ class CalendarEvent:
 
 
 @dataclass(frozen=True)
+class CalendarTodo:
+    title: str
+    start: Optional[str]
+    due: Optional[str]
+    start_all_day: bool
+    due_all_day: bool
+    status: str
+    completed: bool
+    completed_at: Optional[str]
+    priority: Optional[int]
+    percent_complete: Optional[int]
+    calendar_name: str
+    source: str
+    description: str
+
+    def sort_key(self) -> tuple[int, str, str]:
+        return (
+            1 if self.completed else 0,
+            self.due or self.start or "9999-12-31T23:59:59+09:00",
+            self.title.lower(),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "start": self.start,
+            "due": self.due,
+            "start_all_day": self.start_all_day,
+            "due_all_day": self.due_all_day,
+            "status": self.status,
+            "completed": self.completed,
+            "completed_at": self.completed_at,
+            "priority": self.priority,
+            "percent_complete": self.percent_complete,
+            "calendar_name": self.calendar_name,
+            "source": self.source,
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
 class CalendarQueryResult:
     source: str
     start_date: date
     end_date: date
     events: Sequence[CalendarEvent]
+    todos: Sequence[CalendarTodo]
 
 
-def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQueryResult:
+def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQueryResult:
     config = load_naver_caldav_config()
     client_cls, calendar_cls = _load_caldav_dependencies()
 
@@ -59,7 +101,9 @@ def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQuer
     query_end = _to_local_datetime(end_date + timedelta(days=1))
 
     events: List[CalendarEvent] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    todos: List[CalendarTodo] = []
+    seen_events: set[tuple[str, str, str, str]] = set()
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]] = set()
 
     with client_cls(url=config.url, username=config.username, password=config.password) as client:
         principal = client.principal()
@@ -78,40 +122,97 @@ def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQuer
                     if event is None:
                         continue
                     dedupe_key = (event.title, event.start, event.end, event.calendar_name)
-                    if dedupe_key in seen:
+                    if dedupe_key in seen_events:
                         continue
-                    seen.add(dedupe_key)
+                    seen_events.add(dedupe_key)
                     events.append(event)
+                for component in calendar_obj.walk("VTODO"):
+                    todo = _build_todo(component, calendar_label)
+                    if todo is None:
+                        continue
+                    dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+                    if dedupe_key in seen_todos:
+                        continue
+                    seen_todos.add(dedupe_key)
+                    todos.append(todo)
+
+            for resource in _list_todo_resources(calendar):
+                raw_ical = _resource_ical_payload(resource)
+                calendar_obj = calendar_cls.from_ical(raw_ical)
+                for component in calendar_obj.walk("VTODO"):
+                    todo = _build_todo(component, calendar_label)
+                    if todo is None or not _todo_matches_range(todo, start_date, end_date):
+                        continue
+                    dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+                    if dedupe_key in seen_todos:
+                        continue
+                    seen_todos.add(dedupe_key)
+                    todos.append(todo)
 
     events.sort(key=lambda event: event.sort_key())
+    todos.sort(key=lambda todo: todo.sort_key())
     return CalendarQueryResult(
         source="naver-caldav",
         start_date=start_date,
         end_date=end_date,
         events=events,
+        todos=todos,
     )
 
 
-def render_calendar_events(result: CalendarQueryResult) -> str:
-    if not result.events:
+def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQueryResult:
+    return list_naver_calendar_items(start_date=start_date, end_date=end_date)
+
+
+def render_calendar_items(result: CalendarQueryResult) -> str:
+    if not result.events and not result.todos:
         return (
-            f"Naver Calendar Events ({result.start_date.isoformat()} to {result.end_date.isoformat()})\n\n"
-            "No events found for the requested range.\n"
+            f"Naver Calendar Items ({result.start_date.isoformat()} to {result.end_date.isoformat()})\n\n"
+            "No calendar items found for the requested range.\n"
         )
 
     lines: List[str] = [
-        f"Naver Calendar Events ({result.start_date.isoformat()} to {result.end_date.isoformat()})",
+        f"Naver Calendar Items ({result.start_date.isoformat()} to {result.end_date.isoformat()})",
         "",
     ]
-    for event in result.events:
-        if event.all_day:
-            lines.append(f"- [all-day] {event.title} ({event.calendar_name})")
-        else:
-            lines.append(f"- [{_format_time_range(event.start, event.end)}] {event.title} ({event.calendar_name})")
-        if event.description:
-            lines.append(f"  description: {event.description}")
+
+    if result.events:
+        lines.append("Events")
+        lines.append("")
+        for event in result.events:
+            if event.all_day:
+                lines.append(f"- [all-day] {event.title} ({event.calendar_name})")
+            else:
+                lines.append(f"- [{_format_time_range(event.start, event.end)}] {event.title} ({event.calendar_name})")
+            if event.description:
+                lines.append(f"  description: {event.description}")
+
+    if result.todos:
+        if len(lines) > 2:
+            lines.append("")
+        lines.append("Todos")
+        lines.append("")
+        for todo in result.todos:
+            status_label = todo.status.lower()
+            lines.append(f"- [{status_label}] {todo.title} ({todo.calendar_name})")
+            if todo.start:
+                lines.append(f"  start: {_format_temporal_value(todo.start, todo.start_all_day)}")
+            if todo.due:
+                lines.append(f"  due: {_format_temporal_value(todo.due, todo.due_all_day)}")
+            if todo.priority is not None:
+                lines.append(f"  priority: {todo.priority}")
+            if todo.percent_complete is not None:
+                lines.append(f"  progress: {todo.percent_complete}%")
+            if todo.completed_at:
+                lines.append(f"  completed_at: {_format_temporal_value(todo.completed_at, all_day=False)}")
+            if todo.description:
+                lines.append(f"  description: {todo.description}")
 
     return "\n".join(lines) + "\n"
+
+
+def render_calendar_events(result: CalendarQueryResult) -> str:
+    return render_calendar_items(result)
 
 
 def load_naver_caldav_config() -> NaverCalDAVConfig:
@@ -249,12 +350,106 @@ def _build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
     )
 
 
+def _build_todo(component: Any, calendar_name: str) -> Optional[CalendarTodo]:
+    title_value = component.get("summary")
+    title = str(title_value) if title_value else "(untitled todo)"
+    description = _extract_description(component)
+
+    start_value = component.decoded("dtstart") if component.get("dtstart") else None
+    due_value = component.decoded("due") if component.get("due") else None
+    duration_value = component.decoded("duration") if component.get("duration") else None
+    if due_value is None and duration_value is not None and isinstance(start_value, (date, datetime)):
+        due_value = start_value + duration_value
+
+    completed_value = component.decoded("completed") if component.get("completed") else None
+
+    start, start_all_day = _normalize_temporal_value(start_value)
+    due, due_all_day = _normalize_temporal_value(due_value)
+    completed_at, _ = _normalize_temporal_value(completed_value)
+    status = _extract_status(component)
+    priority = _extract_int(component, "priority")
+    percent_complete = _extract_int(component, "percent-complete")
+    completed = status == "COMPLETED" or completed_at is not None or percent_complete == 100
+
+    return CalendarTodo(
+        title=title,
+        start=start,
+        due=due,
+        start_all_day=start_all_day,
+        due_all_day=due_all_day,
+        status=status,
+        completed=completed,
+        completed_at=completed_at,
+        priority=priority,
+        percent_complete=percent_complete,
+        calendar_name=calendar_name,
+        source="naver-caldav",
+        description=description,
+    )
+
+
+def _list_todo_resources(calendar: Any) -> List[Any]:
+    todos = getattr(calendar, "todos", None)
+    if not callable(todos):
+        return []
+
+    try:
+        return list(todos(include_completed=True))
+    except TypeError:
+        try:
+            return list(todos())
+        except Exception:
+            return []
+    except Exception:
+        return []
+
+
+def _todo_matches_range(todo: CalendarTodo, start_date: date, end_date: date) -> bool:
+    candidate_values = [todo.start, todo.due, todo.completed_at]
+    for value in candidate_values:
+        if value is None:
+            continue
+        candidate_date = _date_from_iso(value)
+        if start_date <= candidate_date <= end_date:
+            return True
+
+    return not todo.completed
+
+
 def _extract_description(component: Any) -> str:
     for field_name in ("description", "comment"):
         value = component.get(field_name)
         if value:
             return str(value).strip()
     return ""
+
+
+def _extract_status(component: Any) -> str:
+    value = component.get("status")
+    if value is None:
+        return "NEEDS-ACTION"
+    return str(value).strip().upper() or "NEEDS-ACTION"
+
+
+def _extract_int(component: Any, property_name: str) -> Optional[int]:
+    if component.get(property_name) is None:
+        return None
+
+    try:
+        return int(component.decoded(property_name))
+    except Exception:
+        try:
+            return int(str(component.get(property_name)).strip())
+        except Exception:
+            return None
+
+
+def _normalize_temporal_value(value: Any) -> tuple[Optional[str], bool]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat(), True
+    if isinstance(value, datetime):
+        return _normalize_datetime(value).isoformat(), False
+    return None, False
 
 
 def _normalize_datetime(value: datetime) -> datetime:
@@ -271,3 +466,15 @@ def _format_time_range(start: str, end: str) -> str:
     start_dt = datetime.fromisoformat(start)
     end_dt = datetime.fromisoformat(end)
     return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
+
+
+def _format_temporal_value(value: str, all_day: bool) -> str:
+    if all_day:
+        return value
+    return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
+
+
+def _date_from_iso(value: str) -> date:
+    if "T" in value:
+        return datetime.fromisoformat(value).date()
+    return date.fromisoformat(value)

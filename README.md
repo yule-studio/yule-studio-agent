@@ -9,7 +9,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - 에이전트 컨텍스트 로드
 - 로컬 실행 환경 점검(`doctor`)
 - GitHub의 열린 이슈 읽기
-- Naver CalDAV 일정 읽기 및 구조화된 데이터(JSON) 변환
+- Naver CalDAV 일정/할 일 읽기 및 구조화된 데이터(JSON) 변환
 
 ## 디렉토리 구조
 
@@ -128,9 +128,9 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 
 ## 캘린더 연동 메모
 
-- 현재는 Naver CalDAV를 통해 일정 이벤트를 읽습니다.
-- 웹 화면 상단의 할 일 목록은 CalDAV로 함께 내려오지 않을 수 있습니다.
-- 그래서 자동화 기준 데이터는 일반 일정 이벤트 중심으로 다루는 것이 안전합니다.
+- 현재는 Naver CalDAV를 통해 일정 이벤트(`VEVENT`)와 CalDAV로 노출되는 할 일(`VTODO`)을 함께 읽습니다.
+- 네이버 웹 화면의 할 일이 항상 CalDAV `VTODO`로 제공되는지는 계정 상태와 클라이언트 설정에 따라 달라질 수 있습니다.
+- `todo_count`가 0이면 현재 CalDAV 응답에 할 일이 포함되지 않았을 가능성이 큽니다.
 
 ## 로컬 전용 파일
 

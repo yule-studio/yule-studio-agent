@@ -6,8 +6,8 @@ from typing import Optional
 
 from ..integrations.calendar.naver_caldav import (
     CalendarQueryResult,
-    list_naver_calendar_events,
-    render_calendar_events,
+    list_naver_calendar_items,
+    render_calendar_items,
 )
 
 
@@ -17,13 +17,13 @@ def run_calendar_events_command(
     json_output: bool,
 ) -> int:
     start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
-    result = list_naver_calendar_events(start_date=start_date, end_date=end_date)
+    result = list_naver_calendar_items(start_date=start_date, end_date=end_date)
 
     if json_output:
         print(json.dumps(_result_to_dict(result), ensure_ascii=False, indent=2))
         return 0
 
-    print(render_calendar_events(result), end="")
+    print(render_calendar_items(result), end="")
     return 0
 
 
@@ -60,5 +60,7 @@ def _result_to_dict(result: CalendarQueryResult) -> dict:
         "start_date": result.start_date.isoformat(),
         "end_date": result.end_date.isoformat(),
         "event_count": len(result.events),
+        "todo_count": len(result.todos),
         "events": [event.to_dict() for event in result.events],
+        "todos": [todo.to_dict() for todo in result.todos],
     }

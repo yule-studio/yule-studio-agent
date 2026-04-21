@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     calendar_events_parser = calendar_subparsers.add_parser(
         "events",
-        help="Read Naver calendar events and convert them into structured data.",
+        help="Read Naver calendar items and convert them into structured data.",
     )
     calendar_events_parser.add_argument(
         "--start-date",
