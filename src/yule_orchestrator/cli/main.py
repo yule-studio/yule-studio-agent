@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..integrations.calendar.naver_caldav import CalendarIntegrationError
 from ..core import ContextError, load_env_files
+from ..integrations.calendar import CalendarIntegrationError
 from ..integrations.github.issues import GitHubIssueError
 from .calendar import run_calendar_events_command
 from .context import run_context_command
@@ -117,10 +117,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except GitHubIssueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except CalendarIntegrationError as exc:
+    except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except ValueError as exc:
+    except CalendarIntegrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

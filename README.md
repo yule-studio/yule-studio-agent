@@ -144,6 +144,10 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 - 네이버 웹 화면의 할 일이 항상 CalDAV `VTODO`로 제공되는지는 계정 상태와 클라이언트 설정에 따라 달라질 수 있습니다.
 - `todo_count`가 0이면 현재 CalDAV 응답에 할 일이 포함되지 않았을 가능성이 큽니다.
 - `VTODO`는 기본적으로 지정한 기간 안에 해당하는 항목만 출력합니다.
+- `yule calendar events --json` 실행 중 실패가 발생하면 `error.code`, `error.category`, `retryable`, `manual_action_required`, `alert_recommended`를 포함한 구조화된 에러 JSON을 반환합니다.
+- 현재 에러 분류는 `configuration`, `validation`, `authentication`, `network`, `query`, `parsing`, `dependency`, `unknown` 범주를 사용합니다.
+- `retry_strategy`는 `none` 또는 `backoff`를 사용하며, 이후 Planning Agent / Discord 알림 흐름에서 그대로 재사용할 수 있습니다.
+- 세부 운영 기준은 [policies/runtime/common/calendar-error-handling.md](/Users/masterway/local-dev/yule-studio-agent/policies/runtime/common/calendar-error-handling.md)에 정리합니다.
 
 ## 로컬 전용 파일
 
