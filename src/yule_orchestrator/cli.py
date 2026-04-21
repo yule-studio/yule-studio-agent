@@ -7,6 +7,7 @@ from typing import Iterable, Optional
 
 from .context_loader import ContextError, load_agent_context, render_context
 from .doctor import doctor_exit_code, render_doctor_report, run_doctor
+from .github_issues import GitHubIssueError, list_open_issues, render_open_issues
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +46,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent id to use for manifest-backed checks. Defaults to coding-agent.",
     )
 
+    github_parser = subparsers.add_parser(
+        "github",
+        help="Read GitHub data through the authenticated gh CLI.",
+    )
+    github_subparsers = github_parser.add_subparsers(dest="github_command", required=True)
+
+    github_issues_parser = github_subparsers.add_parser(
+        "issues",
+        help="List open GitHub issues for the current account.",
+    )
+    github_issues_parser.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="Maximum number of open issues to fetch. Defaults to 30.",
+    )
+
     return parser
 
 
@@ -63,6 +81,12 @@ def run_context_command(repo_root: Path, agent_id: str, output: Optional[str]) -
     return 0
 
 
+def run_github_issues_command(limit: int) -> int:
+    issues = list_open_issues(limit=limit)
+    print(render_open_issues(issues), end="")
+    return 0
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -75,7 +99,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             checks = run_doctor(repo_root=repo_root, agent_id=args.agent_id)
             print(render_doctor_report(checks), end="")
             return doctor_exit_code(checks)
+        if args.command == "github" and args.github_command == "issues":
+            return run_github_issues_command(args.limit)
     except ContextError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except GitHubIssueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
