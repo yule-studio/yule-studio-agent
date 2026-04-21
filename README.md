@@ -109,13 +109,16 @@ NAVER_APP_PASSWORD=
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
 - 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
-- 같은 날짜 범위를 반복 조회할 때는 `NAVER_CALDAV_CACHE_SECONDS` 동안 로컬 캐시를 재사용합니다.
+- `NAVER_CALDAV_CACHE_SECONDS`를 지정하면 해당 TTL을 우선 사용합니다.
+- 값을 지정하지 않으면 오늘이 포함된 범위는 5분, 미래 범위는 30분, 과거 범위는 24시간 동안 SQLite 로컬 캐시를 재사용합니다.
+- 캐시 저장소 기본 위치는 `.cache/yule/cache.sqlite3`입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
 - 자동 탐지 결과가 없으면 일반 일정 조회 대상 캘린더를 기준으로 fallback 합니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`를 써도 같은 범위 재실행은 캐시 덕분에 더 빠르게 응답할 수 있습니다.
+- 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
 
 ## 실행
 
@@ -148,6 +151,8 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 - 현재 에러 분류는 `configuration`, `validation`, `authentication`, `network`, `query`, `parsing`, `dependency`, `unknown` 범주를 사용합니다.
 - `retry_strategy`는 `none` 또는 `backoff`를 사용하며, 이후 Planning Agent / Discord 알림 흐름에서 그대로 재사용할 수 있습니다.
 - 세부 운영 기준은 [policies/runtime/common/calendar-error-handling.md](/Users/masterway/local-dev/yule-studio-agent/policies/runtime/common/calendar-error-handling.md)에 정리합니다.
+- 같은 날짜 범위와 같은 캘린더 설정 요청은 SQLite 캐시를 재사용합니다.
+- 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
 
 ## 로컬 전용 파일
 
