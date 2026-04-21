@@ -1,49 +1,59 @@
 # Yule Studio Agent
 
-Yule Studio Agent는 개인 홈서버에서 여러 AI 에이전트와 개발 도구를 조율하기 위한 개인 에이전트 운영 플랫폼입니다.
+Yule Studio Agent는 개인 홈서버에서 여러 AI 에이전트와 개발 도구를 조율하기 위한 오케스트레이터입니다.
 
-이 프로젝트는 GitHub 프로젝트, 이슈, 문서, 작업 흐름, 코드 변경, 리뷰, 운영 알림을 하나의 흐름으로 관리하는 개인 비서이자 개발팀 운영 시스템을 목표로 합니다.
+GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의 작업 체계로 연결해 개인 비서이자 개인 개발팀처럼 운영하는 것을 목표로 합니다.
 
-## Concept
+## 현재 포함된 기능
 
-Yule Studio Agent는 단일 챗봇이 아니라 여러 역할의 에이전트를 조율하는 오케스트레이터입니다.
+- 에이전트 컨텍스트 로드
+- 로컬 실행 환경 점검(`doctor`)
+- GitHub의 열린 이슈 읽기
+- Naver CalDAV 일정 읽기 및 구조화된 데이터(JSON) 변환
 
-예상되는 에이전트 역할:
-
-- Coding Agent: 구현, 테스트, PR 초안
-- Review Agent: 구조, 예외 처리, 성능, 위험 포인트 점검
-- Troubleshooting Agent: 로그, 예외, 원인 후보 분석
-- Ops Agent: 장애 탐지, 메트릭, 배포 이력, 알림
-- Docs Agent: ADR, 트러블슈팅 문서, 회고, README 정리
-
-## Repository Structure
+## 디렉토리 구조
 
 ```text
 .
 ├── AGENTS.md
 ├── CLAUDE.md
 ├── GEMINI.md
+├── README.md
 ├── agents/
 │   └── coding-agent/
 │       ├── CLAUDE.md
 │       └── agent.json
 ├── policies/
-│   ├── common/
-│   └── coding/
-├── runs/
+│   ├── reference/
+│   └── runtime/
+├── scripts/
+│   └── bootstrap
 └── src/
     └── yule_orchestrator/
+        ├── cli/
+        ├── core/
+        ├── diagnostics/
+        └── integrations/
 ```
 
-## Setup
+## 설치
 
-현재 Python 코드는 표준 라이브러리만 사용합니다. 별도의 Python 패키지 의존성은 아직 없습니다.
+### 빠른 설치
 
-macOS 기준 빠른 세팅:
+macOS + Homebrew 기준:
 
 ```bash
 ./scripts/bootstrap
 ```
+
+이 스크립트는 아래 작업을 수행합니다.
+
+- Homebrew 확인
+- `gh`와 Python 확인
+- `.venv` 생성
+- `pip`, `setuptools`, `wheel` 업그레이드
+- 프로젝트 editable install
+- `.env.example`이 있으면 `.env.local` 템플릿 생성
 
 선택 AI CLI까지 함께 설치하려면:
 
@@ -51,7 +61,18 @@ macOS 기준 빠른 세팅:
 ./scripts/bootstrap --all
 ```
 
-자동화하지 않는 수동 인증 단계:
+### 수동 설치
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+```
+
+## 수동 인증
+
+아래 로그인은 자동화하지 않습니다.
 
 ```bash
 gh auth login
@@ -61,69 +82,69 @@ gemini
 copilot
 ```
 
-Ollama는 필요할 때 서버를 실행합니다.
+Ollama는 필요할 때 실행합니다.
 
 ```bash
 open -a Ollama
-# or
+# 또는
 ollama serve
 ```
 
-## Commands
+## 환경 변수
 
-에이전트 컨텍스트 로드:
+캘린더 연동은 루트의 `.env.local`에 값을 넣어 사용합니다.
 
 ```bash
-PYTHONPATH=src python3 -m yule_orchestrator context coding-agent
+NAVER_CALDAV_URL=https://caldav.calendar.naver.com
+NAVER_ID=
+NAVER_APP_PASSWORD=
+# NAVER_CALDAV_CALENDAR=
 ```
 
-로컬 환경 진단:
+- 실제 값은 `.env.local`에 넣습니다.
+- 예시는 `.env.example`에 둡니다.
+- `.env.local`은 Git에 올리지 않습니다.
+
+## 실행
+
+```bash
+yule doctor
+yule context coding-agent
+yule github issues --limit 30
+yule calendar events --json
+```
+
+기간을 지정해서 일정 데이터를 읽을 수도 있습니다.
+
+```bash
+yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
+```
+
+설치 전에 바로 실행해야 하면:
 
 ```bash
 PYTHONPATH=src python3 -m yule_orchestrator doctor
 ```
 
-editable install 이후에는 다음처럼 실행할 수 있습니다.
+## 캘린더 연동 메모
 
-```bash
-yule context coding-agent
-yule doctor
-```
+- 현재는 Naver CalDAV를 통해 일정 이벤트를 읽습니다.
+- 웹 화면 상단의 할 일 목록은 CalDAV로 함께 내려오지 않을 수 있습니다.
+- 그래서 자동화 기준 데이터는 일반 일정 이벤트 중심으로 다루는 것이 안전합니다.
 
-## Optional Local Tools
+## 로컬 전용 파일
 
-아래 도구들은 에이전트 운영에 연결할 수 있는 외부 CLI입니다. 모든 기능이 항상 필요한 것은 아니며, 사용하는 역할에 따라 선택적으로 설치합니다.
-
-```bash
-brew install gh
-brew install codex
-brew install gemini-cli
-brew install ollama
-brew install copilot-cli
-```
-
-Claude Code는 npm 설치를 사용합니다.
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Ollama 모델 예시:
-
-```bash
-ollama run gemma3
-```
-
-## Local Files
-
-아래 파일과 폴더는 로컬 설정, 실행 기록, 인증 정보가 포함될 수 있으므로 Git에 올리지 않습니다.
+아래 파일과 폴더는 로컬 실행 상태이거나 민감 정보가 포함될 수 있으므로 Git에 올리지 않습니다.
 
 ```text
 .claude/
 .codex/
 .gemini/
 .env
+.env.local
+.venv/
 runs/*
+*.egg-info/
 ```
 
-`runs/.gitkeep`만 폴더 유지를 위해 커밋합니다.
+`src/yule_studio_agent.egg-info/`는 로그인 정보가 아니라 Python 패키지 설치 과정에서 생성되는 메타데이터입니다.
