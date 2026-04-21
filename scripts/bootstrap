@@ -19,6 +19,7 @@ Default setup:
   - Homebrew check
   - Python and GitHub CLI
   - .venv creation
+  - .env.local template creation
   - editable install
 
 Manual steps still required:
@@ -174,8 +175,14 @@ else
 fi
 
 log "Installing project in editable mode"
-.venv/bin/python -m pip install -U pip
+.venv/bin/python -m pip install -U pip setuptools wheel
 .venv/bin/python -m pip install -e .
+
+if [[ ! -f .env.local && -f .env.example ]]; then
+  log "Creating .env.local from .env.example"
+  cp .env.example .env.local
+  warn "Fill in .env.local with local credentials before using calendar integrations."
+fi
 
 if [[ "$WITH_ALL_TOOLS" -eq 1 ]]; then
   install_optional_ai_tools

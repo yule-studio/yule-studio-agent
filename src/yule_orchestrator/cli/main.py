@@ -5,8 +5,10 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..core.context_loader import ContextError
+from ..integrations.calendar.naver_caldav import CalendarIntegrationError
+from ..core import ContextError, load_env_files
 from ..integrations.github.issues import GitHubIssueError
+from .calendar import run_calendar_events_command
 from .context import run_context_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
@@ -65,6 +67,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum number of open issues to fetch. Defaults to 30.",
     )
 
+    calendar_parser = subparsers.add_parser(
+        "calendar",
+        help="Read calendar data through supported calendar integrations.",
+    )
+    calendar_subparsers = calendar_parser.add_subparsers(dest="calendar_command", required=True)
+
+    calendar_events_parser = calendar_subparsers.add_parser(
+        "events",
+        help="Read Naver calendar items and convert them into structured data.",
+    )
+    calendar_events_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_events_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_events_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+
     return parser
 
 
@@ -72,6 +98,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     repo_root = Path(args.repo_root).resolve()
+    load_env_files(repo_root)
 
     try:
         if args.command == "context":
@@ -80,10 +107,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             return run_doctor_command(repo_root, args.agent_id)
         if args.command == "github" and args.github_command == "issues":
             return run_github_issues_command(args.limit)
+        if args.command == "calendar" and args.calendar_command == "events":
+            return run_calendar_events_command(args.start_date, args.end_date, args.json)
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except GitHubIssueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except CalendarIntegrationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
