@@ -5,14 +5,14 @@ This policy defines how Coding Agent should handle branches, commits, pull reque
 (이 정책은 Coding Agent가 브랜치, 커밋, Pull Request, 저장소 네이밍 규칙을 어떻게 다뤄야 하는지 정의한다)
 
 ## Rules
-- Follow the repository branch strategy documented in `docs/common/v1/policy/BRANCH_STRATEGY.md` when that document exists.
-  (`docs/common/v1/policy/BRANCH_STRATEGY.md`가 존재하면 해당 브랜치 전략을 따른다)
+- Follow the repository branch strategy documented in `policies/reference/BRANCH_STRATEGY.md` when that document exists.
+  (`policies/reference/BRANCH_STRATEGY.md`가 존재하면 해당 브랜치 전략을 따른다)
 
-- Follow the repository commit convention documented in `docs/common/v1/policy/COMMIT_CONVENTION.md` when that document exists.
-  (`docs/common/v1/policy/COMMIT_CONVENTION.md`가 존재하면 해당 커밋 규칙을 따른다)
+- Follow the repository commit convention documented in `policies/reference/COMMIT_CONVENTION.md` when that document exists.
+  (`policies/reference/COMMIT_CONVENTION.md`가 존재하면 해당 커밋 규칙을 따른다)
 
-- Follow the repository naming convention documented in `docs/common/v1/policy/NAMING_CONVENTION.md` when that document exists.
-  (`docs/common/v1/policy/NAMING_CONVENTION.md`가 존재하면 해당 네이밍 규칙을 따른다)
+- Follow the repository naming convention documented in `policies/reference/NAMING_CONVENTION.md` when that document exists.
+  (`policies/reference/NAMING_CONVENTION.md`가 존재하면 해당 네이밍 규칙을 따른다)
 
 - Prefer branch-based work. Do not commit directly to protected branches such as `main` or `dev`.
   (브랜치 기반 작업을 우선하고 `main`, `dev` 같은 보호 브랜치에 직접 커밋하지 않는다)

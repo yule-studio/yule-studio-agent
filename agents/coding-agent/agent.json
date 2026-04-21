@@ -6,11 +6,11 @@
   "default_executor": "claude",
   "instruction_entry": "agents/coding-agent/CLAUDE.md",
   "policies": [
-    "policies/common/safety.md",
-    "policies/common/context-loading.md",
-    "policies/coding/version-control.md",
-    "policies/coding/workflow.md",
-    "policies/coding/testing.md"
+    "policies/runtime/common/safety.md",
+    "policies/runtime/common/context-loading.md",
+    "policies/runtime/agents/coding-agent/version-control.md",
+    "policies/runtime/agents/coding-agent/workflow.md",
+    "policies/runtime/agents/coding-agent/testing.md"
   ],
   "write_policy": {
     "max_write_executors_per_run": 1,

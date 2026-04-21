@@ -20,12 +20,31 @@ git config --local commit.template .gitmessage.txt
 ```text
 <gitmoji> 제목
 
+변경 이유
+- 로그인 요청 처리 흐름을 분리할 필요가 있었다
+
+주요 변경 사항
+- 로그인 API 엔드포인트 추가
+- 인증 서비스 로직 분리
+
+비고
+- 후속으로 예외 처리 보완 예정
+```
+
+예시:
+
+```text
 ✨ 로그인 API 추가
-🐛 게시글 수정 시 null 예외 처리
-♻️ 공통 응답 구조 리팩토링
-📝 브랜치 전략 문서 정리
-✅ GlobalExceptionHandler 테스트 추가
-🔧 application-dev 설정 수정
+
+변경 이유
+- 로그인 기능이 아직 구현되지 않았다
+
+주요 변경 사항
+- 로그인 API 엔드포인트 추가
+- 인증 서비스 로직 추가
+
+비고
+- 토큰 재발급 API는 별도 작업으로 진행한다
 ```
 
 ## 기본 사용 Gitmoji
@@ -57,6 +76,7 @@ git config --local commit.template .gitmessage.txt
 - 마침표는 사용하지 않는다
 - 하나의 커밋에는 하나의 목적만 담는다
 - 의미가 애매하면 기본 Gitmoji를 우선 사용한다
+- 본문은 `변경 이유`, `주요 변경 사항`, `비고` 순서로 작성한다
 
 ## 작성 기준
 
