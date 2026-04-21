@@ -8,6 +8,7 @@
   "policies": [
     "policies/common/safety.md",
     "policies/common/context-loading.md",
+    "policies/coding/version-control.md",
     "policies/coding/workflow.md",
     "policies/coding/testing.md"
   ],
