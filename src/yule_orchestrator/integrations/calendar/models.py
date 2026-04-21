@@ -29,6 +29,18 @@ class CalendarEvent:
             "description": self.description,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "CalendarEvent":
+        return cls(
+            title=payload["title"],
+            start=payload["start"],
+            end=payload["end"],
+            all_day=payload["all_day"],
+            calendar_name=payload["calendar_name"],
+            source=payload["source"],
+            description=payload.get("description", ""),
+        )
+
 
 @dataclass(frozen=True)
 class CalendarTodo:
@@ -70,6 +82,24 @@ class CalendarTodo:
             "description": self.description,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "CalendarTodo":
+        return cls(
+            title=payload["title"],
+            start=payload.get("start"),
+            due=payload.get("due"),
+            start_all_day=payload["start_all_day"],
+            due_all_day=payload["due_all_day"],
+            status=payload["status"],
+            completed=payload["completed"],
+            completed_at=payload.get("completed_at"),
+            priority=payload.get("priority"),
+            percent_complete=payload.get("percent_complete"),
+            calendar_name=payload["calendar_name"],
+            source=payload["source"],
+            description=payload.get("description", ""),
+        )
+
 
 @dataclass(frozen=True)
 class CalendarQueryResult:
@@ -78,3 +108,24 @@ class CalendarQueryResult:
     end_date: date
     events: Sequence[CalendarEvent]
     todos: Sequence[CalendarTodo]
+
+    def to_dict(self) -> dict:
+        return {
+            "source": self.source,
+            "start_date": self.start_date.isoformat(),
+            "end_date": self.end_date.isoformat(),
+            "event_count": len(self.events),
+            "todo_count": len(self.todos),
+            "events": [event.to_dict() for event in self.events],
+            "todos": [todo.to_dict() for todo in self.todos],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "CalendarQueryResult":
+        return cls(
+            source=payload["source"],
+            start_date=date.fromisoformat(payload["start_date"]),
+            end_date=date.fromisoformat(payload["end_date"]),
+            events=[CalendarEvent.from_dict(event) for event in payload.get("events", [])],
+            todos=[CalendarTodo.from_dict(todo) for todo in payload.get("todos", [])],
+        )

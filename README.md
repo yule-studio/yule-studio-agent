@@ -101,6 +101,7 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CALENDAR=
 # NAVER_CALDAV_TODO_CALENDAR=내 할 일
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
+# NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 ```
 
@@ -108,11 +109,13 @@ NAVER_APP_PASSWORD=
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
 - 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
+- 같은 날짜 범위를 반복 조회할 때는 `NAVER_CALDAV_CACHE_SECONDS` 동안 로컬 캐시를 재사용합니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
 - 자동 탐지 결과가 없으면 일반 일정 조회 대상 캘린더를 기준으로 fallback 합니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
+- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`를 써도 같은 범위 재실행은 캐시 덕분에 더 빠르게 응답할 수 있습니다.
 
 ## 실행
 
@@ -153,6 +156,7 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 .env
 .env.local
 .venv/
+.cache/
 runs/*
 *.egg-info/
 ```

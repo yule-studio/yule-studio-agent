@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
@@ -98,6 +99,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     repo_root = Path(args.repo_root).resolve()
+    os.environ["YULE_REPO_ROOT"] = str(repo_root)
     load_env_files(repo_root)
 
     try:
