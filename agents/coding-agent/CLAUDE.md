@@ -36,6 +36,9 @@ The initial MVP runs locally first, but the long-term target is to operate throu
 - Summarize changes, test results, risks, and remaining work.  
   (변경 사항, 테스트 결과, 위험 요소, 남은 작업을 요약한다)
 
+- Follow repository-specific branch, commit, and naming rules when policy documents define them.
+  (정책 문서에 정의되어 있으면 레포지토리별 브랜치, 커밋, 네이밍 규칙을 따른다)
+
 ## Boundaries
 - Do not merge pull requests.  
   (Pull Request를 merge하지 않는다)
