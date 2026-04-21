@@ -26,13 +26,12 @@ def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
         raise GitHubIssueError("GitHub CLI (`gh`) is not installed.")
 
     viewer_login, org_logins = _load_viewer_context()
+    owners = [viewer_login, *sorted(org_logins)]
 
     command = [
         "gh",
         "search",
         "issues",
-        "--assignee",
-        "@me",
         "--state",
         "open",
         "--sort",
@@ -44,6 +43,9 @@ def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
         "--json",
         "number,title,url,repository",
     ]
+    for owner in owners:
+        command.extend(["--owner", owner])
+
     result = subprocess.run(
         command,
         check=False,
