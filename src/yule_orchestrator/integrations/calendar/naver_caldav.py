@@ -26,6 +26,7 @@ class CalendarEvent:
     all_day: bool
     calendar_name: str
     source: str
+    description: str
 
     def sort_key(self) -> tuple[int, str, str]:
         return (0 if self.all_day else 1, self.start, self.title.lower())
@@ -38,6 +39,7 @@ class CalendarEvent:
             "all_day": self.all_day,
             "calendar_name": self.calendar_name,
             "source": self.source,
+            "description": self.description,
         }
 
 
@@ -106,6 +108,8 @@ def render_calendar_events(result: CalendarQueryResult) -> str:
             lines.append(f"- [all-day] {event.title} ({event.calendar_name})")
         else:
             lines.append(f"- [{_format_time_range(event.start, event.end)}] {event.title} ({event.calendar_name})")
+        if event.description:
+            lines.append(f"  description: {event.description}")
 
     return "\n".join(lines) + "\n"
 
@@ -210,6 +214,7 @@ def _resource_ical_payload(resource: Any) -> str:
 def _build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
     title_value = component.get("summary")
     title = str(title_value) if title_value else "(untitled event)"
+    description = _extract_description(component)
 
     start_value = component.decoded("dtstart")
     end_value = component.decoded("dtend") if component.get("dtend") else None
@@ -224,6 +229,7 @@ def _build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
             all_day=True,
             calendar_name=calendar_name,
             source="naver-caldav",
+            description=description,
         )
 
     if not isinstance(start_value, datetime):
@@ -239,7 +245,16 @@ def _build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
         all_day=False,
         calendar_name=calendar_name,
         source="naver-caldav",
+        description=description,
     )
+
+
+def _extract_description(component: Any) -> str:
+    for field_name in ("description", "comment"):
+        value = component.get(field_name)
+        if value:
+            return str(value).strip()
+    return ""
 
 
 def _normalize_datetime(value: datetime) -> datetime:

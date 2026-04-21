@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from ..integrations.calendar.naver_caldav import CalendarIntegrationError
-from ..core.context_loader import ContextError
+from ..core import ContextError, load_env_files
 from ..integrations.github.issues import GitHubIssueError
 from .calendar import run_calendar_events_command
 from .context import run_context_command
@@ -98,6 +98,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     repo_root = Path(args.repo_root).resolve()
+    load_env_files(repo_root)
 
     try:
         if args.command == "context":
