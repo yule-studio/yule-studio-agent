@@ -4,7 +4,7 @@ import json
 from datetime import date
 from typing import Optional
 
-from ..integrations.calendar.naver_caldav import (
+from ..integrations.calendar import (
     CalendarQueryResult,
     list_naver_calendar_items,
     render_calendar_items,

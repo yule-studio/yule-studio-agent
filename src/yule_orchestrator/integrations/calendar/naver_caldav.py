@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+import logging
 import os
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, Iterable, List, Optional
+
+from .models import CalendarQueryResult
+from .parsing import build_event, build_todo, todo_matches_range
+from .rendering import render_calendar_events, render_calendar_items
 
 
 class CalendarIntegrationError(Exception):
-    """Raised when Naver calendar events cannot be loaded."""
+    """Raised when Naver calendar items cannot be loaded."""
 
 
 @dataclass(frozen=True)
@@ -16,81 +21,8 @@ class NaverCalDAVConfig:
     username: str
     password: str
     calendar_name: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class CalendarEvent:
-    title: str
-    start: str
-    end: str
-    all_day: bool
-    calendar_name: str
-    source: str
-    description: str
-
-    def sort_key(self) -> tuple[int, str, str]:
-        return (0 if self.all_day else 1, self.start, self.title.lower())
-
-    def to_dict(self) -> dict:
-        return {
-            "title": self.title,
-            "start": self.start,
-            "end": self.end,
-            "all_day": self.all_day,
-            "calendar_name": self.calendar_name,
-            "source": self.source,
-            "description": self.description,
-        }
-
-
-@dataclass(frozen=True)
-class CalendarTodo:
-    title: str
-    start: Optional[str]
-    due: Optional[str]
-    start_all_day: bool
-    due_all_day: bool
-    status: str
-    completed: bool
-    completed_at: Optional[str]
-    priority: Optional[int]
-    percent_complete: Optional[int]
-    calendar_name: str
-    source: str
-    description: str
-
-    def sort_key(self) -> tuple[int, str, str]:
-        return (
-            1 if self.completed else 0,
-            self.due or self.start or "9999-12-31T23:59:59+09:00",
-            self.title.lower(),
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "title": self.title,
-            "start": self.start,
-            "due": self.due,
-            "start_all_day": self.start_all_day,
-            "due_all_day": self.due_all_day,
-            "status": self.status,
-            "completed": self.completed,
-            "completed_at": self.completed_at,
-            "priority": self.priority,
-            "percent_complete": self.percent_complete,
-            "calendar_name": self.calendar_name,
-            "source": self.source,
-            "description": self.description,
-        }
-
-
-@dataclass(frozen=True)
-class CalendarQueryResult:
-    source: str
-    start_date: date
-    end_date: date
-    events: Sequence[CalendarEvent]
-    todos: Sequence[CalendarTodo]
+    timeout_seconds: int = 15
+    include_all_todos: bool = False
 
 
 def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQueryResult:
@@ -100,54 +32,52 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
     query_start = _to_local_datetime(start_date)
     query_end = _to_local_datetime(end_date + timedelta(days=1))
 
-    events: List[CalendarEvent] = []
-    todos: List[CalendarTodo] = []
+    events = []
+    todos = []
     seen_events: set[tuple[str, str, str, str]] = set()
     seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]] = set()
 
-    with client_cls(url=config.url, username=config.username, password=config.password) as client:
-        principal = client.principal()
-        calendars = principal.calendars()
-        selected_calendars = _select_calendars(calendars, config.calendar_name)
+    try:
+        with client_cls(
+            url=config.url,
+            username=config.username,
+            password=config.password,
+            timeout=config.timeout_seconds,
+        ) as client:
+            principal = client.principal()
+            calendars = principal.calendars()
+            selected_calendars = _select_calendars(calendars, config.calendar_name)
 
-        for calendar in selected_calendars:
-            calendar_label = _calendar_label(calendar)
-            resources = calendar.date_search(start=query_start, end=query_end, expand=True)
+            for calendar in selected_calendars:
+                calendar_label = _calendar_label(calendar)
+                _collect_dated_items(
+                    calendar=calendar,
+                    calendar_label=calendar_label,
+                    calendar_cls=calendar_cls,
+                    query_start=query_start,
+                    query_end=query_end,
+                    events=events,
+                    todos=todos,
+                    seen_events=seen_events,
+                    seen_todos=seen_todos,
+                )
 
-            for resource in resources:
-                raw_ical = _resource_ical_payload(resource)
-                calendar_obj = calendar_cls.from_ical(raw_ical)
-                for component in calendar_obj.walk("VEVENT"):
-                    event = _build_event(component, calendar_label)
-                    if event is None:
-                        continue
-                    dedupe_key = (event.title, event.start, event.end, event.calendar_name)
-                    if dedupe_key in seen_events:
-                        continue
-                    seen_events.add(dedupe_key)
-                    events.append(event)
-                for component in calendar_obj.walk("VTODO"):
-                    todo = _build_todo(component, calendar_label)
-                    if todo is None:
-                        continue
-                    dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
-                    if dedupe_key in seen_todos:
-                        continue
-                    seen_todos.add(dedupe_key)
-                    todos.append(todo)
-
-            for resource in _list_todo_resources(calendar):
-                raw_ical = _resource_ical_payload(resource)
-                calendar_obj = calendar_cls.from_ical(raw_ical)
-                for component in calendar_obj.walk("VTODO"):
-                    todo = _build_todo(component, calendar_label)
-                    if todo is None or not _todo_matches_range(todo, start_date, end_date):
-                        continue
-                    dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
-                    if dedupe_key in seen_todos:
-                        continue
-                    seen_todos.add(dedupe_key)
-                    todos.append(todo)
+                if config.include_all_todos:
+                    _collect_all_todos(
+                        calendar=calendar,
+                        calendar_label=calendar_label,
+                        calendar_cls=calendar_cls,
+                        start_date=start_date,
+                        end_date=end_date,
+                        todos=todos,
+                        seen_todos=seen_todos,
+                    )
+    except CalendarIntegrationError:
+        raise
+    except Exception as exc:
+        raise CalendarIntegrationError(
+            _describe_caldav_error(exc, timeout_seconds=config.timeout_seconds)
+        ) from exc
 
     events.sort(key=lambda event: event.sort_key())
     todos.sort(key=lambda todo: todo.sort_key())
@@ -164,62 +94,13 @@ def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQuer
     return list_naver_calendar_items(start_date=start_date, end_date=end_date)
 
 
-def render_calendar_items(result: CalendarQueryResult) -> str:
-    if not result.events and not result.todos:
-        return (
-            f"Naver Calendar Items ({result.start_date.isoformat()} to {result.end_date.isoformat()})\n\n"
-            "No calendar items found for the requested range.\n"
-        )
-
-    lines: List[str] = [
-        f"Naver Calendar Items ({result.start_date.isoformat()} to {result.end_date.isoformat()})",
-        "",
-    ]
-
-    if result.events:
-        lines.append("Events")
-        lines.append("")
-        for event in result.events:
-            if event.all_day:
-                lines.append(f"- [all-day] {event.title} ({event.calendar_name})")
-            else:
-                lines.append(f"- [{_format_time_range(event.start, event.end)}] {event.title} ({event.calendar_name})")
-            if event.description:
-                lines.append(f"  description: {event.description}")
-
-    if result.todos:
-        if len(lines) > 2:
-            lines.append("")
-        lines.append("Todos")
-        lines.append("")
-        for todo in result.todos:
-            status_label = todo.status.lower()
-            lines.append(f"- [{status_label}] {todo.title} ({todo.calendar_name})")
-            if todo.start:
-                lines.append(f"  start: {_format_temporal_value(todo.start, todo.start_all_day)}")
-            if todo.due:
-                lines.append(f"  due: {_format_temporal_value(todo.due, todo.due_all_day)}")
-            if todo.priority is not None:
-                lines.append(f"  priority: {todo.priority}")
-            if todo.percent_complete is not None:
-                lines.append(f"  progress: {todo.percent_complete}%")
-            if todo.completed_at:
-                lines.append(f"  completed_at: {_format_temporal_value(todo.completed_at, all_day=False)}")
-            if todo.description:
-                lines.append(f"  description: {todo.description}")
-
-    return "\n".join(lines) + "\n"
-
-
-def render_calendar_events(result: CalendarQueryResult) -> str:
-    return render_calendar_items(result)
-
-
 def load_naver_caldav_config() -> NaverCalDAVConfig:
     url = os.getenv("NAVER_CALDAV_URL", "https://caldav.calendar.naver.com")
     username = os.getenv("NAVER_CALDAV_USERNAME") or os.getenv("NAVER_ID")
     password = os.getenv("NAVER_CALDAV_PASSWORD") or os.getenv("NAVER_APP_PASSWORD")
     calendar_name = os.getenv("NAVER_CALDAV_CALENDAR")
+    timeout_seconds = _load_timeout_seconds()
+    include_all_todos = _load_bool_env("NAVER_CALDAV_INCLUDE_ALL_TODOS", default=False)
 
     missing: List[str] = []
     if not username:
@@ -237,6 +118,8 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
         username=username,
         password=password,
         calendar_name=calendar_name,
+        timeout_seconds=timeout_seconds,
+        include_all_todos=include_all_todos,
     )
 
 
@@ -255,7 +138,69 @@ def _load_caldav_dependencies() -> tuple[Any, Any]:
             "The `icalendar` package is required. Run `python3 -m pip install -e .`."
         ) from exc
 
+    logging.getLogger("caldav").setLevel(logging.ERROR)
     return DAVClient, Calendar
+
+
+def _collect_dated_items(
+    calendar: Any,
+    calendar_label: str,
+    calendar_cls: Any,
+    query_start: datetime,
+    query_end: datetime,
+    events: List[Any],
+    todos: List[Any],
+    seen_events: set[tuple[str, str, str, str]],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+) -> None:
+    resources = calendar.date_search(start=query_start, end=query_end, expand=True)
+
+    for resource in resources:
+        raw_ical = _resource_ical_payload(resource)
+        calendar_obj = calendar_cls.from_ical(raw_ical)
+
+        for component in calendar_obj.walk("VEVENT"):
+            event = build_event(component, calendar_label)
+            if event is None:
+                continue
+            dedupe_key = (event.title, event.start, event.end, event.calendar_name)
+            if dedupe_key in seen_events:
+                continue
+            seen_events.add(dedupe_key)
+            events.append(event)
+
+        for component in calendar_obj.walk("VTODO"):
+            todo = build_todo(component, calendar_label)
+            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+            if dedupe_key in seen_todos:
+                continue
+            seen_todos.add(dedupe_key)
+            todos.append(todo)
+
+
+def _collect_all_todos(
+    calendar: Any,
+    calendar_label: str,
+    calendar_cls: Any,
+    start_date: date,
+    end_date: date,
+    todos: List[Any],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+) -> None:
+    for resource in _list_todo_resources(calendar):
+        raw_ical = _resource_ical_payload(resource)
+        calendar_obj = calendar_cls.from_ical(raw_ical)
+
+        for component in calendar_obj.walk("VTODO"):
+            todo = build_todo(component, calendar_label)
+            if not todo_matches_range(todo, start_date, end_date):
+                continue
+
+            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+            if dedupe_key in seen_todos:
+                continue
+            seen_todos.add(dedupe_key)
+            todos.append(todo)
 
 
 def _select_calendars(calendars: Iterable[Any], calendar_name: Optional[str]) -> List[Any]:
@@ -309,83 +254,7 @@ def _resource_ical_payload(resource: Any) -> str:
         except Exception:
             pass
 
-    raise CalendarIntegrationError("Could not extract calendar event payload from a CalDAV resource.")
-
-
-def _build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
-    title_value = component.get("summary")
-    title = str(title_value) if title_value else "(untitled event)"
-    description = _extract_description(component)
-
-    start_value = component.decoded("dtstart")
-    end_value = component.decoded("dtend") if component.get("dtend") else None
-
-    if isinstance(start_value, date) and not isinstance(start_value, datetime):
-        start_date = start_value
-        end_date = end_value if isinstance(end_value, date) and not isinstance(end_value, datetime) else start_date + timedelta(days=1)
-        return CalendarEvent(
-            title=title,
-            start=start_date.isoformat(),
-            end=end_date.isoformat(),
-            all_day=True,
-            calendar_name=calendar_name,
-            source="naver-caldav",
-            description=description,
-        )
-
-    if not isinstance(start_value, datetime):
-        return None
-
-    start_dt = _normalize_datetime(start_value)
-    end_dt = _normalize_datetime(end_value) if isinstance(end_value, datetime) else start_dt
-
-    return CalendarEvent(
-        title=title,
-        start=start_dt.isoformat(),
-        end=end_dt.isoformat(),
-        all_day=False,
-        calendar_name=calendar_name,
-        source="naver-caldav",
-        description=description,
-    )
-
-
-def _build_todo(component: Any, calendar_name: str) -> Optional[CalendarTodo]:
-    title_value = component.get("summary")
-    title = str(title_value) if title_value else "(untitled todo)"
-    description = _extract_description(component)
-
-    start_value = component.decoded("dtstart") if component.get("dtstart") else None
-    due_value = component.decoded("due") if component.get("due") else None
-    duration_value = component.decoded("duration") if component.get("duration") else None
-    if due_value is None and duration_value is not None and isinstance(start_value, (date, datetime)):
-        due_value = start_value + duration_value
-
-    completed_value = component.decoded("completed") if component.get("completed") else None
-
-    start, start_all_day = _normalize_temporal_value(start_value)
-    due, due_all_day = _normalize_temporal_value(due_value)
-    completed_at, _ = _normalize_temporal_value(completed_value)
-    status = _extract_status(component)
-    priority = _extract_int(component, "priority")
-    percent_complete = _extract_int(component, "percent-complete")
-    completed = status == "COMPLETED" or completed_at is not None or percent_complete == 100
-
-    return CalendarTodo(
-        title=title,
-        start=start,
-        due=due,
-        start_all_day=start_all_day,
-        due_all_day=due_all_day,
-        status=status,
-        completed=completed,
-        completed_at=completed_at,
-        priority=priority,
-        percent_complete=percent_complete,
-        calendar_name=calendar_name,
-        source="naver-caldav",
-        description=description,
-    )
+    raise CalendarIntegrationError("Could not extract calendar item payload from a CalDAV resource.")
 
 
 def _list_todo_resources(calendar: Any) -> List[Any]:
@@ -404,77 +273,73 @@ def _list_todo_resources(calendar: Any) -> List[Any]:
         return []
 
 
-def _todo_matches_range(todo: CalendarTodo, start_date: date, end_date: date) -> bool:
-    candidate_values = [todo.start, todo.due, todo.completed_at]
-    for value in candidate_values:
-        if value is None:
-            continue
-        candidate_date = _date_from_iso(value)
-        if start_date <= candidate_date <= end_date:
-            return True
-
-    return not todo.completed
-
-
-def _extract_description(component: Any) -> str:
-    for field_name in ("description", "comment"):
-        value = component.get(field_name)
-        if value:
-            return str(value).strip()
-    return ""
-
-
-def _extract_status(component: Any) -> str:
-    value = component.get("status")
-    if value is None:
-        return "NEEDS-ACTION"
-    return str(value).strip().upper() or "NEEDS-ACTION"
-
-
-def _extract_int(component: Any, property_name: str) -> Optional[int]:
-    if component.get(property_name) is None:
-        return None
-
+def _load_timeout_seconds() -> int:
+    raw_value = os.getenv("NAVER_CALDAV_TIMEOUT_SECONDS", "15").strip()
     try:
-        return int(component.decoded(property_name))
-    except Exception:
-        try:
-            return int(str(component.get(property_name)).strip())
-        except Exception:
-            return None
+        timeout = int(raw_value)
+    except ValueError as exc:
+        raise CalendarIntegrationError(
+            "NAVER_CALDAV_TIMEOUT_SECONDS must be an integer."
+        ) from exc
+
+    if timeout <= 0:
+        raise CalendarIntegrationError(
+            "NAVER_CALDAV_TIMEOUT_SECONDS must be greater than 0."
+        )
+
+    return timeout
 
 
-def _normalize_temporal_value(value: Any) -> tuple[Optional[str], bool]:
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value.isoformat(), True
-    if isinstance(value, datetime):
-        return _normalize_datetime(value).isoformat(), False
-    return None, False
+def _load_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    raise CalendarIntegrationError(
+        f"{name} must be one of: true, false, 1, 0, yes, no, on, off."
+    )
 
 
-def _normalize_datetime(value: datetime) -> datetime:
-    if value.tzinfo is not None:
-        return value.astimezone()
-    return value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+def _describe_caldav_error(exc: Exception, timeout_seconds: int) -> str:
+    class_name = exc.__class__.__name__.lower()
+    message = str(exc).strip()
+    message_lower = message.lower()
+
+    if "timeout" in class_name or "timed out" in message_lower or "read timed out" in message_lower:
+        return (
+            "Naver CalDAV request timed out. "
+            f"Check your network or reduce server delay, then try again. "
+            f"Current timeout: {timeout_seconds}s."
+        )
+
+    if "401" in message_lower or "403" in message_lower or "unauthorized" in message_lower or "forbidden" in message_lower:
+        return (
+            "Naver CalDAV authentication failed. "
+            "Check NAVER_ID, NAVER_APP_PASSWORD, and CalDAV app-password settings."
+        )
+
+    if message:
+        return f"Naver CalDAV request failed: {message}"
+
+    return "Naver CalDAV request failed for an unknown reason."
 
 
 def _to_local_datetime(value: date) -> datetime:
     return datetime.combine(value, time.min).astimezone()
 
 
-def _format_time_range(start: str, end: str) -> str:
-    start_dt = datetime.fromisoformat(start)
-    end_dt = datetime.fromisoformat(end)
-    return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
-
-
-def _format_temporal_value(value: str, all_day: bool) -> str:
-    if all_day:
-        return value
-    return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
-
-
-def _date_from_iso(value: str) -> date:
-    if "T" in value:
-        return datetime.fromisoformat(value).date()
-    return date.fromisoformat(value)
+__all__ = [
+    "CalendarIntegrationError",
+    "NaverCalDAVConfig",
+    "list_naver_calendar_items",
+    "list_naver_calendar_events",
+    "load_naver_caldav_config",
+    "render_calendar_items",
+    "render_calendar_events",
+]

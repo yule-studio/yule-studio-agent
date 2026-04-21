@@ -99,11 +99,16 @@ NAVER_CALDAV_URL=https://caldav.calendar.naver.com
 NAVER_ID=
 NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CALENDAR=
+# NAVER_CALDAV_TIMEOUT_SECONDS=15
+# NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
+- 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
+- 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
+- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 보강 옵션입니다.
 
 ## 실행
 
@@ -131,6 +136,7 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 - 현재는 Naver CalDAV를 통해 일정 이벤트(`VEVENT`)와 CalDAV로 노출되는 할 일(`VTODO`)을 함께 읽습니다.
 - 네이버 웹 화면의 할 일이 항상 CalDAV `VTODO`로 제공되는지는 계정 상태와 클라이언트 설정에 따라 달라질 수 있습니다.
 - `todo_count`가 0이면 현재 CalDAV 응답에 할 일이 포함되지 않았을 가능성이 큽니다.
+- `VTODO`는 기본적으로 지정한 기간 안에 해당하는 항목만 출력합니다.
 
 ## 로컬 전용 파일
 
