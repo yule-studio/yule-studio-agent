@@ -55,12 +55,4 @@ def _parse_date(value: str, flag_name: str) -> date:
 
 
 def _result_to_dict(result: CalendarQueryResult) -> dict:
-    return {
-        "source": result.source,
-        "start_date": result.start_date.isoformat(),
-        "end_date": result.end_date.isoformat(),
-        "event_count": len(result.events),
-        "todo_count": len(result.todos),
-        "events": [event.to_dict() for event in result.events],
-        "todos": [todo.to_dict() for todo in result.todos],
-    }
+    return result.to_dict()

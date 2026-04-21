@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, Iterable, List, Optional
 
+from .cache import build_calendar_cache_key, load_calendar_cache, save_calendar_cache
 from .models import CalendarQueryResult
 from .parsing import build_event, build_todo, todo_matches_range
 from .rendering import render_calendar_events, render_calendar_items
@@ -24,10 +25,25 @@ class NaverCalDAVConfig:
     todo_calendar_name: Optional[str] = None
     timeout_seconds: int = 15
     include_all_todos: bool = False
+    cache_seconds: int = 300
 
 
 def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQueryResult:
     config = load_naver_caldav_config()
+    cache_key = build_calendar_cache_key(
+        "naver-caldav",
+        config.url,
+        config.username,
+        config.calendar_name or "",
+        config.todo_calendar_name or "",
+        str(config.include_all_todos),
+        start_date.isoformat(),
+        end_date.isoformat(),
+    )
+    cached_result = load_calendar_cache(cache_key, ttl_seconds=config.cache_seconds)
+    if cached_result is not None:
+        return cached_result
+
     client_cls, calendar_cls = _load_caldav_dependencies()
 
     query_start = _to_local_datetime(start_date)
@@ -47,14 +63,25 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
         ) as client:
             principal = client.principal()
             all_calendars = list(principal.calendars())
-            selected_calendars = _select_calendars(all_calendars, config.calendar_name)
             todo_calendars = _select_todo_calendars(
                 all_calendars=all_calendars,
                 todo_calendar_name=config.todo_calendar_name,
-                fallback_calendars=selected_calendars,
+                fallback_calendars=_select_calendars(all_calendars, config.calendar_name),
             )
+            event_calendars = _select_event_calendars(
+                all_calendars=all_calendars,
+                calendar_name=config.calendar_name,
+                todo_calendars=todo_calendars,
+            )
+            todo_calendar_ids = {_calendar_identifier(calendar) for calendar in todo_calendars}
+            event_calendar_ids = {_calendar_identifier(calendar) for calendar in event_calendars}
+            processed_calendar_ids: set[str] = set()
 
-            for calendar in selected_calendars:
+            for calendar in [*event_calendars, *todo_calendars]:
+                calendar_id = _calendar_identifier(calendar)
+                if calendar_id in processed_calendar_ids:
+                    continue
+                processed_calendar_ids.add(calendar_id)
                 calendar_label = _calendar_label(calendar)
                 _collect_dated_items(
                     calendar=calendar,
@@ -62,6 +89,8 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
                     calendar_cls=calendar_cls,
                     query_start=query_start,
                     query_end=query_end,
+                    include_events=calendar_id in event_calendar_ids,
+                    include_todos=calendar_id in todo_calendar_ids,
                     events=events,
                     todos=todos,
                     seen_events=seen_events,
@@ -104,13 +133,15 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
 
     events.sort(key=lambda event: event.sort_key())
     todos.sort(key=lambda todo: todo.sort_key())
-    return CalendarQueryResult(
+    result = CalendarQueryResult(
         source="naver-caldav",
         start_date=start_date,
         end_date=end_date,
         events=events,
         todos=todos,
     )
+    save_calendar_cache(cache_key, ttl_seconds=config.cache_seconds, result=result)
+    return result
 
 
 def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQueryResult:
@@ -125,6 +156,7 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
     todo_calendar_name = os.getenv("NAVER_CALDAV_TODO_CALENDAR")
     timeout_seconds = _load_timeout_seconds()
     include_all_todos = _load_bool_env("NAVER_CALDAV_INCLUDE_ALL_TODOS", default=False)
+    cache_seconds = _load_cache_seconds()
 
     missing: List[str] = []
     if not username:
@@ -145,6 +177,7 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
         todo_calendar_name=todo_calendar_name,
         timeout_seconds=timeout_seconds,
         include_all_todos=include_all_todos,
+        cache_seconds=cache_seconds,
     )
 
 
@@ -173,6 +206,8 @@ def _collect_dated_items(
     calendar_cls: Any,
     query_start: datetime,
     query_end: datetime,
+    include_events: bool,
+    include_todos: bool,
     events: List[Any],
     todos: List[Any],
     seen_events: set[tuple[str, str, str, str]],
@@ -184,23 +219,25 @@ def _collect_dated_items(
         raw_ical = _resource_ical_payload(resource)
         calendar_obj = calendar_cls.from_ical(raw_ical)
 
-        for component in calendar_obj.walk("VEVENT"):
-            event = build_event(component, calendar_label)
-            if event is None:
-                continue
-            dedupe_key = (event.title, event.start, event.end, event.calendar_name)
-            if dedupe_key in seen_events:
-                continue
-            seen_events.add(dedupe_key)
-            events.append(event)
+        if include_events:
+            for component in calendar_obj.walk("VEVENT"):
+                event = build_event(component, calendar_label)
+                if event is None:
+                    continue
+                dedupe_key = (event.title, event.start, event.end, event.calendar_name)
+                if dedupe_key in seen_events:
+                    continue
+                seen_events.add(dedupe_key)
+                events.append(event)
 
-        for component in calendar_obj.walk("VTODO"):
-            todo = build_todo(component, calendar_label)
-            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
-            if dedupe_key in seen_todos:
-                continue
-            seen_todos.add(dedupe_key)
-            todos.append(todo)
+        if include_todos:
+            for component in calendar_obj.walk("VTODO"):
+                todo = build_todo(component, calendar_label)
+                dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+                if dedupe_key in seen_todos:
+                    continue
+                seen_todos.add(dedupe_key)
+                todos.append(todo)
 
 
 def _collect_all_todos(
@@ -315,6 +352,24 @@ def _select_todo_calendars(
     return fallback or calendars
 
 
+def _select_event_calendars(
+    all_calendars: Iterable[Any],
+    calendar_name: Optional[str],
+    todo_calendars: Iterable[Any],
+) -> List[Any]:
+    selected = _select_calendars(all_calendars, calendar_name)
+    if calendar_name is not None:
+        return selected
+
+    todo_calendar_ids = {_calendar_identifier(calendar) for calendar in todo_calendars}
+    filtered = [
+        calendar
+        for calendar in selected
+        if _calendar_identifier(calendar) not in todo_calendar_ids
+    ]
+    return filtered or selected
+
+
 def _autodetect_todo_calendars(calendars: Iterable[Any]) -> List[Any]:
     matches = [calendar for calendar in calendars if _looks_like_todo_calendar(_calendar_label(calendar))]
     if len(matches) == 1:
@@ -341,6 +396,13 @@ def _calendar_label(calendar: Any) -> str:
         return url.rstrip("/").split("/")[-1] or "unnamed-calendar"
 
     return "unnamed-calendar"
+
+
+def _calendar_identifier(calendar: Any) -> str:
+    url = getattr(calendar, "url", None)
+    if isinstance(url, str) and url:
+        return url
+    return _calendar_label(calendar)
 
 
 def _looks_like_todo_calendar(label: str) -> bool:
@@ -396,6 +458,23 @@ def _load_timeout_seconds() -> int:
         )
 
     return timeout
+
+
+def _load_cache_seconds() -> int:
+    raw_value = os.getenv("NAVER_CALDAV_CACHE_SECONDS", "300").strip()
+    try:
+        ttl = int(raw_value)
+    except ValueError as exc:
+        raise CalendarIntegrationError(
+            "NAVER_CALDAV_CACHE_SECONDS must be an integer."
+        ) from exc
+
+    if ttl < 0:
+        raise CalendarIntegrationError(
+            "NAVER_CALDAV_CACHE_SECONDS must be 0 or greater."
+        )
+
+    return ttl
 
 
 def _load_bool_env(name: str, default: bool) -> bool:
