@@ -5,10 +5,12 @@ from datetime import date
 from typing import Optional
 
 from ..integrations.calendar import (
+    CalendarIntegrationError,
     CalendarQueryResult,
     list_naver_calendar_items,
     render_calendar_items,
 )
+from ..integrations.calendar.errors import build_calendar_validation_error
 
 
 def run_calendar_events_command(
@@ -16,8 +18,19 @@ def run_calendar_events_command(
     end_date_text: Optional[str],
     json_output: bool,
 ) -> int:
-    start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
-    result = list_naver_calendar_items(start_date=start_date, end_date=end_date)
+    try:
+        start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
+        result = list_naver_calendar_items(start_date=start_date, end_date=end_date)
+    except ValueError as exc:
+        if not json_output:
+            raise
+        print(json.dumps({"error": build_calendar_validation_error(str(exc)).to_dict()}, ensure_ascii=False, indent=2))
+        return 1
+    except CalendarIntegrationError as exc:
+        if not json_output:
+            raise
+        print(json.dumps({"error": exc.to_dict()}, ensure_ascii=False, indent=2))
+        return 1
 
     if json_output:
         print(json.dumps(_result_to_dict(result), ensure_ascii=False, indent=2))

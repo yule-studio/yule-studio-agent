@@ -6,14 +6,11 @@ import logging
 import os
 from typing import Any, Iterable, List, Optional
 
+from .errors import CalendarIntegrationError, build_calendar_error
 from .cache import build_calendar_cache_key, load_calendar_cache, save_calendar_cache
 from .models import CalendarQueryResult
 from .parsing import build_event, build_todo, todo_matches_range
 from .rendering import render_calendar_events, render_calendar_items
-
-
-class CalendarIntegrationError(Exception):
-    """Raised when Naver calendar items cannot be loaded."""
 
 
 @dataclass(frozen=True)
@@ -127,9 +124,7 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
     except CalendarIntegrationError:
         raise
     except Exception as exc:
-        raise CalendarIntegrationError(
-            _describe_caldav_error(exc, timeout_seconds=config.timeout_seconds)
-        ) from exc
+        raise _classify_caldav_error(exc, timeout_seconds=config.timeout_seconds) from exc
 
     events.sort(key=lambda event: event.sort_key())
     todos.sort(key=lambda todo: todo.sort_key())
@@ -165,8 +160,17 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
         missing.append("NAVER_CALDAV_PASSWORD or NAVER_APP_PASSWORD")
 
     if missing:
-        raise CalendarIntegrationError(
-            "Missing Naver CalDAV credentials: " + ", ".join(missing)
+        raise build_calendar_error(
+            code="missing_credentials",
+            category="configuration",
+            message="Missing Naver CalDAV credentials: " + ", ".join(missing),
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="`.env.local`에 NAVER_ID와 NAVER_APP_PASSWORD를 채운 뒤 다시 실행하세요.",
+            raw_message=", ".join(missing),
         )
 
     return NaverCalDAVConfig(
@@ -185,15 +189,33 @@ def _load_caldav_dependencies() -> tuple[Any, Any]:
     try:
         from caldav import DAVClient
     except ImportError as exc:
-        raise CalendarIntegrationError(
-            "The `caldav` package is required. Run `python3 -m pip install -e .`."
+        raise build_calendar_error(
+            code="missing_dependency",
+            category="dependency",
+            message="The `caldav` package is required. Run `python3 -m pip install -e .`.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="가상환경을 활성화한 뒤 `python3 -m pip install -e .`를 다시 실행하세요.",
+            raw_message=str(exc).strip() or None,
         ) from exc
 
     try:
         from icalendar import Calendar
     except ImportError as exc:
-        raise CalendarIntegrationError(
-            "The `icalendar` package is required. Run `python3 -m pip install -e .`."
+        raise build_calendar_error(
+            code="missing_dependency",
+            category="dependency",
+            message="The `icalendar` package is required. Run `python3 -m pip install -e .`.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="가상환경을 활성화한 뒤 `python3 -m pip install -e .`를 다시 실행하세요.",
+            raw_message=str(exc).strip() or None,
         ) from exc
 
     logging.getLogger("caldav").setLevel(logging.ERROR)
@@ -310,7 +332,17 @@ def _collect_search_todos(
 def _select_calendars(calendars: Iterable[Any], calendar_name: Optional[str]) -> List[Any]:
     calendars = list(calendars)
     if not calendars:
-        raise CalendarIntegrationError("No calendars were found for the authenticated Naver account.")
+        raise build_calendar_error(
+            code="calendar_not_found",
+            category="query",
+            message="No calendars were found for the authenticated Naver account.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="네이버 계정에 CalDAV로 노출되는 캘린더가 있는지 확인하세요.",
+        )
 
     if calendar_name is None:
         return calendars
@@ -320,8 +352,17 @@ def _select_calendars(calendars: Iterable[Any], calendar_name: Optional[str]) ->
         return selected
 
     available = ", ".join(sorted(_calendar_label(calendar) for calendar in calendars))
-    raise CalendarIntegrationError(
-        f"Calendar `{calendar_name}` was not found. Available calendars: {available}"
+    raise build_calendar_error(
+        code="calendar_selection_failed",
+        category="query",
+        message=f"Calendar `{calendar_name}` was not found. Available calendars: {available}",
+        retryable=False,
+        retry_strategy="none",
+        recommended_retry_count=0,
+        manual_action_required=True,
+        alert_recommended=True,
+        recovery_hint="NAVER_CALDAV_CALENDAR 또는 NAVER_CALDAV_TODO_CALENDAR 값을 실제 캘린더 이름과 맞춰주세요.",
+        raw_message=available,
     )
 
 
@@ -424,7 +465,17 @@ def _resource_ical_payload(resource: Any) -> str:
         except Exception:
             pass
 
-    raise CalendarIntegrationError("Could not extract calendar item payload from a CalDAV resource.")
+    raise build_calendar_error(
+        code="calendar_payload_parse_failed",
+        category="parsing",
+        message="Could not extract calendar item payload from a CalDAV resource.",
+        retryable=False,
+        retry_strategy="none",
+        recommended_retry_count=0,
+        manual_action_required=True,
+        alert_recommended=True,
+        recovery_hint="CalDAV 응답 형식이 예상과 다른지 확인하고, 반복되면 원본 응답을 점검하세요.",
+    )
 
 
 def _list_todo_resources(calendar: Any) -> List[Any]:
@@ -448,13 +499,31 @@ def _load_timeout_seconds() -> int:
     try:
         timeout = int(raw_value)
     except ValueError as exc:
-        raise CalendarIntegrationError(
-            "NAVER_CALDAV_TIMEOUT_SECONDS must be an integer."
+        raise build_calendar_error(
+            code="invalid_timeout_configuration",
+            category="configuration",
+            message="NAVER_CALDAV_TIMEOUT_SECONDS must be an integer.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="`.env.local`의 NAVER_CALDAV_TIMEOUT_SECONDS 값을 정수로 수정하세요.",
+            raw_message=raw_value,
         ) from exc
 
     if timeout <= 0:
-        raise CalendarIntegrationError(
-            "NAVER_CALDAV_TIMEOUT_SECONDS must be greater than 0."
+        raise build_calendar_error(
+            code="invalid_timeout_configuration",
+            category="configuration",
+            message="NAVER_CALDAV_TIMEOUT_SECONDS must be greater than 0.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="`.env.local`의 NAVER_CALDAV_TIMEOUT_SECONDS 값을 1 이상의 정수로 수정하세요.",
+            raw_message=raw_value,
         )
 
     return timeout
@@ -465,13 +534,31 @@ def _load_cache_seconds() -> int:
     try:
         ttl = int(raw_value)
     except ValueError as exc:
-        raise CalendarIntegrationError(
-            "NAVER_CALDAV_CACHE_SECONDS must be an integer."
+        raise build_calendar_error(
+            code="invalid_cache_configuration",
+            category="configuration",
+            message="NAVER_CALDAV_CACHE_SECONDS must be an integer.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="`.env.local`의 NAVER_CALDAV_CACHE_SECONDS 값을 정수로 수정하세요.",
+            raw_message=raw_value,
         ) from exc
 
     if ttl < 0:
-        raise CalendarIntegrationError(
-            "NAVER_CALDAV_CACHE_SECONDS must be 0 or greater."
+        raise build_calendar_error(
+            code="invalid_cache_configuration",
+            category="configuration",
+            message="NAVER_CALDAV_CACHE_SECONDS must be 0 or greater.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="`.env.local`의 NAVER_CALDAV_CACHE_SECONDS 값을 0 이상의 정수로 수정하세요.",
+            raw_message=raw_value,
         )
 
     return ttl
@@ -488,33 +575,139 @@ def _load_bool_env(name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
 
-    raise CalendarIntegrationError(
-        f"{name} must be one of: true, false, 1, 0, yes, no, on, off."
+    raise build_calendar_error(
+        code="invalid_boolean_configuration",
+        category="configuration",
+        message=f"{name} must be one of: true, false, 1, 0, yes, no, on, off.",
+        retryable=False,
+        retry_strategy="none",
+        recommended_retry_count=0,
+        manual_action_required=True,
+        alert_recommended=True,
+        recovery_hint=f"`.env.local`의 {name} 값을 true/false 형식으로 수정하세요.",
+        raw_message=raw_value,
     )
 
 
-def _describe_caldav_error(exc: Exception, timeout_seconds: int) -> str:
+def _classify_caldav_error(exc: Exception, timeout_seconds: int) -> CalendarIntegrationError:
     class_name = exc.__class__.__name__.lower()
     message = str(exc).strip()
     message_lower = message.lower()
 
     if "timeout" in class_name or "timed out" in message_lower or "read timed out" in message_lower:
-        return (
-            "Naver CalDAV request timed out. "
-            f"Check your network or reduce server delay, then try again. "
-            f"Current timeout: {timeout_seconds}s."
+        return build_calendar_error(
+            code="request_timeout",
+            category="network",
+            message=(
+                "Naver CalDAV request timed out. "
+                f"Check your network or reduce server delay, then try again. "
+                f"Current timeout: {timeout_seconds}s."
+            ),
+            retryable=True,
+            retry_strategy="backoff",
+            recommended_retry_count=3,
+            manual_action_required=False,
+            alert_recommended=False,
+            recovery_hint="잠시 후 재시도하고, 반복되면 NAVER_CALDAV_TIMEOUT_SECONDS 값을 늘리세요.",
+            raw_message=message or None,
         )
 
     if "401" in message_lower or "403" in message_lower or "unauthorized" in message_lower or "forbidden" in message_lower:
-        return (
-            "Naver CalDAV authentication failed. "
-            "Check NAVER_ID, NAVER_APP_PASSWORD, and CalDAV app-password settings."
+        return build_calendar_error(
+            code="authentication_failed",
+            category="authentication",
+            message=(
+                "Naver CalDAV authentication failed. "
+                "Check NAVER_ID, NAVER_APP_PASSWORD, and CalDAV app-password settings."
+            ),
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="앱 비밀번호와 CalDAV 사용 가능 여부를 다시 확인하세요.",
+            raw_message=message or None,
+        )
+
+    if any(
+        keyword in message_lower
+        for keyword in (
+            "connection refused",
+            "connection reset",
+            "remote disconnected",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "failed to establish a new connection",
+            "max retries exceeded",
+            "nodename nor servname provided",
+        )
+    ):
+        return build_calendar_error(
+            code="network_unreachable",
+            category="network",
+            message="Naver CalDAV network connection failed. Check your network and try again.",
+            retryable=True,
+            retry_strategy="backoff",
+            recommended_retry_count=3,
+            manual_action_required=False,
+            alert_recommended=False,
+            recovery_hint="네트워크 상태를 확인한 뒤 잠시 후 다시 시도하세요.",
+            raw_message=message or None,
+        )
+
+    if any(keyword in message_lower for keyword in ("500", "502", "503", "504", "bad gateway", "service unavailable")):
+        return build_calendar_error(
+            code="provider_unavailable",
+            category="query",
+            message="Naver CalDAV provider is temporarily unavailable.",
+            retryable=True,
+            retry_strategy="backoff",
+            recommended_retry_count=3,
+            manual_action_required=False,
+            alert_recommended=False,
+            recovery_hint="잠시 후 재시도하고, 반복되면 서비스 상태를 확인하세요.",
+            raw_message=message or None,
+        )
+
+    if any(keyword in message_lower for keyword in ("parse", "ical", "invalid calendar", "component")):
+        return build_calendar_error(
+            code="calendar_parse_failed",
+            category="parsing",
+            message="Naver CalDAV response could not be parsed.",
+            retryable=False,
+            retry_strategy="none",
+            recommended_retry_count=0,
+            manual_action_required=True,
+            alert_recommended=True,
+            recovery_hint="반복되면 원본 CalDAV 응답이나 특정 일정 데이터를 확인하세요.",
+            raw_message=message or None,
         )
 
     if message:
-        return f"Naver CalDAV request failed: {message}"
+        return build_calendar_error(
+            code="request_failed",
+            category="query",
+            message=f"Naver CalDAV request failed: {message}",
+            retryable=True,
+            retry_strategy="backoff",
+            recommended_retry_count=2,
+            manual_action_required=False,
+            alert_recommended=True,
+            recovery_hint="한두 번 재시도해보고, 반복되면 수동 점검 또는 알림 전송 대상으로 분류하세요.",
+            raw_message=message,
+        )
 
-    return "Naver CalDAV request failed for an unknown reason."
+    return build_calendar_error(
+        code="unknown_error",
+        category="unknown",
+        message="Naver CalDAV request failed for an unknown reason.",
+        retryable=True,
+        retry_strategy="backoff",
+        recommended_retry_count=2,
+        manual_action_required=False,
+        alert_recommended=True,
+        recovery_hint="재시도 후에도 반복되면 원인 분석을 위해 원시 오류를 수집하세요.",
+    )
 
 
 def _to_local_datetime(value: date) -> datetime:
