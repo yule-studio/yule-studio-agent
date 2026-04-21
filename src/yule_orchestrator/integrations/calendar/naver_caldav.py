@@ -21,6 +21,7 @@ class NaverCalDAVConfig:
     username: str
     password: str
     calendar_name: Optional[str] = None
+    todo_calendar_name: Optional[str] = None
     timeout_seconds: int = 15
     include_all_todos: bool = False
 
@@ -45,8 +46,13 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
             timeout=config.timeout_seconds,
         ) as client:
             principal = client.principal()
-            calendars = principal.calendars()
-            selected_calendars = _select_calendars(calendars, config.calendar_name)
+            all_calendars = list(principal.calendars())
+            selected_calendars = _select_calendars(all_calendars, config.calendar_name)
+            todo_calendars = _select_todo_calendars(
+                all_calendars=all_calendars,
+                todo_calendar_name=config.todo_calendar_name,
+                fallback_calendars=selected_calendars,
+            )
 
             for calendar in selected_calendars:
                 calendar_label = _calendar_label(calendar)
@@ -62,16 +68,33 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
                     seen_todos=seen_todos,
                 )
 
-                if config.include_all_todos:
-                    _collect_all_todos(
+            if not todos:
+                for calendar in todo_calendars:
+                    calendar_label = _calendar_label(calendar)
+                    _collect_search_todos(
                         calendar=calendar,
                         calendar_label=calendar_label,
                         calendar_cls=calendar_cls,
+                        query_start=query_start,
+                        query_end=query_end,
                         start_date=start_date,
                         end_date=end_date,
                         todos=todos,
                         seen_todos=seen_todos,
                     )
+
+                if config.include_all_todos:
+                    for calendar in todo_calendars:
+                        calendar_label = _calendar_label(calendar)
+                        _collect_all_todos(
+                            calendar=calendar,
+                            calendar_label=calendar_label,
+                            calendar_cls=calendar_cls,
+                            start_date=start_date,
+                            end_date=end_date,
+                            todos=todos,
+                            seen_todos=seen_todos,
+                        )
     except CalendarIntegrationError:
         raise
     except Exception as exc:
@@ -99,6 +122,7 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
     username = os.getenv("NAVER_CALDAV_USERNAME") or os.getenv("NAVER_ID")
     password = os.getenv("NAVER_CALDAV_PASSWORD") or os.getenv("NAVER_APP_PASSWORD")
     calendar_name = os.getenv("NAVER_CALDAV_CALENDAR")
+    todo_calendar_name = os.getenv("NAVER_CALDAV_TODO_CALENDAR")
     timeout_seconds = _load_timeout_seconds()
     include_all_todos = _load_bool_env("NAVER_CALDAV_INCLUDE_ALL_TODOS", default=False)
 
@@ -118,6 +142,7 @@ def load_naver_caldav_config() -> NaverCalDAVConfig:
         username=username,
         password=password,
         calendar_name=calendar_name,
+        todo_calendar_name=todo_calendar_name,
         timeout_seconds=timeout_seconds,
         include_all_todos=include_all_todos,
     )
@@ -203,6 +228,48 @@ def _collect_all_todos(
             todos.append(todo)
 
 
+def _collect_search_todos(
+    calendar: Any,
+    calendar_label: str,
+    calendar_cls: Any,
+    query_start: datetime,
+    query_end: datetime,
+    start_date: date,
+    end_date: date,
+    todos: List[Any],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+) -> None:
+    search = getattr(calendar, "search", None)
+    if not callable(search):
+        return
+
+    try:
+        resources = search(
+            todo=True,
+            start=query_start,
+            end=query_end,
+            include_completed=True,
+            expand=False,
+        )
+    except Exception:
+        return
+
+    for resource in resources:
+        raw_ical = _resource_ical_payload(resource)
+        calendar_obj = calendar_cls.from_ical(raw_ical)
+
+        for component in calendar_obj.walk("VTODO"):
+            todo = build_todo(component, calendar_label)
+            if not todo_matches_range(todo, start_date, end_date):
+                continue
+
+            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+            if dedupe_key in seen_todos:
+                continue
+            seen_todos.add(dedupe_key)
+            todos.append(todo)
+
+
 def _select_calendars(calendars: Iterable[Any], calendar_name: Optional[str]) -> List[Any]:
     calendars = list(calendars)
     if not calendars:
@@ -219,6 +286,42 @@ def _select_calendars(calendars: Iterable[Any], calendar_name: Optional[str]) ->
     raise CalendarIntegrationError(
         f"Calendar `{calendar_name}` was not found. Available calendars: {available}"
     )
+
+
+def _select_todo_calendars(
+    all_calendars: Iterable[Any],
+    todo_calendar_name: Optional[str],
+    fallback_calendars: Iterable[Any],
+) -> List[Any]:
+    calendars = list(all_calendars)
+    fallback = list(fallback_calendars)
+
+    if not calendars:
+        return []
+
+    if todo_calendar_name:
+        selected = [calendar for calendar in calendars if _calendar_label(calendar) == todo_calendar_name]
+        if selected:
+            return selected
+        auto_detected = _autodetect_todo_calendars(calendars)
+        if auto_detected:
+            return auto_detected
+        return fallback or calendars
+
+    auto_detected = _autodetect_todo_calendars(calendars)
+    if auto_detected:
+        return auto_detected
+
+    return fallback or calendars
+
+
+def _autodetect_todo_calendars(calendars: Iterable[Any]) -> List[Any]:
+    matches = [calendar for calendar in calendars if _looks_like_todo_calendar(_calendar_label(calendar))]
+    if len(matches) == 1:
+        return matches
+    if len(matches) > 1:
+        return matches
+    return []
 
 
 def _calendar_label(calendar: Any) -> str:
@@ -238,6 +341,11 @@ def _calendar_label(calendar: Any) -> str:
         return url.rstrip("/").split("/")[-1] or "unnamed-calendar"
 
     return "unnamed-calendar"
+
+
+def _looks_like_todo_calendar(label: str) -> bool:
+    normalized = label.strip().lower()
+    return "할 일" in normalized or "todo" in normalized or "task" in normalized
 
 
 def _resource_ical_payload(resource: Any) -> str:

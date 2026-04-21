@@ -99,6 +99,7 @@ NAVER_CALDAV_URL=https://caldav.calendar.naver.com
 NAVER_ID=
 NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CALENDAR=
+# NAVER_CALDAV_TODO_CALENDAR=내 할 일
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 ```
@@ -108,7 +109,10 @@ NAVER_APP_PASSWORD=
 - `.env.local`은 Git에 올리지 않습니다.
 - 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
-- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 보강 옵션입니다.
+- 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
+- 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
+- 자동 탐지 결과가 없으면 일반 일정 조회 대상 캘린더를 기준으로 fallback 합니다.
+- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
 
 ## 실행
 
