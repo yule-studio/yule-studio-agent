@@ -9,7 +9,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - 에이전트 컨텍스트 로드
 - 로컬 실행 환경 점검(`doctor`)
 - GitHub의 열린 이슈 읽기
-- Naver CalDAV 일정 읽기 및 구조화된 데이터(JSON) 변환
+- Naver CalDAV 일정/할 일 읽기 및 구조화된 데이터(JSON) 변환
 
 ## 디렉토리 구조
 
@@ -99,11 +99,20 @@ NAVER_CALDAV_URL=https://caldav.calendar.naver.com
 NAVER_ID=
 NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CALENDAR=
+# NAVER_CALDAV_TODO_CALENDAR=내 할 일
+# NAVER_CALDAV_TIMEOUT_SECONDS=15
+# NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
+- 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
+- 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
+- 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
+- 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
+- 자동 탐지 결과가 없으면 일반 일정 조회 대상 캘린더를 기준으로 fallback 합니다.
+- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
 
 ## 실행
 
@@ -128,9 +137,10 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 
 ## 캘린더 연동 메모
 
-- 현재는 Naver CalDAV를 통해 일정 이벤트를 읽습니다.
-- 웹 화면 상단의 할 일 목록은 CalDAV로 함께 내려오지 않을 수 있습니다.
-- 그래서 자동화 기준 데이터는 일반 일정 이벤트 중심으로 다루는 것이 안전합니다.
+- 현재는 Naver CalDAV를 통해 일정 이벤트(`VEVENT`)와 CalDAV로 노출되는 할 일(`VTODO`)을 함께 읽습니다.
+- 네이버 웹 화면의 할 일이 항상 CalDAV `VTODO`로 제공되는지는 계정 상태와 클라이언트 설정에 따라 달라질 수 있습니다.
+- `todo_count`가 0이면 현재 CalDAV 응답에 할 일이 포함되지 않았을 가능성이 큽니다.
+- `VTODO`는 기본적으로 지정한 기간 안에 해당하는 항목만 출력합니다.
 
 ## 로컬 전용 파일
 
