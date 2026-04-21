@@ -91,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print structured JSON instead of the default text view.",
     )
+    calendar_events_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local cache and fetch fresh calendar data.",
+    )
 
     return parser
 
@@ -110,7 +115,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if args.command == "github" and args.github_command == "issues":
             return run_github_issues_command(args.limit)
         if args.command == "calendar" and args.calendar_command == "events":
-            return run_calendar_events_command(args.start_date, args.end_date, args.json)
+            return run_calendar_events_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.force_refresh,
+            )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -1,60 +1,67 @@
 from __future__ import annotations
 
+from datetime import date
 from hashlib import sha256
-import json
-import os
-from pathlib import Path
-import time
 from typing import Optional
 
+from ...storage import load_json_cache, save_json_cache
 from .models import CalendarQueryResult
+
+CALENDAR_CACHE_NAMESPACE = "calendar-query-results"
+CALENDAR_CACHE_PROVIDER = "naver-caldav"
+CURRENT_RANGE_TTL_SECONDS = 300
+FUTURE_RANGE_TTL_SECONDS = 1800
+PAST_RANGE_TTL_SECONDS = 86400
 
 
 def load_calendar_cache(cache_key: str, ttl_seconds: int) -> Optional[CalendarQueryResult]:
     if ttl_seconds <= 0:
         return None
 
-    cache_path = _cache_path(cache_key)
-    if not cache_path.exists():
-        return None
-
     try:
-        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        entry = load_json_cache(
+            namespace=CALENDAR_CACHE_NAMESPACE,
+            cache_key=cache_key,
+            ttl_seconds=ttl_seconds,
+        )
     except Exception:
         return None
 
-    expires_at = payload.get("expires_at")
-    if not isinstance(expires_at, (int, float)) or expires_at < time.time():
-        return None
-
-    data = payload.get("result")
-    if not isinstance(data, dict):
+    if entry is None:
         return None
 
     try:
-        return CalendarQueryResult.from_dict(data)
+        return CalendarQueryResult.from_dict(entry.payload)
     except Exception:
         return None
 
 
 def save_calendar_cache(
     cache_key: str,
+    scope_hash: str,
+    start_date: date,
+    end_date: date,
     ttl_seconds: int,
     result: CalendarQueryResult,
 ) -> None:
     if ttl_seconds <= 0:
         return
 
-    cache_path = _cache_path(cache_key)
     try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "expires_at": time.time() + ttl_seconds,
-            "result": result.to_dict(),
-        }
-        cache_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        save_json_cache(
+            namespace=CALENDAR_CACHE_NAMESPACE,
+            cache_key=cache_key,
+            provider=CALENDAR_CACHE_PROVIDER,
+            range_start=start_date.isoformat(),
+            range_end=end_date.isoformat(),
+            scope_hash=scope_hash,
+            ttl_seconds=ttl_seconds,
+            payload=result.to_dict(),
+            metadata={
+                "source": result.source,
+                "event_count": len(result.events),
+                "todo_count": len(result.todos),
+            },
         )
     except Exception:
         return
@@ -65,10 +72,23 @@ def build_calendar_cache_key(*parts: str) -> str:
     return sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _cache_path(cache_key: str) -> Path:
-    repo_root = os.getenv("YULE_REPO_ROOT")
-    if repo_root:
-        base_dir = Path(repo_root)
-    else:
-        base_dir = Path.cwd()
-    return base_dir / ".cache" / "yule" / "calendar" / f"{cache_key}.json"
+def build_calendar_scope_hash(*parts: str) -> str:
+    normalized = "::".join(parts)
+    return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def resolve_calendar_cache_ttl_seconds(
+    start_date: date,
+    end_date: date,
+    configured_ttl_seconds: Optional[int],
+    today: Optional[date] = None,
+) -> int:
+    if configured_ttl_seconds is not None:
+        return configured_ttl_seconds
+
+    reference_day = today or date.today()
+    if end_date < reference_day:
+        return PAST_RANGE_TTL_SECONDS
+    if start_date > reference_day:
+        return FUTURE_RANGE_TTL_SECONDS
+    return CURRENT_RANGE_TTL_SECONDS

@@ -17,10 +17,15 @@ def run_calendar_events_command(
     start_date_text: Optional[str],
     end_date_text: Optional[str],
     json_output: bool,
+    force_refresh: bool,
 ) -> int:
     try:
         start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
-        result = list_naver_calendar_items(start_date=start_date, end_date=end_date)
+        result = list_naver_calendar_items(
+            start_date=start_date,
+            end_date=end_date,
+            force_refresh=force_refresh,
+        )
     except ValueError as exc:
         if not json_output:
             raise
