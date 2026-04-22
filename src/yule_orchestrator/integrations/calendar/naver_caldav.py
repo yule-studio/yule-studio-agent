@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, Iterable, List, Optional
 
+from ...storage import sync_calendar_query_result
 from .cache import (
     build_calendar_cache_key,
     build_calendar_scope_hash,
@@ -61,6 +62,7 @@ def list_naver_calendar_items(
             ttl_seconds=cache_ttl_seconds,
         )
         if cached_result is not None:
+            _sync_calendar_state_safely(cached_result, scope_hash=cache_scope_hash)
             return cached_result
 
     result = _fetch_naver_calendar_items(
@@ -76,6 +78,7 @@ def list_naver_calendar_items(
         ttl_seconds=cache_ttl_seconds,
         result=result,
     )
+    _sync_calendar_state_safely(result, scope_hash=cache_scope_hash)
     return result
 
 
@@ -178,6 +181,13 @@ def _fetch_naver_calendar_items(
         events=events,
         todos=todos,
     )
+
+
+def _sync_calendar_state_safely(result: CalendarQueryResult, scope_hash: str) -> None:
+    try:
+        sync_calendar_query_result(result, scope_hash=scope_hash)
+    except Exception:
+        return
 
 
 def list_naver_calendar_events(
