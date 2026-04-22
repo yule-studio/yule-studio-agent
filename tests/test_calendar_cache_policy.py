@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import date
 import unittest
 
-from tests import _bootstrap  # noqa: F401
-from yule_orchestrator.integrations.calendar.cache import resolve_calendar_cache_ttl_seconds
+try:
+    import _bootstrap  # noqa: F401
+except ModuleNotFoundError:
+    from tests import _bootstrap  # noqa: F401
+from yule_orchestrator.integrations.calendar.cache import build_calendar_cache_key, resolve_calendar_cache_ttl_seconds
+from yule_orchestrator.integrations.calendar.models import build_fallback_item_uid
 
 
 class CalendarCachePolicyTestCase(unittest.TestCase):
@@ -43,3 +47,15 @@ class CalendarCachePolicyTestCase(unittest.TestCase):
             today=date(2026, 4, 22),
         )
         self.assertEqual(ttl, 42)
+
+    def test_cache_key_normalization_avoids_delimiter_collisions(self) -> None:
+        left = build_calendar_cache_key("a", "b::c")
+        right = build_calendar_cache_key("a::b", "c")
+
+        self.assertNotEqual(left, right)
+
+    def test_fallback_item_uid_normalization_avoids_delimiter_collisions(self) -> None:
+        left = build_fallback_item_uid("todo", "a", "b::c")
+        right = build_fallback_item_uid("todo", "a::b", "c")
+
+        self.assertNotEqual(left, right)

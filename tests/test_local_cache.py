@@ -7,7 +7,10 @@ import sqlite3
 import time
 import unittest
 
-from tests import _bootstrap  # noqa: F401
+try:
+    import _bootstrap  # noqa: F401
+except ModuleNotFoundError:
+    from tests import _bootstrap  # noqa: F401
 from yule_orchestrator.storage import (
     cleanup_json_cache,
     list_json_cache_entries,
@@ -120,3 +123,31 @@ class LocalCacheTestCase(unittest.TestCase):
 
         self.assertEqual(deleted_count, 1)
         self.assertEqual(entries, [])
+
+    def test_shorter_runtime_ttl_marks_cache_as_stale(self) -> None:
+        save_json_cache(
+            namespace="calendar-query-results",
+            cache_key="runtime-ttl-entry",
+            provider="naver-caldav",
+            range_start="2026-04-22",
+            range_end="2026-04-22",
+            scope_hash="scope-4",
+            ttl_seconds=3600,
+            payload={"value": 4},
+        )
+
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "UPDATE local_cache_entries SET fetched_at = ? WHERE namespace = ? AND cache_key = ?",
+                (
+                    time.time() - 120,
+                    "calendar-query-results",
+                    "runtime-ttl-entry",
+                ),
+            )
+
+        fresh_entry = load_json_cache("calendar-query-results", "runtime-ttl-entry", ttl_seconds=3600)
+        stale_entry = load_json_cache("calendar-query-results", "runtime-ttl-entry", ttl_seconds=60)
+
+        self.assertIsNotNone(fresh_entry)
+        self.assertIsNone(stale_entry)
