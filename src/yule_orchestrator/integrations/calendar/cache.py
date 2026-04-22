@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from hashlib import sha256
+import json
 from typing import Optional
 
 from ...storage import list_json_cache_entries, load_json_cache, save_json_cache
@@ -87,13 +88,11 @@ def save_calendar_cache(
 
 
 def build_calendar_cache_key(*parts: str) -> str:
-    normalized = "::".join(parts)
-    return sha256(normalized.encode("utf-8")).hexdigest()
+    return _hash_parts(parts)
 
 
 def build_calendar_scope_hash(*parts: str) -> str:
-    normalized = "::".join(parts)
-    return sha256(normalized.encode("utf-8")).hexdigest()
+    return _hash_parts(parts)
 
 
 def resolve_calendar_cache_ttl_seconds(
@@ -121,3 +120,8 @@ def list_calendar_cache_entries(limit: int = 100, include_expired: bool = True) 
         limit=limit,
     )
     return [entry.to_dict() for entry in entries]
+
+
+def _hash_parts(parts: tuple[str, ...]) -> str:
+    normalized = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
+    return sha256(normalized.encode("utf-8")).hexdigest()

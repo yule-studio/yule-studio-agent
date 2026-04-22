@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
+import json
 from typing import Optional, Sequence
 
 
@@ -159,5 +160,5 @@ class CalendarQueryResult:
 
 
 def build_fallback_item_uid(item_type: str, *parts: str) -> str:
-    normalized = "::".join([item_type, *parts])
+    normalized = json.dumps([item_type, *parts], ensure_ascii=False, separators=(",", ":"))
     return sha256(normalized.encode("utf-8")).hexdigest()

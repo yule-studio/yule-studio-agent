@@ -103,8 +103,8 @@ def _fetch_naver_calendar_items(
 
     events = []
     todos = []
-    seen_events: set[tuple[str, str, str, str]] = set()
-    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]] = set()
+    seen_events: set[tuple[str, str, str]] = set()
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str]] = set()
 
     try:
         with client_cls(
@@ -115,13 +115,14 @@ def _fetch_naver_calendar_items(
         ) as client:
             principal = client.principal()
             all_calendars = list(principal.calendars())
+            selected_calendars = _select_calendars(all_calendars, config.calendar_name)
             todo_calendars = _select_todo_calendars(
                 all_calendars=all_calendars,
                 todo_calendar_name=config.todo_calendar_name,
-                fallback_calendars=_select_calendars(all_calendars, config.calendar_name),
+                fallback_calendars=selected_calendars,
             )
             event_calendars = _select_event_calendars(
-                all_calendars=all_calendars,
+                selected_calendars=selected_calendars,
                 calendar_name=config.calendar_name,
                 todo_calendars=todo_calendars,
             )
@@ -307,8 +308,8 @@ def _collect_dated_items(
     include_todos: bool,
     events: List[Any],
     todos: List[Any],
-    seen_events: set[tuple[str, str, str, str]],
-    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+    seen_events: set[tuple[str, str, str]],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str]],
 ) -> None:
     resources = calendar.date_search(start=query_start, end=query_end, expand=True)
 
@@ -321,7 +322,7 @@ def _collect_dated_items(
                 event = build_event(component, calendar_label)
                 if event is None:
                     continue
-                dedupe_key = (event.title, event.start, event.end, event.calendar_name)
+                dedupe_key = (event.item_uid, event.start, event.end)
                 if dedupe_key in seen_events:
                     continue
                 seen_events.add(dedupe_key)
@@ -330,7 +331,7 @@ def _collect_dated_items(
         if include_todos:
             for component in calendar_obj.walk("VTODO"):
                 todo = build_todo(component, calendar_label)
-                dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+                dedupe_key = (todo.item_uid, todo.start, todo.due, todo.status)
                 if dedupe_key in seen_todos:
                     continue
                 seen_todos.add(dedupe_key)
@@ -344,7 +345,7 @@ def _collect_all_todos(
     start_date: date,
     end_date: date,
     todos: List[Any],
-    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str]],
 ) -> None:
     for resource in _list_todo_resources(calendar):
         raw_ical = _resource_ical_payload(resource)
@@ -355,7 +356,7 @@ def _collect_all_todos(
             if not todo_matches_range(todo, start_date, end_date):
                 continue
 
-            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+            dedupe_key = (todo.item_uid, todo.start, todo.due, todo.status)
             if dedupe_key in seen_todos:
                 continue
             seen_todos.add(dedupe_key)
@@ -371,7 +372,7 @@ def _collect_search_todos(
     start_date: date,
     end_date: date,
     todos: List[Any],
-    seen_todos: set[tuple[str, Optional[str], Optional[str], str, str]],
+    seen_todos: set[tuple[str, Optional[str], Optional[str], str]],
 ) -> None:
     search = getattr(calendar, "search", None)
     if not callable(search):
@@ -397,7 +398,7 @@ def _collect_search_todos(
             if not todo_matches_range(todo, start_date, end_date):
                 continue
 
-            dedupe_key = (todo.title, todo.start, todo.due, todo.status, todo.calendar_name)
+            dedupe_key = (todo.item_uid, todo.start, todo.due, todo.status)
             if dedupe_key in seen_todos:
                 continue
             seen_todos.add(dedupe_key)
@@ -469,11 +470,11 @@ def _select_todo_calendars(
 
 
 def _select_event_calendars(
-    all_calendars: Iterable[Any],
+    selected_calendars: Iterable[Any],
     calendar_name: Optional[str],
     todo_calendars: Iterable[Any],
 ) -> List[Any]:
-    selected = _select_calendars(all_calendars, calendar_name)
+    selected = list(selected_calendars)
     if calendar_name is not None:
         return selected
 
@@ -507,18 +508,33 @@ def _calendar_label(calendar: Any) -> str:
     if isinstance(name, str) and name:
         return name
 
-    url = getattr(calendar, "url", None)
-    if isinstance(url, str) and url:
-        return url.rstrip("/").split("/")[-1] or "unnamed-calendar"
+    normalized_url = _normalize_calendar_url(getattr(calendar, "url", None))
+    if normalized_url:
+        return normalized_url.rstrip("/").split("/")[-1] or "unnamed-calendar"
 
     return "unnamed-calendar"
 
 
 def _calendar_identifier(calendar: Any) -> str:
-    url = getattr(calendar, "url", None)
-    if isinstance(url, str) and url:
-        return url
+    normalized_url = _normalize_calendar_url(getattr(calendar, "url", None))
+    if normalized_url:
+        return normalized_url
     return _calendar_label(calendar)
+
+
+def _normalize_calendar_url(url: Any) -> Optional[str]:
+    if url is None:
+        return None
+
+    try:
+        normalized = str(url).strip()
+    except Exception:
+        return None
+
+    if not normalized:
+        return None
+
+    return normalized
 
 
 def _looks_like_todo_calendar(label: str) -> bool:
