@@ -8,7 +8,7 @@ from typing import Optional
 @dataclass(frozen=True)
 class DiscordBotConfig:
     token: str
-    application_id: int
+    application_id: Optional[int]
     guild_id: int
     daily_channel_id: Optional[int] = None
 
@@ -16,7 +16,7 @@ class DiscordBotConfig:
     def from_env(cls) -> "DiscordBotConfig":
         return cls(
             token=_required_env("DISCORD_BOT_TOKEN"),
-            application_id=_required_int_env("DISCORD_APPLICATION_ID"),
+            application_id=_optional_int_env("DISCORD_APPLICATION_ID"),
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
         )

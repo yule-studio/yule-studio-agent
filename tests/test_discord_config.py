@@ -18,7 +18,6 @@ class DiscordConfigTestCase(unittest.TestCase):
             os.environ,
             {
                 "DISCORD_BOT_TOKEN": "token-value",
-                "DISCORD_APPLICATION_ID": "123456789",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_DAILY_CHANNEL_ID": "555",
             },
@@ -27,16 +26,29 @@ class DiscordConfigTestCase(unittest.TestCase):
             config = DiscordBotConfig.from_env()
 
         self.assertEqual(config.token, "token-value")
-        self.assertEqual(config.application_id, 123456789)
+        self.assertIsNone(config.application_id)
         self.assertEqual(config.guild_id, 987654321)
         self.assertEqual(config.daily_channel_id, 555)
+
+    def test_from_env_reads_optional_application_id(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_BOT_TOKEN": "token-value",
+                "DISCORD_APPLICATION_ID": "123456789",
+                "DISCORD_GUILD_ID": "987654321",
+            },
+            clear=False,
+        ):
+            config = DiscordBotConfig.from_env()
+
+        self.assertEqual(config.application_id, 123456789)
 
     def test_from_env_requires_token(self) -> None:
         with patch.dict(
             os.environ,
             {
                 "DISCORD_BOT_TOKEN": "",
-                "DISCORD_APPLICATION_ID": "123456789",
                 "DISCORD_GUILD_ID": "987654321",
             },
             clear=False,
