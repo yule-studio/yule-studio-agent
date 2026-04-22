@@ -6,10 +6,11 @@ import logging
 import os
 from typing import Any, Iterable, List, Optional
 
-from ...storage import sync_calendar_query_result
+from ...storage.calendar_state import sync_calendar_query_result
 from .cache import (
     build_calendar_cache_key,
     build_calendar_scope_hash,
+    load_stale_calendar_cache,
     load_calendar_cache,
     resolve_calendar_cache_ttl_seconds,
     save_calendar_cache,
@@ -56,6 +57,7 @@ def list_naver_calendar_items(
         start_date.isoformat(),
         end_date.isoformat(),
     )
+    stale_cached_result = None
     if not force_refresh:
         cached_result = load_calendar_cache(
             cache_key=cache_key,
@@ -64,12 +66,19 @@ def list_naver_calendar_items(
         if cached_result is not None:
             _sync_calendar_state_safely(cached_result, scope_hash=cache_scope_hash)
             return cached_result
+        stale_cached_result = load_stale_calendar_cache(cache_key=cache_key)
 
-    result = _fetch_naver_calendar_items(
-        config=config,
-        start_date=start_date,
-        end_date=end_date,
-    )
+    try:
+        result = _fetch_naver_calendar_items(
+            config=config,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except CalendarIntegrationError as exc:
+        if stale_cached_result is not None and _can_use_stale_cache_on_error(exc):
+            _sync_calendar_state_safely(stale_cached_result, scope_hash=cache_scope_hash)
+            return stale_cached_result
+        raise
     save_calendar_cache(
         cache_key=cache_key,
         scope_hash=cache_scope_hash,
@@ -188,6 +197,13 @@ def _sync_calendar_state_safely(result: CalendarQueryResult, scope_hash: str) ->
         sync_calendar_query_result(result, scope_hash=scope_hash)
     except Exception:
         return
+
+
+def _can_use_stale_cache_on_error(error: CalendarIntegrationError) -> bool:
+    details = error.details
+    if details.retryable:
+        return True
+    return details.category in {"network", "query", "unknown"}
 
 
 def list_naver_calendar_events(

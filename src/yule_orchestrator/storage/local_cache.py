@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
+
+DEFAULT_STALE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -22,12 +24,29 @@ class LocalCacheEntry:
     fetched_at: float
     expires_at: float
     last_accessed_at: float
+    is_stale: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "namespace": self.namespace,
+            "cache_key": self.cache_key,
+            "provider": self.provider,
+            "range_start": self.range_start,
+            "range_end": self.range_end,
+            "scope_hash": self.scope_hash,
+            "metadata": self.metadata,
+            "fetched_at": self.fetched_at,
+            "expires_at": self.expires_at,
+            "last_accessed_at": self.last_accessed_at,
+            "is_stale": self.is_stale,
+        }
 
 
 def load_json_cache(
     namespace: str,
     cache_key: str,
     ttl_seconds: Optional[int] = None,
+    allow_stale: bool = False,
 ) -> Optional[LocalCacheEntry]:
     db_path = _database_path()
     if not db_path.exists():
@@ -60,15 +79,10 @@ def load_json_cache(
         now = time.time()
         fetched_at = float(row["fetched_at"])
         expires_at = float(row["expires_at"])
-
-        if expires_at <= now:
-            connection.execute(
-                "DELETE FROM local_cache_entries WHERE namespace = ? AND cache_key = ?",
-                (namespace, cache_key),
-            )
-            return None
-
-        if ttl_seconds is not None and ttl_seconds >= 0 and fetched_at + ttl_seconds <= now:
+        expired = expires_at <= now
+        ttl_expired = ttl_seconds is not None and ttl_seconds >= 0 and fetched_at + ttl_seconds <= now
+        is_stale = expired or ttl_expired
+        if is_stale and not allow_stale:
             return None
 
         payload = _deserialize_json_object(row["payload_json"])
@@ -96,6 +110,7 @@ def load_json_cache(
             fetched_at=fetched_at,
             expires_at=expires_at,
             last_accessed_at=now,
+            is_stale=is_stale,
         )
 
 
@@ -109,6 +124,7 @@ def save_json_cache(
     ttl_seconds: int,
     payload: Mapping[str, Any],
     metadata: Optional[Mapping[str, Any]] = None,
+    stale_retention_seconds: Optional[int] = DEFAULT_STALE_RETENTION_SECONDS,
 ) -> None:
     if ttl_seconds <= 0:
         return
@@ -161,10 +177,120 @@ def save_json_cache(
                 now,
             ),
         )
+        cleanup_before = now
+        if stale_retention_seconds is not None and stale_retention_seconds > 0:
+            cleanup_before = now - stale_retention_seconds
         connection.execute(
             "DELETE FROM local_cache_entries WHERE expires_at <= ?",
-            (now,),
+            (cleanup_before,),
         )
+
+
+def list_json_cache_entries(
+    namespace: Optional[str] = None,
+    provider: Optional[str] = None,
+    include_expired: bool = True,
+    limit: int = 100,
+) -> list[LocalCacheEntry]:
+    db_path = _database_path()
+    if not db_path.exists():
+        return []
+
+    resolved_limit = max(1, limit)
+    clauses = []
+    params: list[Any] = []
+    if namespace:
+        clauses.append("namespace = ?")
+        params.append(namespace)
+    if provider:
+        clauses.append("provider = ?")
+        params.append(provider)
+    if not include_expired:
+        clauses.append("expires_at > ?")
+        params.append(time.time())
+
+    where_clause = ""
+    if clauses:
+        where_clause = "WHERE " + " AND ".join(clauses)
+
+    with _connect(db_path) as connection:
+        _ensure_schema(connection)
+        rows = connection.execute(
+            f"""
+            SELECT
+                namespace,
+                cache_key,
+                provider,
+                range_start,
+                range_end,
+                scope_hash,
+                payload_json,
+                metadata_json,
+                fetched_at,
+                expires_at,
+                last_accessed_at
+            FROM local_cache_entries
+            {where_clause}
+            ORDER BY fetched_at DESC
+            LIMIT ?
+            """,
+            (*params, resolved_limit),
+        ).fetchall()
+
+    now = time.time()
+    entries = []
+    for row in rows:
+        payload = _deserialize_json_object(row["payload_json"]) or {}
+        metadata = _deserialize_json_object(row["metadata_json"]) or {}
+        expires_at = float(row["expires_at"])
+        entries.append(
+            LocalCacheEntry(
+                namespace=row["namespace"],
+                cache_key=row["cache_key"],
+                provider=row["provider"],
+                range_start=row["range_start"],
+                range_end=row["range_end"],
+                scope_hash=row["scope_hash"],
+                payload=payload,
+                metadata=metadata,
+                fetched_at=float(row["fetched_at"]),
+                expires_at=expires_at,
+                last_accessed_at=float(row["last_accessed_at"]),
+                is_stale=expires_at <= now,
+            )
+        )
+    return entries
+
+
+def cleanup_json_cache(
+    namespace: Optional[str] = None,
+    stale_retention_seconds: Optional[int] = DEFAULT_STALE_RETENTION_SECONDS,
+) -> int:
+    db_path = _database_path()
+    if not db_path.exists():
+        return 0
+
+    threshold = time.time()
+    if stale_retention_seconds is not None and stale_retention_seconds > 0:
+        threshold = threshold - stale_retention_seconds
+
+    clauses = ["expires_at <= ?"]
+    params: list[Any] = [threshold]
+    if namespace:
+        clauses.append("namespace = ?")
+        params.append(namespace)
+
+    with _connect(db_path) as connection:
+        _ensure_schema(connection)
+        cursor = connection.execute(
+            f"DELETE FROM local_cache_entries WHERE {' AND '.join(clauses)}",
+            params,
+        )
+        return int(cursor.rowcount or 0)
+
+
+def local_cache_database_path() -> Path:
+    return _database_path()
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:

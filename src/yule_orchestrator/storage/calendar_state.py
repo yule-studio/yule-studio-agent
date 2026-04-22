@@ -8,9 +8,12 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
-from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
+if TYPE_CHECKING:
+    from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
+
+DEFAULT_CALENDAR_STATE_RETENTION_SECONDS = 30 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -314,6 +317,23 @@ def list_calendar_state_records(
         records.append(record)
 
     return records
+
+
+def cleanup_calendar_state_records(
+    retention_seconds: int = DEFAULT_CALENDAR_STATE_RETENTION_SECONDS,
+) -> int:
+    db_path = _database_path()
+    if not db_path.exists():
+        return 0
+
+    threshold = time.time() - max(0, retention_seconds)
+    with _connect(db_path) as connection:
+        _ensure_schema(connection)
+        cursor = connection.execute(
+            "DELETE FROM calendar_item_states WHERE last_seen_at <= ?",
+            (threshold,),
+        )
+        return int(cursor.rowcount or 0)
 
 
 def _iter_event_records(events: Iterable[CalendarEvent]) -> list[dict[str, Any]]:

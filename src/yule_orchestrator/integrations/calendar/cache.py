@@ -4,7 +4,7 @@ from datetime import date
 from hashlib import sha256
 from typing import Optional
 
-from ...storage import load_json_cache, save_json_cache
+from ...storage import list_json_cache_entries, load_json_cache, save_json_cache
 from .models import CalendarQueryResult
 
 CALENDAR_CACHE_NAMESPACE = "calendar-query-results"
@@ -23,6 +23,25 @@ def load_calendar_cache(cache_key: str, ttl_seconds: int) -> Optional[CalendarQu
             namespace=CALENDAR_CACHE_NAMESPACE,
             cache_key=cache_key,
             ttl_seconds=ttl_seconds,
+        )
+    except Exception:
+        return None
+
+    if entry is None:
+        return None
+
+    try:
+        return CalendarQueryResult.from_dict(entry.payload)
+    except Exception:
+        return None
+
+
+def load_stale_calendar_cache(cache_key: str) -> Optional[CalendarQueryResult]:
+    try:
+        entry = load_json_cache(
+            namespace=CALENDAR_CACHE_NAMESPACE,
+            cache_key=cache_key,
+            allow_stale=True,
         )
     except Exception:
         return None
@@ -92,3 +111,13 @@ def resolve_calendar_cache_ttl_seconds(
     if start_date > reference_day:
         return FUTURE_RANGE_TTL_SECONDS
     return CURRENT_RANGE_TTL_SECONDS
+
+
+def list_calendar_cache_entries(limit: int = 100, include_expired: bool = True) -> list[dict]:
+    entries = list_json_cache_entries(
+        namespace=CALENDAR_CACHE_NAMESPACE,
+        provider=CALENDAR_CACHE_PROVIDER,
+        include_expired=include_expired,
+        limit=limit,
+    )
+    return [entry.to_dict() for entry in entries]
