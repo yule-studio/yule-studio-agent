@@ -16,6 +16,7 @@ from .calendar import (
     run_calendar_warmup_command,
 )
 from .context import run_context_command
+from .discord import run_discord_bot_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
 from .planning import run_planning_checkpoints_command, run_planning_daily_command
@@ -266,6 +267,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print structured JSON instead of the default text view.",
     )
 
+    discord_parser = subparsers.add_parser(
+        "discord",
+        help="Run Discord integrations backed by the local orchestrator.",
+    )
+    discord_subparsers = discord_parser.add_subparsers(dest="discord_command", required=True)
+
+    discord_bot_parser = discord_subparsers.add_parser(
+        "bot",
+        help="Run the Discord bot process.",
+    )
+
     return parser
 
 
@@ -331,6 +343,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.window_minutes,
                 args.json,
             )
+        if args.command == "discord" and args.discord_command == "bot":
+            return run_discord_bot_command(repo_root)
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
