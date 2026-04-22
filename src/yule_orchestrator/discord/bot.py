@@ -16,7 +16,7 @@ def run_discord_bot(repo_root: Path) -> None:
         def __init__(self) -> None:
             intents = discord.Intents.default()
             super().__init__(
-                command_prefix="!",
+                command_prefix=commands.when_mentioned,
                 intents=intents,
                 application_id=config.application_id,
             )

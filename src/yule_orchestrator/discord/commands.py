@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+
+from discord import app_commands
+
 from ..planning import build_daily_plan, collect_planning_inputs, select_due_checkpoints
 from .formatter import format_checkpoints_message, format_plan_today_message, split_discord_message
 
 
 def register_discord_commands(bot: "commands.Bot", guild_id: int) -> None:
     import discord
-    from discord import app_commands
 
     guild = discord.Object(id=guild_id)
 
