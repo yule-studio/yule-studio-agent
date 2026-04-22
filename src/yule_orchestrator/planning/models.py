@@ -180,6 +180,28 @@ class PlanningExecutionBlock:
 
 
 @dataclass(frozen=True)
+class PlanningBlockBriefing:
+    briefing_id: str
+    start: str
+    end: str
+    title: str
+    block_type: str
+    source_ref: Optional[str]
+    briefing: str
+
+    def to_dict(self) -> dict:
+        return {
+            "briefing_id": self.briefing_id,
+            "start": self.start,
+            "end": self.end,
+            "title": self.title,
+            "block_type": self.block_type,
+            "source_ref": self.source_ref,
+            "briefing": self.briefing,
+        }
+
+
+@dataclass(frozen=True)
 class PlanningCheckpoint:
     checkpoint_id: str
     remind_at: str
@@ -218,6 +240,8 @@ class DailyPlan:
     execution_blocks: Sequence[PlanningExecutionBlock]
     prioritized_tasks: Sequence[PlanningTaskCandidate]
     suggested_time_blocks: Sequence[PlanningTimeBlock]
+    morning_briefing: str
+    time_block_briefings: Sequence[PlanningBlockBriefing]
     checkpoints: Sequence[PlanningCheckpoint]
     coding_agent_handoff: Sequence[PlanningTaskCandidate]
     discord_briefing: str
@@ -234,6 +258,8 @@ class DailyPlan:
             "execution_blocks": [block.to_dict() for block in self.execution_blocks],
             "prioritized_tasks": [task.to_dict() for task in self.prioritized_tasks],
             "suggested_time_blocks": [block.to_dict() for block in self.suggested_time_blocks],
+            "morning_briefing": self.morning_briefing,
+            "time_block_briefings": [briefing.to_dict() for briefing in self.time_block_briefings],
             "checkpoints": [checkpoint.to_dict() for checkpoint in self.checkpoints],
             "coding_agent_handoff": [task.to_dict() for task in self.coding_agent_handoff],
             "discord_briefing": self.discord_briefing,

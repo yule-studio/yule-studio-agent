@@ -1,4 +1,5 @@
 from .models import (
+    PlanningBlockBriefing,
     DailyPlan,
     DailyPlanEnvelope,
     PlanningCheckpoint,
@@ -13,6 +14,7 @@ from .planner import build_daily_plan, collect_planning_inputs, load_reminder_it
 from .planner import select_due_checkpoints
 
 __all__ = [
+    "PlanningBlockBriefing",
     "DailyPlan",
     "DailyPlanEnvelope",
     "PlanningCheckpoint",

@@ -88,6 +88,10 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertGreaterEqual(plan.summary.available_focus_minutes, 30)
         self.assertTrue(any(task.source_type == "github_issue" for task in plan.coding_agent_handoff))
         self.assertTrue(plan.discord_briefing)
+        self.assertTrue(plan.morning_briefing)
+        self.assertIn("추천 우선순위", plan.morning_briefing)
+        self.assertTrue(plan.time_block_briefings)
+        self.assertTrue(any(briefing.block_type == "focus_block" for briefing in plan.time_block_briefings))
         self.assertEqual(plan.briefing_source, "rules")
 
     def test_build_daily_plan_creates_focus_blocks(self) -> None:
@@ -154,9 +158,13 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(plan.execution_blocks[0].title, "할일 목록 정리")
         self.assertEqual(plan.execution_blocks[1].start, "2026-04-22T10:00:00+09:00")
         self.assertEqual(plan.execution_blocks[1].end, "2026-04-22T13:00:00+09:00")
+        self.assertEqual(len(plan.time_block_briefings), 2)
+        self.assertEqual(plan.time_block_briefings[0].title, "할일 목록 정리")
+        self.assertIn("10:00부터", plan.time_block_briefings[0].briefing)
         self.assertEqual(len(plan.checkpoints), 2)
         self.assertEqual(plan.checkpoints[0].remind_at, "2026-04-22T09:55:00+09:00")
         self.assertIn("업무 수행 (회의 없음)", plan.checkpoints[0].prompt)
+        self.assertIn("남은 핵심 한 가지", plan.checkpoints[0].prompt)
 
         due = select_due_checkpoints(
             plan.checkpoints,

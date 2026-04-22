@@ -4,13 +4,15 @@ import json
 from typing import Sequence
 from urllib import error, request
 
-from .models import PlanningCheckpoint, PlanningTaskCandidate, PlanningTimeBlock
+from .models import PlanningBlockBriefing, PlanningCheckpoint, PlanningTaskCandidate, PlanningTimeBlock
 
 
 def generate_human_briefing(
     plan_date: str,
+    summary_line: str,
     fixed_schedule: Sequence[PlanningTimeBlock],
     prioritized_tasks: Sequence[PlanningTaskCandidate],
+    time_block_briefings: Sequence[PlanningBlockBriefing],
     checkpoints: Sequence[PlanningCheckpoint],
     model: str = "gemma3:latest",
     endpoint: str = "http://localhost:11434",
@@ -18,8 +20,10 @@ def generate_human_briefing(
 ) -> str:
     prompt = _build_prompt(
         plan_date=plan_date,
+        summary_line=summary_line,
         fixed_schedule=fixed_schedule,
         prioritized_tasks=prioritized_tasks,
+        time_block_briefings=time_block_briefings,
         checkpoints=checkpoints,
     )
     payload = json.dumps(
@@ -55,8 +59,10 @@ def generate_human_briefing(
 
 def _build_prompt(
     plan_date: str,
+    summary_line: str,
     fixed_schedule: Sequence[PlanningTimeBlock],
     prioritized_tasks: Sequence[PlanningTaskCandidate],
+    time_block_briefings: Sequence[PlanningBlockBriefing],
     checkpoints: Sequence[PlanningCheckpoint],
 ) -> str:
     schedule_lines = [
@@ -67,29 +73,41 @@ def _build_prompt(
         f"- {task.title} | {task.priority_level} | score={task.priority_score} | 이유={', '.join(task.reasons)}"
         for task in prioritized_tasks[:5]
     ] or ["- 우선 작업 없음"]
+    block_lines = [
+        f"- {briefing.start} -> {briefing.end} | {briefing.title} | {briefing.briefing}"
+        for briefing in time_block_briefings[:5]
+    ] or ["- 시간대별 브리핑 없음"]
     checkpoint_lines = [
         f"- {checkpoint.remind_at} | {checkpoint.block_title} | {checkpoint.prompt}"
         for checkpoint in checkpoints[:5]
     ] or ["- 체크포인트 없음"]
 
     return f"""당신은 개인 Planning Agent의 브리핑 작성자입니다.
-다음 daily-plan 입력을 보고 한국어로 짧고 자연스러운 아침 브리핑을 작성하세요.
+다음 daily-plan 입력을 보고 한국어로 자연스럽고 실용적인 아침 브리핑을 작성하세요.
 
 조건:
-- 4문장 이하
+- 6문장 이하
 - 너무 딱딱하지 않게
 - 가장 먼저 할 일 1개를 분명하게 추천
-- 고정 일정이 있으면 시간 압박을 짚기
+- 가능하면 2순위, 3순위까지 자연스럽게 이어서 설명
+- 시간 블록이 있으면 어느 시간대에 무엇을 하면 좋을지 짚기
 - 체크포인트가 있으면 자연스럽게 한 줄 언급
+- 결과는 한 문단 또는 여러 줄 텍스트로 반환
 
 날짜:
 {plan_date}
+
+헤드라인 요약:
+{summary_line}
 
 고정 일정:
 {chr(10).join(schedule_lines)}
 
 우선 작업:
 {chr(10).join(task_lines)}
+
+시간대별 브리핑 초안:
+{chr(10).join(block_lines)}
 
 체크포인트:
 {chr(10).join(checkpoint_lines)}
