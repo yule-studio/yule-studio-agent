@@ -12,6 +12,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - Naver CalDAV 일정/할 일 읽기 및 구조화된 데이터(JSON) 변환
 - Planning Agent 기반 daily plan 생성
 - 시간 블록 브리핑과 체크포인트 생성
+- Discord 슬래시 명령 기반 최소 봇 실행
 
 ## 디렉토리 구조
 
@@ -38,6 +39,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
         ├── cli/
         ├── core/
         ├── diagnostics/
+        ├── discord/
         ├── integrations/
         └── planning/
 ```
@@ -109,6 +111,11 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
+
+DISCORD_BOT_TOKEN=
+DISCORD_APPLICATION_ID=
+DISCORD_GUILD_ID=
+# DISCORD_DAILY_CHANNEL_ID=
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
@@ -127,6 +134,8 @@ NAVER_APP_PASSWORD=
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`를 써도 같은 범위 재실행은 캐시 덕분에 더 빠르게 응답할 수 있습니다.
 - 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
+- Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`가 필요합니다.
+- 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
 
 ## 실행
 
@@ -141,6 +150,7 @@ yule calendar cache inspect --json
 yule calendar cache cleanup --json
 yule planning daily --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
+yule discord bot
 ```
 
 로컬 환경에 따라 엔트리포인트 설치가 덜 맞물려 있을 때는 아래처럼 모듈 실행 방식으로 동일하게 사용할 수 있습니다.
@@ -151,6 +161,7 @@ PYTHONPATH=src python3 -m yule_orchestrator context planning-agent
 PYTHONPATH=src python3 -m yule_orchestrator calendar events --json
 PYTHONPATH=src python3 -m yule_orchestrator calendar cache cleanup --json
 PYTHONPATH=src python3 -m yule_orchestrator planning daily --json
+PYTHONPATH=src python3 -m yule_orchestrator discord bot
 ```
 
 기간을 지정해서 일정 데이터를 읽을 수도 있습니다.
@@ -202,6 +213,18 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 
 ```bash
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --json
+```
+
+## Discord Bot
+
+- 최소 Discord Bot은 `yule discord bot`으로 실행합니다.
+- 현재 MVP 명령은 `/ping`, `/plan_today`, `/checkpoints_now` 입니다.
+- `/plan_today`는 Planning Agent 결과를 Discord 메시지로 정리해 보여줍니다.
+- `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
+- `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
+
+```bash
+yule discord bot
 ```
 
 ## 테스트
