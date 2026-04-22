@@ -1,0 +1,83 @@
+{
+  "id": "planning-agent",
+  "name": "Planning Agent",
+  "description": "Builds a reusable daily plan from schedule, todos, issues, and reminder items.",
+  "execution_mode": "single_executor_multi_advisor",
+  "default_executor": "ollama",
+  "instruction_entry": "agents/planning-agent/CLAUDE.md",
+  "policies": [
+    "policies/runtime/common/safety.md",
+    "policies/runtime/common/context-loading.md",
+    "policies/runtime/agents/planning-agent/architecture.md",
+    "policies/runtime/agents/planning-agent/workflow.md",
+    "policies/runtime/agents/planning-agent/contract.md"
+  ],
+  "write_policy": {
+    "max_write_executors_per_run": 0,
+    "require_user_approval_before_write": true,
+    "allow_advisor_patch_proposals": true,
+    "allow_parallel_writes": false,
+    "require_human_review_before_publish": true
+  },
+  "participants": [
+    {
+      "id": "ollama",
+      "provider": "local",
+      "model": "gemma3:latest",
+      "endpoint": "http://localhost:11434",
+      "roles": ["executor", "planner", "summarizer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "calendar.read",
+        "github.issue.read",
+        "reminder.read",
+        "planning.plan.render"
+      ],
+      "notes": "Privacy-first local planner for schedule and reminder synthesis."
+    },
+    {
+      "id": "claude",
+      "provider": "anthropic",
+      "roles": ["advisor", "requirements_reviewer", "planner"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "calendar.read",
+        "github.issue.read",
+        "reminder.read",
+        "planning.plan.render"
+      ],
+      "notes": "Helps refine prioritization rules and output structure."
+    },
+    {
+      "id": "gemini",
+      "provider": "google",
+      "roles": ["advisor", "long_context_planner"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "calendar.read",
+        "github.issue.read",
+        "reminder.read",
+        "planning.plan.render"
+      ],
+      "notes": "Useful for long-context synthesis across multiple planning sources."
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "roles": ["advisor", "reviewer", "workflow_designer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "calendar.read",
+        "github.issue.read",
+        "planning.plan.render"
+      ],
+      "notes": "Focuses on structure review, prioritization logic review, and contract consistency."
+    }
+  ],
+  "tool_catalog": [
+    "calendar.read",
+    "github.issue.read",
+    "reminder.read",
+    "planning.plan.render"
+  ]
+}

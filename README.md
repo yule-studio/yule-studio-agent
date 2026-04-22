@@ -10,6 +10,8 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - 로컬 실행 환경 점검(`doctor`)
 - GitHub의 열린 이슈 읽기
 - Naver CalDAV 일정/할 일 읽기 및 구조화된 데이터(JSON) 변환
+- Planning Agent 기반 daily plan 생성
+- 시간 블록 브리핑과 체크포인트 생성
 
 ## 디렉토리 구조
 
@@ -20,7 +22,10 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 ├── GEMINI.md
 ├── README.md
 ├── agents/
-│   └── coding-agent/
+│   ├── coding-agent/
+│   │   ├── CLAUDE.md
+│   │   └── agent.json
+│   └── planning-agent/
 │       ├── CLAUDE.md
 │       └── agent.json
 ├── policies/
@@ -33,7 +38,8 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
         ├── cli/
         ├── core/
         ├── diagnostics/
-        └── integrations/
+        ├── integrations/
+        └── planning/
 ```
 
 ## 설치
@@ -127,19 +133,24 @@ NAVER_APP_PASSWORD=
 ```bash
 yule doctor
 yule context coding-agent
+yule context planning-agent
 yule github issues --limit 30
 yule calendar events --json
 yule calendar warmup --force-refresh --json
 yule calendar cache inspect --json
 yule calendar cache cleanup --json
+yule planning daily --json
+yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 ```
 
 로컬 환경에 따라 엔트리포인트 설치가 덜 맞물려 있을 때는 아래처럼 모듈 실행 방식으로 동일하게 사용할 수 있습니다.
 
 ```bash
 PYTHONPATH=src python3 -m yule_orchestrator doctor
+PYTHONPATH=src python3 -m yule_orchestrator context planning-agent
 PYTHONPATH=src python3 -m yule_orchestrator calendar events --json
 PYTHONPATH=src python3 -m yule_orchestrator calendar cache cleanup --json
+PYTHONPATH=src python3 -m yule_orchestrator planning daily --json
 ```
 
 기간을 지정해서 일정 데이터를 읽을 수도 있습니다.
@@ -163,12 +174,42 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
 - 조회 결과를 동기화할 때 일정/할 일 항목 단위 상태를 upsert 하므로, 이후 완료 여부 변화와 최근 본 항목을 기준으로 다음 작업 추천 로직을 붙일 수 있습니다.
 
+## Planning Agent
+
+- `agents/planning-agent/agent.json`과 `agents/planning-agent/CLAUDE.md`를 추가했습니다.
+- Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
+- 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 5분 전 체크포인트 생성에 집중합니다.
+- 기본 출력은 짧은 `discord_briefing`과 상세한 `morning_briefing`, `time_block_briefings`, `checkpoints`를 함께 제공합니다.
+
+```bash
+yule planning daily --json
+yule planning daily --date 2026-04-22 --github-limit 10
+yule planning daily --reminders-file reminders.json --json
+yule planning daily --use-ollama --json
+yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
+```
+
+이벤트 설명에 아래처럼 세부 시간표를 적으면 Planning Agent가 실행 블록과 체크포인트를 생성합니다.
+
+```text
+- 9시 ~ 10시 : 할일 목록 정리
+- 10 ~ 1시 : 업무 수행 (회의 없음)
+```
+
+기본적으로 각 세부 블록이 끝나기 5분 전에 체크포인트를 만들며, `--reminder-lead-minutes`로 조절할 수 있습니다.
+
+실제 알림 전송 전에, 지금 시각 기준으로 곧 울려야 하는 체크포인트만 뽑아내는 명령도 사용할 수 있습니다.
+
+```bash
+yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --json
+```
+
 ## 테스트
 
 기본 자동 테스트는 표준 라이브러리 `unittest`로 실행합니다.
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -t .
 ```
 
 ## 로컬 전용 파일
