@@ -132,6 +132,7 @@ yule calendar events --json
 yule calendar warmup --force-refresh --json
 yule calendar cache inspect --json
 yule calendar cache cleanup --json
+yule planning daily --json
 ```
 
 로컬 환경에 따라 엔트리포인트 설치가 덜 맞물려 있을 때는 아래처럼 모듈 실행 방식으로 동일하게 사용할 수 있습니다.
@@ -162,6 +163,35 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - stale cache는 기본적으로 만료 후 7일 동안 남겨두고, `yule calendar cache cleanup`에서 정리합니다.
 - 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
 - 조회 결과를 동기화할 때 일정/할 일 항목 단위 상태를 upsert 하므로, 이후 완료 여부 변화와 최근 본 항목을 기준으로 다음 작업 추천 로직을 붙일 수 있습니다.
+
+## Planning Agent
+
+- `agents/planning-agent/agent.json`과 `agents/planning-agent/CLAUDE.md`를 추가했습니다.
+- Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
+- 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 5분 전 체크포인트 생성에 집중합니다.
+
+```bash
+yule planning daily --json
+yule planning daily --date 2026-04-22 --github-limit 10
+yule planning daily --reminders-file reminders.json --json
+yule planning daily --use-ollama --json
+yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
+```
+
+이벤트 설명에 아래처럼 세부 시간표를 적으면 Planning Agent가 실행 블록과 체크포인트를 생성합니다.
+
+```text
+- 9시 ~ 10시 : 할일 목록 정리
+- 10 ~ 1시 : 업무 수행 (회의 없음)
+```
+
+기본적으로 각 세부 블록이 끝나기 5분 전에 체크포인트를 만들며, `--reminder-lead-minutes`로 조절할 수 있습니다.
+
+실제 알림 전송 전에, 지금 시각 기준으로 곧 울려야 하는 체크포인트만 뽑아내는 명령도 사용할 수 있습니다.
+
+```bash
+yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --json
+```
 
 ## 테스트
 
