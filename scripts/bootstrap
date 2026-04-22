@@ -26,6 +26,13 @@ Manual steps still required:
   - GitHub login
   - Claude/Codex/Gemini/Copilot login
   - Starting Ollama when needed
+
+Quick start after bootstrap:
+  source .venv/bin/activate
+  yule doctor
+  yule context coding-agent
+  yule context planning-agent
+  yule planning daily --json
 EOF
 }
 
@@ -203,6 +210,14 @@ Ollama server:
   open -a Ollama
   # or
   ollama serve
+
+Quick start:
+
+  source .venv/bin/activate
+  yule doctor
+  yule context coding-agent
+  yule context planning-agent
+  yule planning daily --json
 
 EOF
 
