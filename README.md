@@ -113,7 +113,7 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 
 DISCORD_BOT_TOKEN=
-DISCORD_APPLICATION_ID=
+# DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
 ```
@@ -134,7 +134,8 @@ DISCORD_GUILD_ID=
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`를 써도 같은 범위 재실행은 캐시 덕분에 더 빠르게 응답할 수 있습니다.
 - 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
-- Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`가 필요합니다.
+- Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`가 필요합니다.
+- `DISCORD_APPLICATION_ID`는 선택값입니다. 비워두면 토큰 기준으로 실제 Discord 애플리케이션 ID를 자동 사용합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
 
 ## 실행
