@@ -66,7 +66,7 @@ def render_daily_plan(envelope: DailyPlanEnvelope) -> str:
     lines.append("")
 
     lines.append("Morning Briefing")
-    lines.append(f"source: {plan.briefing_source}")
+    lines.append(f"source: {plan.morning_briefing_source}")
     lines.extend(plan.morning_briefing.splitlines() or [plan.morning_briefing])
     lines.append("")
 
@@ -96,7 +96,7 @@ def render_daily_plan(envelope: DailyPlanEnvelope) -> str:
     lines.append("")
 
     lines.append("Discord Briefing")
-    lines.append(f"source: {plan.briefing_source}")
+    lines.append(f"source: {plan.discord_briefing_source}")
     lines.append(plan.discord_briefing)
     return "\n".join(lines).rstrip() + "\n"
 

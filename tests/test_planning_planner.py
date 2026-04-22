@@ -92,7 +92,8 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("추천 우선순위", plan.morning_briefing)
         self.assertTrue(plan.time_block_briefings)
         self.assertTrue(any(briefing.block_type == "focus_block" for briefing in plan.time_block_briefings))
-        self.assertEqual(plan.briefing_source, "rules")
+        self.assertEqual(plan.morning_briefing_source, "rules")
+        self.assertEqual(plan.discord_briefing_source, "rules")
 
     def test_build_daily_plan_creates_focus_blocks(self) -> None:
         inputs = PlanningInputs(
@@ -173,3 +174,74 @@ class PlanningPlannerTestCase(unittest.TestCase):
         )
         self.assertEqual(len(due), 1)
         self.assertEqual(due[0].block_title, "할일 목록 정리")
+
+    def test_build_daily_plan_keeps_focus_blocks_in_event_timezone(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="UTC",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-utc",
+                    title="UTC 업무",
+                    start="2026-04-22T09:00:00+00:00",
+                    end="2026-04-22T12:00:00+00:00",
+                    all_day=False,
+                    calendar_name="UTC 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                )
+            ],
+            calendar_todos=[
+                CalendarTodo(
+                    item_uid="todo-utc",
+                    title="오늘 문서 정리",
+                    start=None,
+                    due="2026-04-22",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="UTC 기준으로 집중 블록 생성",
+                    last_modified=None,
+                )
+            ],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+        self.assertTrue(envelope.daily_plan.suggested_time_blocks)
+        self.assertTrue(envelope.daily_plan.suggested_time_blocks[0].start.endswith("+00:00"))
+
+    def test_reminder_item_from_dict_normalizes_optional_strings(self) -> None:
+        reminder = ReminderItem.from_dict(
+            {
+                "item_id": "reminder-1",
+                "title": "복습",
+                "due_date": 20260422,
+                "priority_hint": 1,
+                "estimated_minutes": 45,
+            }
+        )
+
+        self.assertEqual(reminder.due_date, "20260422")
+        self.assertEqual(reminder.priority_hint, "1")
+        self.assertEqual(reminder.estimated_minutes, 45)
+
+    def test_reminder_item_from_dict_rejects_invalid_estimated_minutes(self) -> None:
+        with self.assertRaises(ValueError):
+            ReminderItem.from_dict(
+                {
+                    "item_id": "reminder-2",
+                    "title": "복습",
+                    "estimated_minutes": "soon",
+                }
+            )

@@ -52,13 +52,15 @@ class ReminderItem:
         tags = payload.get("tags", [])
         if not isinstance(tags, list):
             tags = []
+        due_date = _optional_string(payload.get("due_date"))
+        priority_hint = _optional_string(payload.get("priority_hint"))
         return cls(
             item_id=str(payload.get("item_id") or payload.get("id") or payload.get("title") or "reminder"),
             title=str(payload.get("title") or "(untitled reminder)"),
             description=str(payload.get("description") or ""),
-            due_date=payload.get("due_date"),
-            priority_hint=payload.get("priority_hint"),
-            estimated_minutes=int(payload.get("estimated_minutes") or 30),
+            due_date=due_date,
+            priority_hint=priority_hint,
+            estimated_minutes=_estimated_minutes_from_value(payload.get("estimated_minutes")),
             tags=[str(tag) for tag in tags],
         )
 
@@ -245,7 +247,8 @@ class DailyPlan:
     checkpoints: Sequence[PlanningCheckpoint]
     coding_agent_handoff: Sequence[PlanningTaskCandidate]
     discord_briefing: str
-    briefing_source: str
+    morning_briefing_source: str
+    discord_briefing_source: str
 
     def to_dict(self) -> dict:
         return {
@@ -263,8 +266,27 @@ class DailyPlan:
             "checkpoints": [checkpoint.to_dict() for checkpoint in self.checkpoints],
             "coding_agent_handoff": [task.to_dict() for task in self.coding_agent_handoff],
             "discord_briefing": self.discord_briefing,
-            "briefing_source": self.briefing_source,
+            "morning_briefing_source": self.morning_briefing_source,
+            "discord_briefing_source": self.discord_briefing_source,
         }
+
+
+def _optional_string(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _estimated_minutes_from_value(value: object) -> int:
+    if value is None or value == "":
+        return 30
+
+    try:
+        estimated_minutes = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"estimated_minutes must be an integer-compatible value, got: {value!r}") from exc
+
+    return max(15, estimated_minutes)
 
 
 @dataclass(frozen=True)

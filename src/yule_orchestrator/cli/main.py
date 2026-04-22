@@ -218,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     planning_daily_parser.add_argument(
         "--use-ollama",
         action="store_true",
-        help="Use Ollama to rewrite the Discord briefing in a more natural tone.",
+        help="Use Ollama to rewrite the morning briefing in a more natural tone.",
     )
     planning_daily_parser.add_argument(
         "--ollama-model",

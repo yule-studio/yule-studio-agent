@@ -29,7 +29,7 @@ def build_daily_plan(
     ollama_model: str = "gemma3:latest",
     ollama_endpoint: str = "http://localhost:11434",
 ) -> DailyPlanEnvelope:
-    fixed_schedule = build_fixed_schedule(inputs.plan_date, inputs.calendar_events)
+    fixed_schedule = build_fixed_schedule(inputs.calendar_events)
     execution_blocks = build_execution_blocks(inputs.calendar_events)
     tasks = build_task_candidates(inputs)
     suggested_blocks, available_focus_minutes = build_focus_blocks(
@@ -73,7 +73,8 @@ def build_daily_plan(
         coding_agent_handoff=coding_agent_handoff,
         checkpoints=checkpoints,
     )
-    briefing_source = "rules"
+    morning_briefing_source = "rules"
+    discord_briefing_source = "rules"
 
     if use_ollama:
         try:
@@ -87,7 +88,7 @@ def build_daily_plan(
                 model=ollama_model,
                 endpoint=ollama_endpoint,
             )
-            briefing_source = "ollama"
+            morning_briefing_source = "ollama"
         except ValueError as exc:
             warnings.append(f"ollama: {exc}")
 
@@ -106,6 +107,7 @@ def build_daily_plan(
         checkpoints=checkpoints,
         coding_agent_handoff=coding_agent_handoff,
         discord_briefing=discord_briefing,
-        briefing_source=briefing_source,
+        morning_briefing_source=morning_briefing_source,
+        discord_briefing_source=discord_briefing_source,
     )
     return DailyPlanEnvelope(inputs=inputs, daily_plan=daily_plan)

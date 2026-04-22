@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 import re
 from typing import Optional, Sequence
 
@@ -21,7 +21,7 @@ TIME_TOKEN_PATTERN = re.compile(
 )
 
 
-def build_fixed_schedule(plan_date: date, events: Sequence[CalendarEvent]) -> list[PlanningTimeBlock]:
+def build_fixed_schedule(events: Sequence[CalendarEvent]) -> list[PlanningTimeBlock]:
     blocks: list[PlanningTimeBlock] = []
     for event in events:
         if event.all_day:
@@ -145,7 +145,7 @@ def _available_windows(
     plan_date: date,
     fixed_schedule: Sequence[PlanningTimeBlock],
 ) -> list[tuple[datetime, datetime]]:
-    timezone = datetime.now().astimezone().tzinfo
+    timezone = _derive_schedule_timezone(fixed_schedule)
     day_start = datetime.combine(plan_date, PLANNING_DAY_START, tzinfo=timezone)
     day_end = datetime.combine(plan_date, PLANNING_DAY_END, tzinfo=timezone)
     cursor = day_start
@@ -175,6 +175,18 @@ def _available_windows(
         windows.append((cursor, day_end))
 
     return windows
+
+
+def _derive_schedule_timezone(fixed_schedule: Sequence[PlanningTimeBlock]) -> Optional[tzinfo]:
+    for block in fixed_schedule:
+        try:
+            parsed = datetime.fromisoformat(block.start)
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None:
+            return parsed.tzinfo
+
+    return datetime.now().astimezone().tzinfo
 
 
 def _assign_task_block(
