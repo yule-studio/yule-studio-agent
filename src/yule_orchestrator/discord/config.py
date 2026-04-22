@@ -12,8 +12,13 @@ class DiscordBotConfig:
     application_id: Optional[int]
     guild_id: int
     daily_channel_id: Optional[int] = None
+    checkpoint_channel_id: Optional[int] = None
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
+
+    @property
+    def effective_checkpoint_channel_id(self) -> Optional[int]:
+        return self.checkpoint_channel_id or self.daily_channel_id
 
     @classmethod
     def from_env(cls) -> "DiscordBotConfig":
@@ -22,6 +27,7 @@ class DiscordBotConfig:
             application_id=_optional_int_env("DISCORD_APPLICATION_ID"),
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
+            checkpoint_channel_id=_optional_int_env("DISCORD_CHECKPOINT_CHANNEL_ID"),
             notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
             daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
         )

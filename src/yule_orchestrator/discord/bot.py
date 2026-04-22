@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
-from ..planning import build_daily_plan, collect_planning_inputs
+from ..planning.models import PlanningCheckpoint
+from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
 from .config import DiscordBotConfig
-from .formatter import format_plan_today_message, split_discord_message
+from .formatter import (
+    format_checkpoints_message,
+    format_plan_today_message,
+    split_discord_message,
+)
+from .planning_runtime import build_due_checkpoints, build_plan_today_envelope
+
+CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
+CHECKPOINT_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
 
 
 def run_discord_bot(repo_root: Path) -> None:
@@ -20,6 +30,7 @@ def run_discord_bot(repo_root: Path) -> None:
         def __init__(self) -> None:
             intents = discord.Intents.default()
             self._daily_briefing_task: asyncio.Task[None] | None = None
+            self._checkpoint_notification_task: asyncio.Task[None] | None = None
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -46,18 +57,18 @@ def run_discord_bot(repo_root: Path) -> None:
             await self.tree.sync(guild=guild)
             if config.daily_channel_id is not None and config.daily_briefing_time is not None:
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
+            if config.effective_checkpoint_channel_id is not None:
+                self._checkpoint_notification_task = asyncio.create_task(
+                    self._run_checkpoint_notification_loop()
+                )
 
         async def on_ready(self) -> None:
             user_text = str(self.user) if self.user is not None else "unknown-user"
             print(f"Discord bot logged in as {user_text} (guild={config.guild_id})")
 
         async def close(self) -> None:
-            if self._daily_briefing_task is not None:
-                self._daily_briefing_task.cancel()
-                try:
-                    await self._daily_briefing_task
-                except asyncio.CancelledError:
-                    pass
+            await _cancel_task(self._daily_briefing_task)
+            await _cancel_task(self._checkpoint_notification_task)
             await super().close()
 
         async def _run_daily_briefing_loop(self) -> None:
@@ -75,22 +86,85 @@ def run_discord_bot(repo_root: Path) -> None:
             if config.daily_channel_id is None:
                 return
 
-            channel = self.get_channel(config.daily_channel_id)
-            if channel is None:
-                channel = await self.fetch_channel(config.daily_channel_id)
-
-            if not isinstance(channel, discord.abc.Messageable):
-                raise ValueError("Configured DISCORD_DAILY_CHANNEL_ID is not a messageable channel.")
-
+            channel = await _resolve_messageable_channel(
+                self,
+                channel_id=config.daily_channel_id,
+                discord_module=discord,
+                error_label="DISCORD_DAILY_CHANNEL_ID",
+            )
             plan_date = datetime.now().astimezone().date()
-            inputs = collect_planning_inputs(plan_date=plan_date)
-            envelope = build_daily_plan(inputs)
+            envelope = await asyncio.to_thread(build_plan_today_envelope, plan_date)
             content = format_plan_today_message(
                 envelope,
                 mention_user_id=config.notify_user_id,
             )
-            for chunk in split_discord_message(content):
-                await channel.send(chunk)
+            await _send_channel_message_chunks(
+                channel,
+                content,
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
+
+        async def _run_checkpoint_notification_loop(self) -> None:
+            await self.wait_until_ready()
+            last_scan = datetime.now().astimezone()
+            while not self.is_closed():
+                next_run = _next_checkpoint_scan()
+                wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
+                await asyncio.sleep(wait_seconds)
+                scan_time = datetime.now().astimezone()
+                try:
+                    await self._send_due_checkpoints(last_scan=last_scan, scan_time=scan_time)
+                except Exception as exc:
+                    print(f"warning: failed to send checkpoint notifications: {exc}")
+                last_scan = scan_time
+
+        async def _send_due_checkpoints(
+            self,
+            *,
+            last_scan: datetime,
+            scan_time: datetime,
+        ) -> None:
+            channel_id = config.effective_checkpoint_channel_id
+            if channel_id is None:
+                return
+            if scan_time <= last_scan:
+                return
+
+            channel = await _resolve_messageable_channel(
+                self,
+                channel_id=channel_id,
+                discord_module=discord,
+                error_label=_checkpoint_channel_error_label(config),
+            )
+            window_minutes = _checkpoint_window_minutes(last_scan, scan_time)
+            due_checkpoints = await asyncio.to_thread(
+                build_due_checkpoints,
+                last_scan,
+                window_minutes=window_minutes,
+            )
+            unsent_checkpoints = await asyncio.to_thread(
+                _filter_unsent_checkpoints,
+                channel_id,
+                due_checkpoints,
+            )
+            if not unsent_checkpoints:
+                return
+
+            content = format_checkpoints_message(
+                unsent_checkpoints,
+                reference_time=scan_time,
+                mention_user_id=config.notify_user_id,
+            )
+            await _send_channel_message_chunks(
+                channel,
+                content,
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
+            await asyncio.to_thread(
+                _mark_checkpoints_sent,
+                channel_id,
+                unsent_checkpoints,
+            )
 
     bot = YuleDiscordBot()
     try:
@@ -127,3 +201,110 @@ def _next_daily_run(target_time: time | None) -> datetime:
     if next_run <= now:
         next_run = next_run + timedelta(days=1)
     return next_run
+
+
+def _next_checkpoint_scan(after: datetime | None = None) -> datetime:
+    current = after or datetime.now().astimezone()
+    rounded = current.replace(second=0, microsecond=0)
+    if rounded <= current:
+        rounded = rounded + timedelta(minutes=1)
+    return rounded
+
+
+def _checkpoint_channel_error_label(config: DiscordBotConfig) -> str:
+    if config.checkpoint_channel_id is not None:
+        return "DISCORD_CHECKPOINT_CHANNEL_ID"
+    return "DISCORD_DAILY_CHANNEL_ID"
+
+
+async def _cancel_task(task: asyncio.Task[None] | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _resolve_messageable_channel(
+    bot: "commands.Bot",
+    *,
+    channel_id: int,
+    discord_module: "discord",
+    error_label: str,
+) -> "discord.abc.Messageable":
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        channel = await bot.fetch_channel(channel_id)
+
+    if not isinstance(channel, discord_module.abc.Messageable):
+        raise ValueError(f"Configured {error_label} is not a messageable channel.")
+
+    return channel
+
+
+async def _send_channel_message_chunks(
+    channel: "discord.abc.Messageable",
+    message: str,
+    *,
+    allowed_mentions: "discord.AllowedMentions",
+) -> None:
+    for chunk in split_discord_message(message):
+        await channel.send(chunk, allowed_mentions=allowed_mentions)
+
+
+def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentions":
+    return discord_module.AllowedMentions(
+        users=True,
+        roles=False,
+        everyone=False,
+        replied_user=False,
+    )
+
+
+def _checkpoint_window_minutes(window_start: datetime, window_end: datetime) -> int:
+    total_seconds = max(0.0, (window_end - window_start).total_seconds())
+    return max(1, math.ceil(total_seconds / 60.0))
+
+
+def _filter_unsent_checkpoints(
+    channel_id: int,
+    checkpoints: list[PlanningCheckpoint],
+) -> list[PlanningCheckpoint]:
+    return [
+        checkpoint
+        for checkpoint in checkpoints
+        if not _has_checkpoint_been_sent(channel_id, checkpoint.checkpoint_id)
+    ]
+
+
+def _mark_checkpoints_sent(channel_id: int, checkpoints: list[PlanningCheckpoint]) -> None:
+    for checkpoint in checkpoints:
+        save_json_cache(
+            namespace=CHECKPOINT_NOTIFICATION_NAMESPACE,
+            cache_key=_checkpoint_cache_key(channel_id, checkpoint.checkpoint_id),
+            provider="discord-bot",
+            range_start=None,
+            range_end=None,
+            scope_hash=str(channel_id),
+            ttl_seconds=CHECKPOINT_NOTIFICATION_TTL_SECONDS,
+            payload={
+                "channel_id": channel_id,
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "remind_at": checkpoint.remind_at,
+            },
+            metadata={"kind": checkpoint.kind},
+        )
+
+
+def _has_checkpoint_been_sent(channel_id: int, checkpoint_id: str) -> bool:
+    entry = load_json_cache(
+        namespace=CHECKPOINT_NOTIFICATION_NAMESPACE,
+        cache_key=_checkpoint_cache_key(channel_id, checkpoint_id),
+    )
+    return entry is not None
+
+
+def _checkpoint_cache_key(channel_id: int, checkpoint_id: str) -> str:
+    return f"{channel_id}:{checkpoint_id}"

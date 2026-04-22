@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..core import apply_ca_bundle_fallback
+
 
 def run_discord_bot_command(repo_root: Path) -> int:
+    tls_bundle = apply_ca_bundle_fallback()
+    if tls_bundle.source == "certifi-applied":
+        print(f"info: {tls_bundle.detail} ({tls_bundle.cafile})")
+
     try:
         from ..discord.bot import run_discord_bot
     except ImportError as exc:

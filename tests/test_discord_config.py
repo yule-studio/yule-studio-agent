@@ -32,6 +32,8 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertIsNone(config.application_id)
         self.assertEqual(config.guild_id, 987654321)
         self.assertEqual(config.daily_channel_id, 555)
+        self.assertIsNone(config.checkpoint_channel_id)
+        self.assertEqual(config.effective_checkpoint_channel_id, 555)
         self.assertEqual(config.notify_user_id, 777)
         self.assertEqual(config.daily_briefing_time, time(16, 15))
 
@@ -42,12 +44,15 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_APPLICATION_ID": "123456789",
                 "DISCORD_GUILD_ID": "987654321",
+                "DISCORD_CHECKPOINT_CHANNEL_ID": "222333444",
             },
             clear=False,
         ):
             config = DiscordBotConfig.from_env()
 
         self.assertEqual(config.application_id, 123456789)
+        self.assertEqual(config.checkpoint_channel_id, 222333444)
+        self.assertEqual(config.effective_checkpoint_channel_id, 222333444)
 
     def test_from_env_requires_token(self) -> None:
         with patch.dict(

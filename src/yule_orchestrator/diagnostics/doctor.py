@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from ..core.context_loader import ContextError, load_agent_context
+from ..core.tls import apply_ca_bundle_fallback, resolve_ca_bundle
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ def run_doctor(repo_root: Path, agent_id: str = "coding-agent") -> Sequence[Doct
     checks: List[DoctorCheck] = []
     checks.extend(_check_commands(["claude", "codex", "gemini", "ollama", "gh", "copilot"]))
     checks.append(_check_github_auth())
+    checks.append(_check_discord_tls())
 
     manifest = _load_manifest_for_agent(repo_root, agent_id, checks)
     ollama_config = _find_ollama_config(manifest)
@@ -92,6 +94,40 @@ def _check_github_auth() -> DoctorCheck:
         detail="not logged in or token invalid",
         hint="Run `gh auth login`.",
     )
+
+
+def _check_discord_tls() -> DoctorCheck:
+    bundle = resolve_ca_bundle()
+    if bundle.source in {"env-missing", "missing"}:
+        return DoctorCheck(
+            name="discord tls",
+            status="FAIL",
+            detail=bundle.detail,
+            hint="Install a CA bundle or set SSL_CERT_FILE to a valid certifi/OpenSSL bundle.",
+        )
+
+    active_bundle = apply_ca_bundle_fallback()
+    try:
+        _read_json("https://discord.com/api/v10/gateway")
+    except urllib.error.URLError as exc:
+        return DoctorCheck(
+            name="discord tls",
+            status="FAIL",
+            detail=f"cannot reach Discord API: {exc.reason}",
+            hint="Check your network, proxy, and local CA bundle.",
+        )
+    except ValueError as exc:
+        return DoctorCheck(
+            name="discord tls",
+            status="FAIL",
+            detail=str(exc),
+            hint="Check that HTTPS traffic to Discord is not being intercepted or rewritten.",
+        )
+
+    detail = active_bundle.detail
+    if active_bundle.cafile:
+        detail += f" ({active_bundle.cafile})"
+    return DoctorCheck(name="discord tls", status="OK", detail=detail)
 
 
 def _load_manifest_for_agent(repo_root: Path, agent_id: str, checks: List[DoctorCheck]) -> Dict[str, Any]:
