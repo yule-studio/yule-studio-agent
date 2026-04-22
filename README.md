@@ -116,6 +116,10 @@ DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
+# DISCORD_NOTIFY_USER_ID=
+# DISCORD_DAILY_BRIEFING_TIME=16:15
+
+# GITHUB_ISSUES_CACHE_SECONDS=300
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
@@ -136,7 +140,10 @@ DISCORD_GUILD_ID=
 - 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
 - Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`가 필요합니다.
 - `DISCORD_APPLICATION_ID`는 선택값입니다. 비워두면 토큰 기준으로 실제 Discord 애플리케이션 ID를 자동 사용합니다.
+- `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
+- `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
+- `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
 
 ## 실행
 
