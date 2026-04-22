@@ -15,6 +15,7 @@ from .formatter import (
     split_discord_message,
 )
 from .planning_runtime import build_due_checkpoints, build_plan_today_envelope
+from .planning_runtime import load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
 CHECKPOINT_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
@@ -31,6 +32,7 @@ def run_discord_bot(repo_root: Path) -> None:
             intents = discord.Intents.default()
             self._daily_briefing_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
+            self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -58,6 +60,7 @@ def run_discord_bot(repo_root: Path) -> None:
             if config.daily_channel_id is not None and config.daily_briefing_time is not None:
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
             if config.effective_checkpoint_channel_id is not None:
+                self._checkpoint_prefetch_task = asyncio.create_task(self._run_checkpoint_prefetch_loop())
                 self._checkpoint_notification_task = asyncio.create_task(
                     self._run_checkpoint_notification_loop()
                 )
@@ -68,6 +71,7 @@ def run_discord_bot(repo_root: Path) -> None:
 
         async def close(self) -> None:
             await _cancel_task(self._daily_briefing_task)
+            await _cancel_task(self._checkpoint_prefetch_task)
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
 
@@ -118,6 +122,23 @@ def run_discord_bot(repo_root: Path) -> None:
                     print(f"warning: failed to send checkpoint notifications: {exc}")
                 last_scan = scan_time
 
+        async def _run_checkpoint_prefetch_loop(self) -> None:
+            await self.wait_until_ready()
+            while not self.is_closed():
+                started_at = datetime.now().astimezone()
+                try:
+                    await asyncio.to_thread(
+                        prefetch_checkpoint_snapshots,
+                        started_at,
+                        prefetch_minutes=config.checkpoint_prefetch_minutes,
+                    )
+                except Exception as exc:
+                    print(f"warning: failed to prefetch checkpoint snapshots: {exc}")
+
+                next_run = _next_checkpoint_scan(after=started_at)
+                wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
+                await asyncio.sleep(wait_seconds)
+
         async def _send_due_checkpoints(
             self,
             *,
@@ -136,11 +157,10 @@ def run_discord_bot(repo_root: Path) -> None:
                 discord_module=discord,
                 error_label=_checkpoint_channel_error_label(config),
             )
-            window_minutes = _checkpoint_window_minutes(last_scan, scan_time)
             due_checkpoints = await asyncio.to_thread(
-                build_due_checkpoints,
+                _resolve_due_checkpoints,
                 last_scan,
-                window_minutes=window_minutes,
+                scan_time,
             )
             unsent_checkpoints = await asyncio.to_thread(
                 _filter_unsent_checkpoints,
@@ -266,6 +286,17 @@ def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentio
 def _checkpoint_window_minutes(window_start: datetime, window_end: datetime) -> int:
     total_seconds = max(0.0, (window_end - window_start).total_seconds())
     return max(1, math.ceil(total_seconds / 60.0))
+
+
+def _resolve_due_checkpoints(window_start: datetime, window_end: datetime) -> list[PlanningCheckpoint]:
+    prefetched_checkpoints, cache_complete = load_prefetched_due_checkpoints(window_start, window_end)
+    if cache_complete:
+        return prefetched_checkpoints
+
+    return build_due_checkpoints(
+        window_start,
+        window_minutes=_checkpoint_window_minutes(window_start, window_end),
+    )
 
 
 def _filter_unsent_checkpoints(

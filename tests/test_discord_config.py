@@ -36,6 +36,7 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertEqual(config.effective_checkpoint_channel_id, 555)
         self.assertEqual(config.notify_user_id, 777)
         self.assertEqual(config.daily_briefing_time, time(16, 15))
+        self.assertEqual(config.checkpoint_prefetch_minutes, 5)
 
     def test_from_env_reads_optional_application_id(self) -> None:
         with patch.dict(
@@ -45,6 +46,7 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_APPLICATION_ID": "123456789",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_CHECKPOINT_CHANNEL_ID": "222333444",
+                "DISCORD_CHECKPOINT_PREFETCH_MINUTES": "7",
             },
             clear=False,
         ):
@@ -53,6 +55,7 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertEqual(config.application_id, 123456789)
         self.assertEqual(config.checkpoint_channel_id, 222333444)
         self.assertEqual(config.effective_checkpoint_channel_id, 222333444)
+        self.assertEqual(config.checkpoint_prefetch_minutes, 7)
 
     def test_from_env_requires_token(self) -> None:
         with patch.dict(
@@ -73,6 +76,19 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_DAILY_BRIEFING_TIME": "25:99",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(ValueError):
+                DiscordBotConfig.from_env()
+
+    def test_from_env_rejects_invalid_checkpoint_prefetch_minutes(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_BOT_TOKEN": "token-value",
+                "DISCORD_GUILD_ID": "987654321",
+                "DISCORD_CHECKPOINT_PREFETCH_MINUTES": "0",
             },
             clear=False,
         ):

@@ -230,6 +230,21 @@ class PlanningCheckpoint:
             "kind": self.kind,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningCheckpoint":
+        return cls(
+            checkpoint_id=str(payload["checkpoint_id"]),
+            remind_at=str(payload["remind_at"]),
+            source_event_uid=str(payload["source_event_uid"]),
+            source_event_title=str(payload["source_event_title"]),
+            block_id=str(payload["block_id"]),
+            block_title=str(payload["block_title"]),
+            block_start=str(payload["block_start"]),
+            block_end=str(payload["block_end"]),
+            prompt=str(payload["prompt"]),
+            kind=str(payload.get("kind") or "wrap_up"),
+        )
+
 
 @dataclass(frozen=True)
 class DailyPlan:

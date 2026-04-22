@@ -15,6 +15,7 @@ class DiscordBotConfig:
     checkpoint_channel_id: Optional[int] = None
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
+    checkpoint_prefetch_minutes: int = 5
 
     @property
     def effective_checkpoint_channel_id(self) -> Optional[int]:
@@ -30,6 +31,10 @@ class DiscordBotConfig:
             checkpoint_channel_id=_optional_int_env("DISCORD_CHECKPOINT_CHANNEL_ID"),
             notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
             daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
+            checkpoint_prefetch_minutes=_optional_positive_int_env(
+                "DISCORD_CHECKPOINT_PREFETCH_MINUTES",
+                default=5,
+            ),
         )
 
 
@@ -57,6 +62,23 @@ def _optional_int_env(name: str) -> Optional[int]:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer value, got: {value!r}") from exc
+
+
+def _optional_positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+
+    value = raw.strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer value, got: {value!r}") from exc
+
+    if parsed <= 0:
+        raise ValueError(f"{name} must be greater than 0, got: {value!r}")
+
+    return parsed
 
 
 def _optional_time_env(name: str) -> Optional[time]:

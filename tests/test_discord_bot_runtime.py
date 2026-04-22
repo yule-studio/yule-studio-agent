@@ -16,8 +16,13 @@ from yule_orchestrator.discord.bot import (
     _filter_unsent_checkpoints,
     _mark_checkpoints_sent,
     _next_checkpoint_scan,
+    _resolve_due_checkpoints,
 )
-from yule_orchestrator.discord.planning_runtime import build_due_checkpoints
+from yule_orchestrator.discord.planning_runtime import (
+    build_due_checkpoints,
+    load_prefetched_due_checkpoints,
+    prefetch_checkpoint_snapshots,
+)
 from yule_orchestrator.planning.models import PlanningCheckpoint
 
 
@@ -86,6 +91,45 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
             ["checkpoint-1", "checkpoint-2"],
         )
         self.assertEqual(collect_inputs_mock.call_count, 2)
+
+    @patch("yule_orchestrator.discord.bot.build_due_checkpoints")
+    @patch("yule_orchestrator.discord.bot.load_prefetched_due_checkpoints")
+    def test_resolve_due_checkpoints_prefers_prefetched_snapshots(
+        self,
+        load_prefetched_due_checkpoints_mock,
+        build_due_checkpoints_mock,
+    ) -> None:
+        checkpoint = self._checkpoint("checkpoint-1", "2026-04-22T09:55:00+09:00")
+        load_prefetched_due_checkpoints_mock.return_value = ([checkpoint], True)
+
+        resolved = _resolve_due_checkpoints(
+            self._dt("2026-04-22T09:54:00+09:00"),
+            self._dt("2026-04-22T09:55:00+09:00"),
+        )
+
+        self.assertEqual([item.checkpoint_id for item in resolved], ["checkpoint-1"])
+        build_due_checkpoints_mock.assert_not_called()
+
+    @patch("yule_orchestrator.discord.planning_runtime.build_daily_checkpoints_for_date")
+    def test_prefetch_checkpoint_snapshots_can_be_loaded_without_live_fetch(
+        self,
+        build_daily_checkpoints_for_date_mock,
+    ) -> None:
+        build_daily_checkpoints_for_date_mock.return_value = [
+            self._checkpoint("checkpoint-1", "2026-04-22T09:55:00+09:00")
+        ]
+
+        prefetch_checkpoint_snapshots(
+            self._dt("2026-04-22T09:50:00+09:00"),
+            prefetch_minutes=5,
+        )
+        loaded, cache_complete = load_prefetched_due_checkpoints(
+            self._dt("2026-04-22T09:54:00+09:00"),
+            self._dt("2026-04-22T09:55:00+09:00"),
+        )
+
+        self.assertTrue(cache_complete)
+        self.assertEqual([item.checkpoint_id for item in loaded], ["checkpoint-1"])
 
     @staticmethod
     def _dt(value: str):
