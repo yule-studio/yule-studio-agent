@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..integrations.calendar.naver_caldav import CalendarIntegrationError
 from ..core import ContextError, load_env_files
+from ..integrations.calendar import CalendarIntegrationError
 from ..integrations.github.issues import GitHubIssueError
-from .calendar import run_calendar_events_command
+from .calendar import (
+    run_calendar_cache_cleanup_command,
+    run_calendar_cache_inspect_command,
+    run_calendar_events_command,
+    run_calendar_warmup_command,
+)
 from .context import run_context_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
@@ -90,6 +96,83 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print structured JSON instead of the default text view.",
     )
+    calendar_events_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_warmup_parser = calendar_subparsers.add_parser(
+        "warmup",
+        help="Prefetch and store calendar data in the local cache.",
+    )
+    calendar_warmup_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_warmup_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_warmup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_warmup_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_cache_parser = calendar_subparsers.add_parser(
+        "cache",
+        help="Inspect or clean up the local calendar cache.",
+    )
+    calendar_cache_subparsers = calendar_cache_parser.add_subparsers(dest="calendar_cache_command", required=True)
+
+    calendar_cache_inspect_parser = calendar_cache_subparsers.add_parser(
+        "inspect",
+        help="Show cached calendar query entries.",
+    )
+    calendar_cache_inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_cache_inspect_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum number of cache entries to show. Defaults to 20.",
+    )
+    calendar_cache_inspect_parser.add_argument(
+        "--fresh-only",
+        action="store_true",
+        help="Show only unexpired cache entries.",
+    )
+
+    calendar_cache_cleanup_parser = calendar_cache_subparsers.add_parser(
+        "cleanup",
+        help="Delete old cache entries and stale calendar state records.",
+    )
+    calendar_cache_cleanup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_cache_cleanup_parser.add_argument(
+        "--cache-retention-days",
+        type=int,
+        default=7,
+        help="Keep expired cache entries for this many days before deletion. Defaults to 7.",
+    )
+    calendar_cache_cleanup_parser.add_argument(
+        "--state-retention-days",
+        type=int,
+        default=30,
+        help="Keep unseen calendar state records for this many days before deletion. Defaults to 30.",
+    )
 
     return parser
 
@@ -98,6 +181,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     repo_root = Path(args.repo_root).resolve()
+    os.environ["YULE_REPO_ROOT"] = str(repo_root)
     load_env_files(repo_root)
 
     try:
@@ -108,17 +192,42 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if args.command == "github" and args.github_command == "issues":
             return run_github_issues_command(args.limit)
         if args.command == "calendar" and args.calendar_command == "events":
-            return run_calendar_events_command(args.start_date, args.end_date, args.json)
+            return run_calendar_events_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "warmup":
+            return run_calendar_warmup_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "cache":
+            if args.calendar_cache_command == "inspect":
+                return run_calendar_cache_inspect_command(
+                    args.json,
+                    args.limit,
+                    args.fresh_only,
+                )
+            if args.calendar_cache_command == "cleanup":
+                return run_calendar_cache_cleanup_command(
+                    args.json,
+                    args.cache_retention_days,
+                    args.state_retention_days,
+                )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except GitHubIssueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except CalendarIntegrationError as exc:
+    except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except ValueError as exc:
+    except CalendarIntegrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

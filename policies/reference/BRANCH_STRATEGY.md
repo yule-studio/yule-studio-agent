@@ -1,28 +1,29 @@
-# Branching Strategy (Gitflow + Jira)
+# Branching Strategy (Main-Based)
 
 ## 1. 기본 브랜치
 
 | 브랜치 | 역할 |
 | ------ | ------ |
-| `main` | 프로덕션 브랜치. 태그 기반 릴리즈 및 운영 배포 기준 |
-| `dev` | 개발 통합 브랜치. 모든 기능 브랜치의 머지 대상 |
+| `main` | 기본 통합 브랜치. 모든 작업 브랜치의 시작점이자 머지 대상 |
 
 ## 2. 브랜치 타입
 
-모든 작업 브랜치는 Jira 티켓 키를 포함한다.
+모든 작업 브랜치는 `main`에서 시작한다.
 
 형식:
 
 ```text
-<prefix>/<jira-key>-<short-description>
+<prefix>/<short-description>
 ```
 
 예시:
 
 ```text
-feature/ANS-123-login-api
-refactor/ANS-245-auth-service-cleanup
-chore/ANS-310-update-gradle
+feature/calendar-sqlite-cache
+refactor/calendar-cache-layer
+fix/calendar-timeout-message
+chore/update-bootstrap-docs
+docs/refresh-readme
 ```
 
 ### Prefix 종류
@@ -30,133 +31,69 @@ chore/ANS-310-update-gradle
 | Prefix | 용도 |
 | ------ | ------ |
 | `feature` | 신규 기능 개발 |
-| `refactor` | 리팩토링, 기능 변경 없음 |
-| `fix` | 일반 버그 수정, 당일 배포 필요 없음 |
-| `chore` | 빌드, 설정, 의존성, 스크립트, 문서 변경 |
+| `refactor` | 리팩토링, 구조 개선 |
+| `fix` | 일반 버그 수정 |
+| `chore` | 설정, 스크립트, 의존성, 운영 보조 작업 |
 | `test` | 테스트 코드 추가 또는 수정 |
 | `docs` | 문서 수정 |
+| `hotfix` | 빠른 운영 대응이 필요한 긴급 수정 |
 
-## 3. feature / refactor / fix / chore 흐름
+## 3. 기본 작업 흐름
 
-1. `dev` 브랜치에서 작업 브랜치 생성
-
-```bash
-git checkout dev
-git checkout -b feature/ANS-123-login-api
-```
-
-2. 개발 및 커밋
-3. `dev` 대상으로 Pull Request 생성
-4. CI 통과 및 코드 리뷰 승인
-5. `dev` 브랜치로 머지
-
-## 4. release 브랜치
-
-릴리즈 단위 묶음을 위한 브랜치
-
-형식:
-
-```text
-release/vX.Y.Z
-```
-
-생성:
-
-```bash
-git checkout dev
-git checkout -b release/v1.2.0
-```
-
-규칙:
-
-- QA 및 최종 테스트만 수행
-- 새로운 기능 추가 금지
-- 버그 수정만 허용
-
-완료 절차:
-
-1. `release` 브랜치를 `main`으로 머지
-2. `main`에 태그 생성
-
-```bash
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-3. `release` 브랜치를 `dev`에도 머지
-
-## 5. hotfix 브랜치
-
-형식:
-
-```text
-hotfix/<jira-key>-<short-description>
-```
-
-사용 기준:
-
-- 프로덕션 장애
-- 보안 이슈
-- 데이터 정합성 오류
-- 당일 내 배포가 반드시 필요한 수정
-
-흐름:
-
-1. `main` 브랜치에서 `hotfix` 브랜치 생성
+1. `main` 브랜치로 이동하고 최신 상태를 맞춘다
 
 ```bash
 git checkout main
-git checkout -b hotfix/ANS-999-payment-null-pointer
+git pull origin main
 ```
 
-2. 수정 및 커밋
-3. `main` 브랜치로 머지
-4. 태그 생성 및 푸시
+2. 작업 브랜치를 생성한다
 
 ```bash
-git tag v1.2.1
-git push origin v1.2.1
+git checkout -b feature/calendar-sqlite-cache
 ```
 
-5. 동일 변경 사항을 `dev` 브랜치에도 머지
+3. 개발 및 커밋을 진행한다
+4. `main` 대상으로 Pull Request를 생성한다
+5. 리뷰와 확인이 끝나면 `main`으로 머지한다
 
-## 6. Pull Request 규칙
+## 4. hotfix 브랜치
 
-- 모든 PR은 Jira 티켓 키 포함
-- PR 제목 형식:
-
-```text
-[ANS-123] Login API 구현
-```
-
-- 최소 1명 이상 리뷰 승인 후 머지
-- CI 실패 시 머지 금지
-
-## 7. 태그 규칙
+긴급 수정도 동일하게 `main`에서 시작한다.
 
 형식:
 
 ```text
-v<major>.<minor>.<patch>
+hotfix/<short-description>
 ```
 
 예시:
 
 ```text
-v1.0.0
-v1.2.3
+hotfix/calendar-auth-failure
 ```
 
-- `main` 브랜치에서만 태그 생성
-- 태그 푸시 시 운영 배포 트리거
+흐름:
 
-## 8. 머지 전략
+1. `main` 브랜치에서 `hotfix` 브랜치를 만든다
+2. 수정 및 검증을 진행한다
+3. `main` 대상으로 Pull Request를 생성한다
+4. 검토 후 `main`으로 머지한다
 
-- `dev` ← `feature` / `refactor` / `fix` / `chore`: Squash Merge
-- `main` ← `release` / `hotfix`: Merge Commit
+## 5. Pull Request 규칙
 
-## 9. 금지 사항
+- PR 제목은 작업 내용을 짧고 명확하게 적는다
+- 가능하면 하나의 PR에는 하나의 목적만 담는다
+- 확인 가능한 테스트 또는 검증 결과를 함께 남긴다
+- 리뷰 전에는 범위를 넓히지 않는다
 
-- `main` 브랜치 직접 커밋 금지
-- `dev` 브랜치 직접 커밋 금지
-- Jira 티켓 없는 브랜치 생성 금지
+## 6. 머지 전략
+
+- 기본적으로 `main`으로 Squash Merge를 사용한다
+- 히스토리를 보존해야 하는 특별한 경우만 Merge Commit을 사용한다
+
+## 7. 금지 사항
+
+- `main` 브랜치에 직접 커밋하지 않는다
+- 관련 없는 변경을 한 브랜치에 섞지 않는다
+- 오래된 작업 브랜치를 기준으로 새 작업을 시작하지 않는다

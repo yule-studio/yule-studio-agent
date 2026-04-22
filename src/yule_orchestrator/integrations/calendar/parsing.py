@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from .models import CalendarEvent, CalendarTodo
+from .models import CalendarEvent, CalendarTodo, build_fallback_item_uid
 
 
 def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
     title_value = component.get("summary")
     title = str(title_value) if title_value else "(untitled event)"
     description = extract_description(component)
+    last_modified = extract_last_modified(component)
 
     start_value = component.decoded("dtstart")
     end_value = component.decoded("dtend") if component.get("dtend") else None
@@ -17,7 +18,16 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
     if isinstance(start_value, date) and not isinstance(start_value, datetime):
         start_date = start_value
         end_date = end_value if isinstance(end_value, date) and not isinstance(end_value, datetime) else start_date + timedelta(days=1)
+        item_uid = extract_uid(
+            component,
+            "event",
+            calendar_name,
+            title,
+            start_date.isoformat(),
+            end_date.isoformat(),
+        )
         return CalendarEvent(
+            item_uid=item_uid,
             title=title,
             start=start_date.isoformat(),
             end=end_date.isoformat(),
@@ -25,6 +35,7 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
             calendar_name=calendar_name,
             source="naver-caldav",
             description=description,
+            last_modified=last_modified,
         )
 
     if not isinstance(start_value, datetime):
@@ -32,8 +43,17 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
 
     start_dt = normalize_datetime(start_value)
     end_dt = normalize_datetime(end_value) if isinstance(end_value, datetime) else start_dt
+    item_uid = extract_uid(
+        component,
+        "event",
+        calendar_name,
+        title,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+    )
 
     return CalendarEvent(
+        item_uid=item_uid,
         title=title,
         start=start_dt.isoformat(),
         end=end_dt.isoformat(),
@@ -41,6 +61,7 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
         calendar_name=calendar_name,
         source="naver-caldav",
         description=description,
+        last_modified=last_modified,
     )
 
 
@@ -48,6 +69,7 @@ def build_todo(component: Any, calendar_name: str) -> CalendarTodo:
     title_value = component.get("summary")
     title = str(title_value) if title_value else "(untitled todo)"
     description = extract_description(component)
+    last_modified = extract_last_modified(component)
 
     start_value = component.decoded("dtstart") if component.get("dtstart") else None
     due_value = component.decoded("due") if component.get("due") else None
@@ -64,8 +86,17 @@ def build_todo(component: Any, calendar_name: str) -> CalendarTodo:
     priority = extract_int(component, "priority")
     percent_complete = extract_int(component, "percent-complete")
     completed = status == "COMPLETED" or completed_at is not None or percent_complete == 100
+    item_uid = extract_uid(
+        component,
+        "todo",
+        calendar_name,
+        title,
+        due or "",
+        start or "",
+    )
 
     return CalendarTodo(
+        item_uid=item_uid,
         title=title,
         start=start,
         due=due,
@@ -79,6 +110,7 @@ def build_todo(component: Any, calendar_name: str) -> CalendarTodo:
         calendar_name=calendar_name,
         source="naver-caldav",
         description=description,
+        last_modified=last_modified,
     )
 
 
@@ -100,6 +132,32 @@ def extract_description(component: Any) -> str:
         if value:
             return str(value).strip()
     return ""
+
+
+def extract_uid(component: Any, item_type: str, *fallback_parts: str) -> str:
+    value = component.get("uid")
+    if value:
+        uid = str(value).strip()
+        if uid:
+            return uid
+    return build_fallback_item_uid(item_type, *fallback_parts)
+
+
+def extract_last_modified(component: Any) -> Optional[str]:
+    for field_name in ("last-modified", "dtstamp", "created"):
+        if component.get(field_name) is None:
+            continue
+
+        try:
+            normalized, _ = normalize_temporal_value(component.decoded(field_name))
+            if normalized:
+                return normalized
+        except Exception:
+            value = component.get(field_name)
+            if value:
+                return str(value).strip()
+
+    return None
 
 
 def extract_status(component: Any) -> str:

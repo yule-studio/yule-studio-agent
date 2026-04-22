@@ -101,6 +101,7 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CALENDAR=
 # NAVER_CALDAV_TODO_CALENDAR=내 할 일
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
+# NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 ```
 
@@ -108,11 +109,18 @@ NAVER_APP_PASSWORD=
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
 - 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
+- `NAVER_CALDAV_CACHE_SECONDS`를 지정하면 해당 TTL을 우선 사용합니다.
+- 값을 지정하지 않으면 오늘이 포함된 범위는 5분, 미래 범위는 30분, 과거 범위는 24시간 동안 SQLite 로컬 캐시를 재사용합니다.
+- 캐시 저장소 기본 위치는 `.cache/yule/cache.sqlite3`입니다.
+- 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
+- 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
 - 자동 탐지 결과가 없으면 일반 일정 조회 대상 캘린더를 기준으로 fallback 합니다.
 - `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`는 서버가 날짜 범위 검색으로 할 일을 제대로 주지 않을 때만 사용하는 느린 마지막 보강 옵션입니다.
+- `NAVER_CALDAV_INCLUDE_ALL_TODOS=true`를 써도 같은 범위 재실행은 캐시 덕분에 더 빠르게 응답할 수 있습니다.
+- 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
 
 ## 실행
 
@@ -121,6 +129,17 @@ yule doctor
 yule context coding-agent
 yule github issues --limit 30
 yule calendar events --json
+yule calendar warmup --force-refresh --json
+yule calendar cache inspect --json
+yule calendar cache cleanup --json
+```
+
+로컬 환경에 따라 엔트리포인트 설치가 덜 맞물려 있을 때는 아래처럼 모듈 실행 방식으로 동일하게 사용할 수 있습니다.
+
+```bash
+PYTHONPATH=src python3 -m yule_orchestrator doctor
+PYTHONPATH=src python3 -m yule_orchestrator calendar events --json
+PYTHONPATH=src python3 -m yule_orchestrator calendar cache cleanup --json
 ```
 
 기간을 지정해서 일정 데이터를 읽을 수도 있습니다.
@@ -129,18 +148,28 @@ yule calendar events --json
 yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 ```
 
-설치 전에 바로 실행해야 하면:
-
-```bash
-PYTHONPATH=src python3 -m yule_orchestrator doctor
-```
-
 ## 캘린더 연동 메모
 
 - 현재는 Naver CalDAV를 통해 일정 이벤트(`VEVENT`)와 CalDAV로 노출되는 할 일(`VTODO`)을 함께 읽습니다.
 - 네이버 웹 화면의 할 일이 항상 CalDAV `VTODO`로 제공되는지는 계정 상태와 클라이언트 설정에 따라 달라질 수 있습니다.
 - `todo_count`가 0이면 현재 CalDAV 응답에 할 일이 포함되지 않았을 가능성이 큽니다.
 - `VTODO`는 기본적으로 지정한 기간 안에 해당하는 항목만 출력합니다.
+- `yule calendar events --json` 실행 중 실패가 발생하면 `error.code`, `error.category`, `retryable`, `manual_action_required`, `alert_recommended`를 포함한 구조화된 에러 JSON을 반환합니다.
+- 현재 에러 분류는 `configuration`, `validation`, `authentication`, `network`, `query`, `parsing`, `dependency`, `unknown` 범주를 사용합니다.
+- `retry_strategy`는 `none` 또는 `backoff`를 사용하며, 이후 Planning Agent / Discord 알림 흐름에서 그대로 재사용할 수 있습니다.
+- 세부 운영 기준은 [policies/runtime/common/calendar-error-handling.md](policies/runtime/common/calendar-error-handling.md)에 정리합니다.
+- 같은 날짜 범위와 같은 캘린더 설정 요청은 SQLite 캐시를 재사용합니다.
+- stale cache는 기본적으로 만료 후 7일 동안 남겨두고, `yule calendar cache cleanup`에서 정리합니다.
+- 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
+- 조회 결과를 동기화할 때 일정/할 일 항목 단위 상태를 upsert 하므로, 이후 완료 여부 변화와 최근 본 항목을 기준으로 다음 작업 추천 로직을 붙일 수 있습니다.
+
+## 테스트
+
+기본 자동 테스트는 표준 라이브러리 `unittest`로 실행합니다.
+
+```bash
+python3 -m unittest discover -s tests
+```
 
 ## 로컬 전용 파일
 
@@ -153,6 +182,7 @@ PYTHONPATH=src python3 -m yule_orchestrator doctor
 .env
 .env.local
 .venv/
+.cache/
 runs/*
 *.egg-info/
 ```
