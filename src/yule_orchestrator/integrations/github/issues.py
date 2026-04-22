@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+from .cache import (
+    DEFAULT_GITHUB_ISSUE_CACHE_SECONDS,
+    DEFAULT_GITHUB_VIEWER_CONTEXT_CACHE_SECONDS,
+    build_github_cache_key,
+    load_cached_issue_payload,
+    load_cached_viewer_context_payload,
+    load_stale_issue_payload,
+    load_stale_viewer_context_payload,
+    save_issue_payload,
+    save_viewer_context_payload,
+)
 
 
 class GitHubIssueError(Exception):
@@ -30,13 +43,75 @@ class GitHubIssue:
             "scope": self.scope,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "GitHubIssue":
+        return cls(
+            number=int(payload["number"]),
+            repository=str(payload["repository"]),
+            title=str(payload["title"]),
+            url=str(payload["url"]),
+            owner=str(payload["owner"]),
+            scope=str(payload["scope"]),
+        )
 
-def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
+
+@dataclass(frozen=True)
+class GitHubViewerContext:
+    viewer_login: str
+    org_logins: Tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "viewer_login": self.viewer_login,
+            "org_logins": list(self.org_logins),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "GitHubViewerContext":
+        viewer_login = payload.get("viewer_login")
+        org_logins = payload.get("org_logins", [])
+        if not isinstance(viewer_login, str) or not viewer_login:
+            raise ValueError("viewer_login is required.")
+        if not isinstance(org_logins, list):
+            raise ValueError("org_logins must be a list.")
+        normalized_orgs = tuple(sorted(str(login) for login in org_logins if str(login)))
+        return cls(viewer_login=viewer_login, org_logins=normalized_orgs)
+
+
+def list_open_issues(limit: int = 30, force_refresh: bool = False) -> Sequence[GitHubIssue]:
     if not shutil.which("gh"):
         raise GitHubIssueError("GitHub CLI (`gh`) is not installed.")
 
-    viewer_login, org_logins = _load_viewer_context()
-    owners = [viewer_login, *sorted(org_logins)]
+    issue_cache_ttl_seconds = _load_issue_cache_seconds()
+    viewer_context_ttl_seconds = max(
+        issue_cache_ttl_seconds,
+        DEFAULT_GITHUB_VIEWER_CONTEXT_CACHE_SECONDS,
+    )
+
+    viewer_context = _load_viewer_context(
+        ttl_seconds=viewer_context_ttl_seconds,
+        force_refresh=force_refresh,
+    )
+    owners = [viewer_context.viewer_login, *viewer_context.org_logins]
+    scope_hash = build_github_cache_key(
+        "github-open-issues-v1",
+        viewer_context.viewer_login,
+        *viewer_context.org_logins,
+    )
+    cache_key = build_github_cache_key(
+        scope_hash,
+        str(limit),
+        "state=open",
+        "sort=updated",
+        "order=desc",
+    )
+
+    stale_cached_issues: Optional[Sequence[GitHubIssue]] = None
+    if not force_refresh:
+        cached_issues = _load_issue_cache(cache_key=cache_key, ttl_seconds=issue_cache_ttl_seconds)
+        if cached_issues is not None:
+            return cached_issues
+        stale_cached_issues = _load_stale_issue_cache(cache_key=cache_key)
 
     command = [
         "gh",
@@ -64,6 +139,8 @@ def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
     )
 
     if result.returncode != 0:
+        if stale_cached_issues is not None:
+            return stale_cached_issues
         raise GitHubIssueError(_format_gh_error(result.stderr))
 
     payload = result.stdout.strip()
@@ -88,7 +165,11 @@ def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
         url = item.get("url")
         repository = _extract_repository_name(item.get("repository"))
         owner = _extract_repository_owner(repository)
-        scope = _classify_owner_scope(owner, viewer_login, org_logins)
+        scope = _classify_owner_scope(
+            owner,
+            viewer_context.viewer_login,
+            set(viewer_context.org_logins),
+        )
 
         if not isinstance(number, int):
             continue
@@ -108,6 +189,12 @@ def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
             )
         )
 
+    save_issue_payload(
+        cache_key=cache_key,
+        scope_hash=scope_hash,
+        ttl_seconds=issue_cache_ttl_seconds,
+        payload=[issue.to_dict() for issue in issues],
+    )
     return issues
 
 
@@ -168,22 +255,49 @@ def _format_gh_error(stderr: str) -> str:
         return f"GitHub issue query failed: {first_line}"
 
     return "GitHub issue query failed."
-def _load_viewer_context() -> Tuple[str, Set[str]]:
+
+
+def _load_viewer_context(ttl_seconds: int, force_refresh: bool = False) -> GitHubViewerContext:
+    cache_key = build_github_cache_key("github-viewer-context-v1")
+    stale_context: Optional[GitHubViewerContext] = None
+    if not force_refresh:
+        cached_context = _load_cached_viewer_context(cache_key=cache_key, ttl_seconds=ttl_seconds)
+        if cached_context is not None:
+            return cached_context
+        stale_context = _load_stale_viewer_context(cache_key=cache_key)
+
     viewer = _run_gh_json_command(["gh", "api", "user"])
     viewer_login = viewer.get("login")
     if not isinstance(viewer_login, str) or not viewer_login:
+        if stale_context is not None:
+            return stale_context
         raise GitHubIssueError("Could not determine the authenticated GitHub user.")
 
-    orgs_payload = _run_gh_json_command(["gh", "api", "user/orgs"])
-    org_logins: Set[str] = set()
+    try:
+        orgs_payload = _run_gh_json_command(["gh", "api", "user/orgs"])
+    except GitHubIssueError:
+        if stale_context is not None:
+            return stale_context
+        raise
+
+    org_logins: list[str] = []
     if isinstance(orgs_payload, list):
         for item in orgs_payload:
             if isinstance(item, dict):
                 login = item.get("login")
                 if isinstance(login, str) and login:
-                    org_logins.add(login)
+                    org_logins.append(login)
 
-    return viewer_login, org_logins
+    viewer_context = GitHubViewerContext(
+        viewer_login=viewer_login,
+        org_logins=tuple(sorted(set(org_logins))),
+    )
+    save_viewer_context_payload(
+        cache_key=cache_key,
+        ttl_seconds=ttl_seconds,
+        payload=viewer_context.to_dict(),
+    )
+    return viewer_context
 
 
 def _run_gh_json_command(command: Sequence[str]) -> Any:
@@ -219,3 +333,65 @@ def _classify_owner_scope(owner: str, viewer_login: str, org_logins: Set[str]) -
     if owner in org_logins:
         return f"org:{owner}"
     return f"external:{owner}"
+
+
+def _load_issue_cache_seconds() -> int:
+    raw_value = os.getenv("GITHUB_ISSUES_CACHE_SECONDS", "").strip()
+    if not raw_value:
+        return DEFAULT_GITHUB_ISSUE_CACHE_SECONDS
+
+    try:
+        ttl_seconds = int(raw_value)
+    except ValueError as exc:
+        raise GitHubIssueError(
+            f"GITHUB_ISSUES_CACHE_SECONDS must be an integer, got: {raw_value!r}"
+        ) from exc
+
+    if ttl_seconds < 0:
+        raise GitHubIssueError("GITHUB_ISSUES_CACHE_SECONDS must be 0 or greater.")
+
+    return ttl_seconds
+
+
+def _load_issue_cache(cache_key: str, ttl_seconds: int) -> Optional[Sequence[GitHubIssue]]:
+    payload = load_cached_issue_payload(cache_key=cache_key, ttl_seconds=ttl_seconds)
+    if payload is None:
+        return None
+
+    try:
+        return [GitHubIssue.from_dict(item) for item in payload if isinstance(item, dict)]
+    except Exception:
+        return None
+
+
+def _load_stale_issue_cache(cache_key: str) -> Optional[Sequence[GitHubIssue]]:
+    payload = load_stale_issue_payload(cache_key=cache_key)
+    if payload is None:
+        return None
+
+    try:
+        return [GitHubIssue.from_dict(item) for item in payload if isinstance(item, dict)]
+    except Exception:
+        return None
+
+
+def _load_cached_viewer_context(cache_key: str, ttl_seconds: int) -> Optional[GitHubViewerContext]:
+    payload = load_cached_viewer_context_payload(cache_key=cache_key, ttl_seconds=ttl_seconds)
+    if payload is None:
+        return None
+
+    try:
+        return GitHubViewerContext.from_dict(payload)
+    except Exception:
+        return None
+
+
+def _load_stale_viewer_context(cache_key: str) -> Optional[GitHubViewerContext]:
+    payload = load_stale_viewer_context_payload(cache_key=cache_key)
+    if payload is None:
+        return None
+
+    try:
+        return GitHubViewerContext.from_dict(payload)
+    except Exception:
+        return None

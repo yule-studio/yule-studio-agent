@@ -5,10 +5,14 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
-from datetime import date
+from datetime import date, datetime
 import unittest
 
-from yule_orchestrator.discord.formatter import format_plan_today_message, split_discord_message
+from yule_orchestrator.discord.formatter import (
+    format_checkpoints_message,
+    format_plan_today_message,
+    split_discord_message,
+)
 from yule_orchestrator.planning.models import (
     DailyPlan,
     DailyPlanEnvelope,
@@ -91,12 +95,23 @@ class DiscordFormatterTestCase(unittest.TestCase):
             ),
         )
 
-        message = format_plan_today_message(envelope)
+        message = format_plan_today_message(envelope, mention_user_id=123456789)
 
+        self.assertIn("<@123456789>", message)
         self.assertIn("오늘 브리핑", message)
         self.assertIn("아침 브리핑", message)
-        self.assertIn("우선순위 작업", message)
-        self.assertIn("시간대별 브리핑", message)
+        self.assertIn("추천 작업", message)
+        self.assertIn("시간대 메모", message)
+        self.assertIn("우선순위: 높음", message)
+
+    def test_format_checkpoints_message_can_include_mention(self) -> None:
+        message = format_checkpoints_message(
+            [],
+            reference_time=datetime.fromisoformat("2026-04-22T09:55:00+09:00"),
+            mention_user_id=123456789,
+        )
+
+        self.assertIn("<@123456789>", message)
 
     def test_split_discord_message_breaks_long_text(self) -> None:
         message = "\n".join([f"line-{index:03d}" for index in range(400)])

@@ -173,92 +173,135 @@ def render_morning_briefing(
     checkpoints: Sequence[PlanningCheckpoint],
 ) -> str:
     lines: list[str] = []
+    lines.append(f"{plan_date.isoformat()} 아침 브리핑")
     lines.append(
-        f"{plan_date.isoformat()} 아침 브리핑입니다. 오늘은 고정 일정 {summary.fixed_event_count}건과 우선 작업 {summary.recommended_task_count}건을 기준으로 움직이는 날입니다."
+        f"- 오늘은 고정 일정 {summary.fixed_event_count}건과 우선 작업 {summary.recommended_task_count}건을 기준으로 움직입니다."
     )
 
-    if fixed_schedule:
-        first_fixed = fixed_schedule[0]
+    first_fixed = fixed_schedule[0] if fixed_schedule else None
+    first_focus = suggested_time_blocks[0] if suggested_time_blocks else None
+
+    if first_fixed and first_focus:
         lines.append(
-            f"첫 고정 일정은 {_format_time_range(first_fixed.start, first_fixed.end)} '{first_fixed.title}'입니다."
+            f"- 하루 시작은 {_format_time_range(first_fixed.start, first_fixed.end)} '{first_fixed.title}'로 열고, "
+            f"첫 집중 작업은 {_format_time_range(first_focus.start, first_focus.end)} '{first_focus.title}'로 잡는 편이 좋습니다."
+        )
+    elif first_fixed:
+        lines.append(
+            f"- 하루 시작은 {_format_time_range(first_fixed.start, first_fixed.end)} '{first_fixed.title}'입니다."
+        )
+    elif first_focus:
+        lines.append(
+            f"- 첫 집중 작업은 {_format_time_range(first_focus.start, first_focus.end)} '{first_focus.title}'입니다."
+        )
+
+    if checkpoints:
+        first_checkpoint = datetime.fromisoformat(checkpoints[0].remind_at).strftime("%H:%M")
+        if len(checkpoints) > 1:
+            next_checkpoint = datetime.fromisoformat(checkpoints[1].remind_at).strftime("%H:%M")
+            lines.append(
+                f"- 중간 점검은 총 {len(checkpoints)}번이며, 첫 알림은 {first_checkpoint}, 다음 알림은 {next_checkpoint}입니다."
+            )
+        else:
+            lines.append(f"- 중간 점검은 총 1번이며, 알림은 {first_checkpoint}에 들어갑니다.")
+
+    if coding_agent_handoff:
+        lines.append(
+            f"- 개발 후보 작업은 {len(coding_agent_handoff)}건이며, 가장 먼저 볼 항목은 '{coding_agent_handoff[0].title}'입니다."
         )
 
     if prioritized_tasks:
-        lines.append("추천 우선순위는 아래 순서입니다.")
+        lines.append("")
+        lines.append("추천 작업")
         focus_block_map = {
             block.task_id: block for block in suggested_time_blocks if block.task_id
         }
         for index, task in enumerate(prioritized_tasks[:3], start=1):
-            sentence = f"{index}. {task.title}"
+            lines.append(f"{index}. {task.title}")
+            detail_parts: list[str] = []
             reason_text = _summarize_reasons(task.reasons)
             if reason_text:
-                sentence += f" - {reason_text}"
+                detail_parts.append(f"이유: {reason_text}")
             focus_block = focus_block_map.get(task.task_id)
             if focus_block is not None:
-                sentence += f" 추천 시간은 {_format_time_range(focus_block.start, focus_block.end)}입니다."
+                detail_parts.append(
+                    f"추천 시간: {_format_time_range(focus_block.start, focus_block.end)}"
+                )
             elif task.due_date:
-                sentence += f" {task.due_date} 기준으로 오늘 안에 방향을 잡아두는 편이 좋습니다."
-            lines.append(sentence)
+                detail_parts.append(f"기한: {_summarize_due_label(task.due_date)}")
+            if detail_parts:
+                lines.append(f"   - {' | '.join(detail_parts)}")
 
     if time_block_briefings:
-        first_briefing = time_block_briefings[0]
-        lines.append(
-            f"시간대별로는 {_format_time_range(first_briefing.start, first_briefing.end)} '{first_briefing.title}'부터 따라가면 흐름이 자연스럽습니다."
-        )
-
-    if checkpoints:
-        first_checkpoint = checkpoints[0]
-        checkpoint_time = datetime.fromisoformat(first_checkpoint.remind_at).strftime("%H:%M")
-        lines.append(
-            f"중간 체크는 총 {len(checkpoints)}번 들어가고, 첫 체크는 {checkpoint_time}에 예정되어 있습니다."
-        )
-
-    if coding_agent_handoff:
-        lines.append(
-            f"Coding Agent로 넘길 후보는 '{coding_agent_handoff[0].title}' 포함 {len(coding_agent_handoff)}건입니다."
-        )
+        lines.append("")
+        lines.append("초반 흐름")
+        for briefing in time_block_briefings[:3]:
+            lines.append(
+                f"- {_format_time_range(briefing.start, briefing.end)} {briefing.title}: {briefing.briefing}"
+            )
 
     return "\n".join(lines)
 
 
 def render_discord_briefing(
     summary: DailyPlanSummary,
+    fixed_schedule: Sequence[PlanningTimeBlock],
     tasks: Sequence[PlanningTaskCandidate],
+    suggested_time_blocks: Sequence[PlanningTimeBlock],
     coding_agent_handoff: Sequence[PlanningTaskCandidate],
     checkpoints: Sequence[PlanningCheckpoint],
 ) -> str:
-    parts = [f"오늘은 고정 일정 {summary.fixed_event_count}건, 우선 작업 {summary.recommended_task_count}건이 있습니다."]
-    if tasks:
-        parts.append(f"먼저는 '{tasks[0].title}'부터 잡는 흐름을 추천합니다.")
-    if coding_agent_handoff:
-        parts.append(f"Coding Agent 후보는 '{coding_agent_handoff[0].title}' 포함 {len(coding_agent_handoff)}건입니다.")
+    lines = [f"오늘은 고정 일정 {summary.fixed_event_count}건과 우선 작업 {summary.recommended_task_count}건이 있습니다."]
+
+    first_fixed = fixed_schedule[0] if fixed_schedule else None
+    first_focus = suggested_time_blocks[0] if suggested_time_blocks else None
+
+    if first_fixed and first_focus:
+        lines.append(
+            f"먼저 {_format_time_range(first_fixed.start, first_fixed.end)} '{first_fixed.title}'로 시작하고, "
+            f"이후 {_format_time_range(first_focus.start, first_focus.end)} '{first_focus.title}'에 집중하는 흐름을 추천합니다."
+        )
+    elif first_focus:
+        lines.append(
+            f"첫 집중 작업은 {_format_time_range(first_focus.start, first_focus.end)} '{first_focus.title}'입니다."
+        )
+    elif tasks:
+        lines.append(f"가장 먼저 볼 작업은 '{tasks[0].title}'입니다.")
+
     if checkpoints:
-        parts.append(f"체크포인트는 {len(checkpoints)}건입니다.")
-    return " ".join(parts)
+        first_checkpoint = datetime.fromisoformat(checkpoints[0].remind_at).strftime("%H:%M")
+        lines.append(f"중간 점검은 {len(checkpoints)}번이고, 첫 알림은 {first_checkpoint}입니다.")
+
+    if coding_agent_handoff:
+        lines.append(f"개발 후보 작업은 {len(coding_agent_handoff)}건입니다.")
+
+    return "\n".join(lines)
 
 
 def _build_execution_block_briefing(
     block: PlanningExecutionBlock,
     next_block: Optional[PlanningExecutionBlock],
 ) -> str:
-    time_range = _format_time_range(block.start, block.end)
     action_hint = _action_hint(block.title, block.description)
-    parts = [f"{time_range}는 '{block.title}'에 집중하는 구간입니다.", action_hint]
+    parts = [action_hint]
     if next_block is not None and next_block.source_event_uid == block.source_event_uid:
         next_start = datetime.fromisoformat(next_block.start).strftime("%H:%M")
         parts.append(
-            f"{next_start}부터 '{next_block.title}'가 이어지니, 끝나기 전까지 넘길 기준이나 메모를 짧게 남겨두는 편이 좋습니다."
+            f"{next_start}부터 '{next_block.title}'가 이어지니, 끝나기 전까지 넘길 기준이나 메모를 짧게 남겨두면 흐름이 덜 끊깁니다."
         )
     else:
-        parts.append(f"이 블록이 끝날 때는 '{block.source_event_title}' 일정 기준으로 마무리 상태를 한 번 점검해 주세요.")
+        parts.append("이 블록이 끝날 때는 마무리 상태와 다음 행동 한 가지를 함께 정리해 두는 편이 좋습니다.")
     return " ".join(parts)
 
 
 def _build_fixed_event_briefing(block: PlanningTimeBlock) -> str:
-    time_range = _format_time_range(block.start, block.end)
+    haystack = block.title.lower()
+    if any(keyword in haystack for keyword in ["할 일", "해야 할", "업무 정리", "목록 정리"]):
+        return (
+            "이 구간은 오늘 처리할 일과 우선순위를 정리하고, 다음 집중 작업으로 바로 넘어갈 준비를 하는 시간으로 쓰면 좋습니다."
+        )
     return (
-        f"{time_range}는 고정 일정 '{block.title}' 시간입니다. "
-        "이 구간은 새 작업을 벌리기보다 참석이나 진행 자체에 집중하고, 종료 직전에 다음 블록으로 넘어갈 준비만 정리하는 편이 안정적입니다."
+        "새 작업을 벌리기보다 일정 자체에 집중하고, 끝나기 직전에 다음 블록으로 넘어갈 준비만 정리하는 편이 안정적입니다."
     )
 
 
@@ -266,19 +309,17 @@ def _build_focus_block_briefing(
     block: PlanningTimeBlock,
     task: Optional[PlanningTaskCandidate],
 ) -> str:
-    time_range = _format_time_range(block.start, block.end)
     if task is None:
         return (
-            f"{time_range}는 '{block.title}'에 쓰는 추천 집중 블록입니다. "
             "시작 전에 이번 블록의 완료 기준을 한 줄로 적고, 끝날 때는 다음 행동 하나만 남겨 주세요."
         )
 
     reason_text = _summarize_reasons(task.reasons)
     due_text = _summarize_due(task.due_date)
     action_hint = _action_hint(task.title, task.description)
-    parts = [f"{time_range}는 '{task.title}'에 쓰는 추천 집중 블록입니다."]
+    parts: list[str] = []
     if reason_text:
-        parts.append(f"이 작업은 {reason_text} 우선순위가 높게 잡혔습니다.")
+        parts.append(f"이 작업은 {reason_text} 때문에 우선순위가 높게 잡혔습니다.")
     if due_text:
         parts.append(due_text)
     parts.append(action_hint)
@@ -293,21 +334,21 @@ def _format_time_range(start_value: str, end_value: str) -> str:
 
 def _summarize_reasons(reasons: Sequence[str]) -> str:
     label_map = {
-        "calendar todo": "캘린더 할 일이라",
-        "coding candidate": "개발 후보 작업이라",
-        "due today": "오늘 처리 우선이라",
-        "high priority hint": "우선순위 힌트가 높아",
-        "medium priority hint": "중요도가 중간 이상이라",
-        "open GitHub issue": "열려 있는 GitHub 이슈라",
-        "organization repository": "조직 저장소 작업이라",
-        "overdue": "기한이 이미 지나",
-        "personal repository": "개인 저장소 작업이라",
-        "reminder item": "리마인더로 잡혀 있어",
-        "review or documentation keyword": "정리나 문서화 성격이 있어",
-        "review overdue": "밀린 복습 항목이라",
-        "review today": "오늘 복습해야 해서",
-        "review tomorrow": "내일 전 준비가 필요해서",
-        "urgent keyword": "긴급 키워드가 있어",
+        "calendar todo": "캘린더에 잡힌 할 일",
+        "coding candidate": "개발 후보 작업",
+        "due today": "오늘 처리 우선",
+        "high priority hint": "높은 우선순위 힌트",
+        "medium priority hint": "중간 이상 우선순위",
+        "open GitHub issue": "열려 있는 GitHub 이슈",
+        "organization repository": "조직 저장소 작업",
+        "overdue": "기한이 지난 상태",
+        "personal repository": "개인 저장소 작업",
+        "reminder item": "리마인더 항목",
+        "review or documentation keyword": "정리/문서 성격",
+        "review overdue": "밀린 복습 항목",
+        "review today": "오늘 복습 필요",
+        "review tomorrow": "내일 전 준비 필요",
+        "urgent keyword": "긴급 키워드 포함",
     }
     labels: list[str] = []
     for reason in reasons:
@@ -319,9 +360,7 @@ def _summarize_reasons(reasons: Sequence[str]) -> str:
 
     if not labels:
         return ""
-    if len(labels) == 1:
-        return labels[0]
-    return f"{labels[0]} {labels[1]}"
+    return ", ".join(labels[:2])
 
 
 def _summarize_due(due_date: Optional[str]) -> str:
@@ -329,8 +368,15 @@ def _summarize_due(due_date: Optional[str]) -> str:
         return ""
     if "T" in due_date:
         parsed = datetime.fromisoformat(due_date)
-        return f"마감 기준은 {parsed.strftime('%m-%d %H:%M')}입니다."
-    return f"마감 기준은 {due_date}입니다."
+        return f"시간 기준 마감은 {parsed.strftime('%m-%d %H:%M')}입니다."
+    return ""
+
+
+def _summarize_due_label(due_date: str) -> str:
+    if "T" in due_date:
+        parsed = datetime.fromisoformat(due_date)
+        return parsed.strftime("%m-%d %H:%M")
+    return due_date
 
 
 def _action_hint(title: str, description: str) -> str:

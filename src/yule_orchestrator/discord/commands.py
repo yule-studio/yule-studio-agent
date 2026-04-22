@@ -8,7 +8,11 @@ from ..planning import build_daily_plan, collect_planning_inputs, select_due_che
 from .formatter import format_checkpoints_message, format_plan_today_message, split_discord_message
 
 
-def register_discord_commands(bot: "commands.Bot", guild_id: int) -> None:
+def register_discord_commands(
+    bot: "commands.Bot",
+    guild_id: int,
+    notify_user_id: int | None = None,
+) -> None:
     import discord
 
     guild = discord.Object(id=guild_id)
@@ -24,7 +28,10 @@ def register_discord_commands(bot: "commands.Bot", guild_id: int) -> None:
         plan_date = date.today()
         inputs = collect_planning_inputs(plan_date=plan_date)
         envelope = build_daily_plan(inputs, use_ollama=use_ollama)
-        content = format_plan_today_message(envelope)
+        content = format_plan_today_message(
+            envelope,
+            mention_user_id=notify_user_id or interaction.user.id,
+        )
         await _send_message_chunks(interaction, content)
 
     @bot.tree.command(name="checkpoints_now", description="지금 기준으로 다가오는 체크포인트를 보여줍니다.", guild=guild)
@@ -48,7 +55,11 @@ def register_discord_commands(bot: "commands.Bot", guild_id: int) -> None:
             at=now,
             window_minutes=window_minutes,
         )
-        content = format_checkpoints_message(due_checkpoints, reference_time=now)
+        content = format_checkpoints_message(
+            due_checkpoints,
+            reference_time=now,
+            mention_user_id=notify_user_id or interaction.user.id,
+        )
         await _send_message_chunks(interaction, content)
 
 

@@ -1,54 +1,69 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Sequence
+from typing import Optional, Sequence
 
 from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
 
 DISCORD_MESSAGE_LIMIT = 1900
 
 
-def format_plan_today_message(envelope: DailyPlanEnvelope) -> str:
+def format_plan_today_message(
+    envelope: DailyPlanEnvelope,
+    mention_user_id: Optional[int] = None,
+) -> str:
     plan = envelope.daily_plan
     lines: list[str] = []
-    lines.append("오늘 브리핑")
-    lines.append(plan.discord_briefing)
+    _append_mention(lines, mention_user_id)
+    lines.append("**오늘 브리핑**")
+    lines.extend(_non_empty_lines(plan.discord_briefing))
     lines.append("")
-    lines.append("아침 브리핑")
-    lines.extend(_non_empty_lines(plan.morning_briefing))
+    lines.append("**아침 브리핑**")
+    lines.extend(_morning_summary_lines(plan.morning_briefing))
 
     if plan.prioritized_tasks:
         lines.append("")
-        lines.append("우선순위 작업")
+        lines.append("**추천 작업**")
         for index, task in enumerate(plan.prioritized_tasks[:3], start=1):
-            due_text = f" | due {task.due_date}" if task.due_date else ""
-            lines.append(f"{index}. {task.title} [{task.priority_level}]{due_text}")
+            lines.append(f"{index}. {task.title}")
+            detail_parts = [f"우선순위: {_priority_label(task.priority_level)}"]
+            if task.due_date:
+                detail_parts.append(f"기한: {_due_label(task.due_date)}")
+            lines.append(f"   - {' | '.join(detail_parts)}")
 
     if plan.time_block_briefings:
         lines.append("")
-        lines.append("시간대별 브리핑")
+        lines.append("**시간대 메모**")
         for briefing in plan.time_block_briefings[:3]:
             lines.append(f"- {_time_range(briefing.start, briefing.end)} {briefing.title}")
             lines.append(f"  {briefing.briefing}")
 
     if plan.checkpoints:
         lines.append("")
-        lines.append("체크포인트")
+        lines.append("**체크포인트**")
         for checkpoint in plan.checkpoints[:3]:
-            reminder_time = datetime.fromisoformat(checkpoint.remind_at).strftime("%H:%M")
-            lines.append(f"- {reminder_time} {checkpoint.block_title}")
+            lines.append(f"- {checkpoint.prompt}")
 
     return "\n".join(lines).strip()
 
 
-def format_checkpoints_message(checkpoints: Sequence[PlanningCheckpoint], *, reference_time: datetime) -> str:
+def format_checkpoints_message(
+    checkpoints: Sequence[PlanningCheckpoint],
+    *,
+    reference_time: datetime,
+    mention_user_id: Optional[int] = None,
+) -> str:
     if not checkpoints:
-        return f"{reference_time.strftime('%H:%M')} 기준으로 예정된 체크포인트가 없습니다."
+        lines: list[str] = []
+        _append_mention(lines, mention_user_id)
+        lines.append(f"{reference_time.strftime('%H:%M')} 기준으로 예정된 체크포인트가 없습니다.")
+        return "\n".join(lines)
 
-    lines = [f"{reference_time.strftime('%H:%M')} 기준 체크포인트"]
+    lines: list[str] = []
+    _append_mention(lines, mention_user_id)
+    lines.append(f"{reference_time.strftime('%H:%M')} 기준 체크포인트")
     for checkpoint in checkpoints:
-        reminder_time = datetime.fromisoformat(checkpoint.remind_at).strftime("%H:%M")
-        lines.append(f"- {reminder_time} {checkpoint.prompt}")
+        lines.append(f"- {checkpoint.prompt}")
     return "\n".join(lines)
 
 
@@ -83,3 +98,33 @@ def _time_range(start_value: str, end_value: str) -> str:
 
 def _non_empty_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.strip()] or [text]
+
+
+def _morning_summary_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for line in _non_empty_lines(text):
+        if line in {"추천 작업", "초반 흐름"}:
+            break
+        lines.append(line)
+    return lines or _non_empty_lines(text)
+
+
+def _priority_label(value: str) -> str:
+    return {
+        "high": "높음",
+        "medium": "중간",
+        "low": "낮음",
+    }.get(value, value)
+
+
+def _due_label(value: str) -> str:
+    if "T" in value:
+        return datetime.fromisoformat(value).strftime("%m-%d %H:%M")
+    return value
+
+
+def _append_mention(lines: list[str], mention_user_id: Optional[int]) -> None:
+    if mention_user_id is None:
+        return
+    lines.append(f"<@{mention_user_id}>")
+    lines.append("")

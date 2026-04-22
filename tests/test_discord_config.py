@@ -6,6 +6,7 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 import os
+from datetime import time
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,8 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_DAILY_CHANNEL_ID": "555",
+                "DISCORD_NOTIFY_USER_ID": "777",
+                "DISCORD_DAILY_BRIEFING_TIME": "16:15",
             },
             clear=False,
         ):
@@ -29,6 +32,8 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertIsNone(config.application_id)
         self.assertEqual(config.guild_id, 987654321)
         self.assertEqual(config.daily_channel_id, 555)
+        self.assertEqual(config.notify_user_id, 777)
+        self.assertEqual(config.daily_briefing_time, time(16, 15))
 
     def test_from_env_reads_optional_application_id(self) -> None:
         with patch.dict(
@@ -50,6 +55,19 @@ class DiscordConfigTestCase(unittest.TestCase):
             {
                 "DISCORD_BOT_TOKEN": "",
                 "DISCORD_GUILD_ID": "987654321",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(ValueError):
+                DiscordBotConfig.from_env()
+
+    def test_from_env_rejects_invalid_daily_briefing_time(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_BOT_TOKEN": "token-value",
+                "DISCORD_GUILD_ID": "987654321",
+                "DISCORD_DAILY_BRIEFING_TIME": "25:99",
             },
             clear=False,
         ):

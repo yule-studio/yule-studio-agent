@@ -53,7 +53,9 @@ def build_daily_plan(
 
     discord_briefing = render_discord_briefing(
         summary,
+        fixed_schedule,
         tasks,
+        suggested_blocks,
         coding_agent_handoff,
         checkpoints,
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import time
 from typing import Optional
 
 
@@ -11,6 +12,8 @@ class DiscordBotConfig:
     application_id: Optional[int]
     guild_id: int
     daily_channel_id: Optional[int] = None
+    notify_user_id: Optional[int] = None
+    daily_briefing_time: Optional[time] = None
 
     @classmethod
     def from_env(cls) -> "DiscordBotConfig":
@@ -19,6 +22,8 @@ class DiscordBotConfig:
             application_id=_optional_int_env("DISCORD_APPLICATION_ID"),
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
+            notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
+            daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
         )
 
 
@@ -46,3 +51,25 @@ def _optional_int_env(name: str) -> Optional[int]:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer value, got: {value!r}") from exc
+
+
+def _optional_time_env(name: str) -> Optional[time]:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+
+    value = raw.strip()
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"{name} must use HH:MM format, got: {value!r}")
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"{name} must use HH:MM format, got: {value!r}") from exc
+
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError(f"{name} must use a valid 24-hour time, got: {value!r}")
+
+    return time(hour=hour, minute=minute)
