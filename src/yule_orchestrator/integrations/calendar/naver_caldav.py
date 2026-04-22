@@ -6,8 +6,16 @@ import logging
 import os
 from typing import Any, Iterable, List, Optional
 
+from ...storage.calendar_state import sync_calendar_query_result
+from .cache import (
+    build_calendar_cache_key,
+    build_calendar_scope_hash,
+    load_stale_calendar_cache,
+    load_calendar_cache,
+    resolve_calendar_cache_ttl_seconds,
+    save_calendar_cache,
+)
 from .errors import CalendarIntegrationError, build_calendar_error
-from .cache import build_calendar_cache_key, load_calendar_cache, save_calendar_cache
 from .models import CalendarQueryResult
 from .parsing import build_event, build_todo, todo_matches_range
 from .rendering import render_calendar_events, render_calendar_items
@@ -22,25 +30,72 @@ class NaverCalDAVConfig:
     todo_calendar_name: Optional[str] = None
     timeout_seconds: int = 15
     include_all_todos: bool = False
-    cache_seconds: int = 300
+    cache_seconds: Optional[int] = None
 
 
-def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQueryResult:
+def list_naver_calendar_items(
+    start_date: date,
+    end_date: date,
+    force_refresh: bool = False,
+) -> CalendarQueryResult:
     config = load_naver_caldav_config()
-    cache_key = build_calendar_cache_key(
-        "naver-caldav",
+    cache_ttl_seconds = resolve_calendar_cache_ttl_seconds(
+        start_date=start_date,
+        end_date=end_date,
+        configured_ttl_seconds=config.cache_seconds,
+    )
+    cache_scope_hash = build_calendar_scope_hash(
+        "calendar-query-v1",
         config.url,
         config.username,
         config.calendar_name or "",
         config.todo_calendar_name or "",
         str(config.include_all_todos),
+    )
+    cache_key = build_calendar_cache_key(
+        cache_scope_hash,
         start_date.isoformat(),
         end_date.isoformat(),
     )
-    cached_result = load_calendar_cache(cache_key, ttl_seconds=config.cache_seconds)
-    if cached_result is not None:
-        return cached_result
+    stale_cached_result = None
+    if not force_refresh:
+        cached_result = load_calendar_cache(
+            cache_key=cache_key,
+            ttl_seconds=cache_ttl_seconds,
+        )
+        if cached_result is not None:
+            _sync_calendar_state_safely(cached_result, scope_hash=cache_scope_hash)
+            return cached_result
+        stale_cached_result = load_stale_calendar_cache(cache_key=cache_key)
 
+    try:
+        result = _fetch_naver_calendar_items(
+            config=config,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except CalendarIntegrationError as exc:
+        if stale_cached_result is not None and _can_use_stale_cache_on_error(exc):
+            _sync_calendar_state_safely(stale_cached_result, scope_hash=cache_scope_hash)
+            return stale_cached_result
+        raise
+    save_calendar_cache(
+        cache_key=cache_key,
+        scope_hash=cache_scope_hash,
+        start_date=start_date,
+        end_date=end_date,
+        ttl_seconds=cache_ttl_seconds,
+        result=result,
+    )
+    _sync_calendar_state_safely(result, scope_hash=cache_scope_hash)
+    return result
+
+
+def _fetch_naver_calendar_items(
+    config: NaverCalDAVConfig,
+    start_date: date,
+    end_date: date,
+) -> CalendarQueryResult:
     client_cls, calendar_cls = _load_caldav_dependencies()
 
     query_start = _to_local_datetime(start_date)
@@ -128,19 +183,39 @@ def list_naver_calendar_items(start_date: date, end_date: date) -> CalendarQuery
 
     events.sort(key=lambda event: event.sort_key())
     todos.sort(key=lambda todo: todo.sort_key())
-    result = CalendarQueryResult(
+    return CalendarQueryResult(
         source="naver-caldav",
         start_date=start_date,
         end_date=end_date,
         events=events,
         todos=todos,
     )
-    save_calendar_cache(cache_key, ttl_seconds=config.cache_seconds, result=result)
-    return result
 
 
-def list_naver_calendar_events(start_date: date, end_date: date) -> CalendarQueryResult:
-    return list_naver_calendar_items(start_date=start_date, end_date=end_date)
+def _sync_calendar_state_safely(result: CalendarQueryResult, scope_hash: str) -> None:
+    try:
+        sync_calendar_query_result(result, scope_hash=scope_hash)
+    except Exception:
+        return
+
+
+def _can_use_stale_cache_on_error(error: CalendarIntegrationError) -> bool:
+    details = error.details
+    if details.retryable:
+        return True
+    return details.category in {"network", "query", "unknown"}
+
+
+def list_naver_calendar_events(
+    start_date: date,
+    end_date: date,
+    force_refresh: bool = False,
+) -> CalendarQueryResult:
+    return list_naver_calendar_items(
+        start_date=start_date,
+        end_date=end_date,
+        force_refresh=force_refresh,
+    )
 
 
 def load_naver_caldav_config() -> NaverCalDAVConfig:
@@ -529,10 +604,13 @@ def _load_timeout_seconds() -> int:
     return timeout
 
 
-def _load_cache_seconds() -> int:
-    raw_value = os.getenv("NAVER_CALDAV_CACHE_SECONDS", "300").strip()
+def _load_cache_seconds() -> Optional[int]:
+    raw_value = os.getenv("NAVER_CALDAV_CACHE_SECONDS")
+    if raw_value is None or not raw_value.strip():
+        return None
+
     try:
-        ttl = int(raw_value)
+        ttl = int(raw_value.strip())
     except ValueError as exc:
         raise build_calendar_error(
             code="invalid_cache_configuration",
@@ -692,21 +770,22 @@ def _classify_caldav_error(exc: Exception, timeout_seconds: int) -> CalendarInte
             retry_strategy="backoff",
             recommended_retry_count=2,
             manual_action_required=False,
-            alert_recommended=True,
-            recovery_hint="한두 번 재시도해보고, 반복되면 수동 점검 또는 알림 전송 대상으로 분류하세요.",
+            alert_recommended=False,
+            recovery_hint="잠시 후 다시 시도하고, 반복되면 에러 메시지를 점검하세요.",
             raw_message=message,
         )
 
     return build_calendar_error(
-        code="unknown_error",
+        code="unknown_failure",
         category="unknown",
         message="Naver CalDAV request failed for an unknown reason.",
         retryable=True,
         retry_strategy="backoff",
-        recommended_retry_count=2,
+        recommended_retry_count=1,
         manual_action_required=False,
         alert_recommended=True,
-        recovery_hint="재시도 후에도 반복되면 원인 분석을 위해 원시 오류를 수집하세요.",
+        recovery_hint="잠시 후 재시도하고, 반복되면 로그를 확인하세요.",
+        raw_message=None,
     )
 
 
