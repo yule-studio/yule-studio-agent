@@ -20,6 +20,16 @@ class GitHubIssue:
     owner: str
     scope: str
 
+    def to_dict(self) -> dict:
+        return {
+            "number": self.number,
+            "repository": self.repository,
+            "title": self.title,
+            "url": self.url,
+            "owner": self.owner,
+            "scope": self.scope,
+        }
+
 
 def list_open_issues(limit: int = 30) -> Sequence[GitHubIssue]:
     if not shutil.which("gh"):

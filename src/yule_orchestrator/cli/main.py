@@ -18,6 +18,7 @@ from .calendar import (
 from .context import run_context_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
+from .planning import run_planning_checkpoints_command, run_planning_daily_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,6 +175,97 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep unseen calendar state records for this many days before deletion. Defaults to 30.",
     )
 
+    planning_parser = subparsers.add_parser(
+        "planning",
+        help="Build a daily plan from calendar, issues, and reminder inputs.",
+    )
+    planning_subparsers = planning_parser.add_subparsers(dest="planning_command", required=True)
+
+    planning_daily_parser = planning_subparsers.add_parser(
+        "daily",
+        help="Generate a daily plan for the target date.",
+    )
+    planning_daily_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to today.",
+    )
+    planning_daily_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=20,
+        help="Maximum number of GitHub open issues to include. Defaults to 20.",
+    )
+    planning_daily_parser.add_argument(
+        "--reminders-file",
+        help="Optional JSON file with reminder items.",
+    )
+    planning_daily_parser.add_argument(
+        "--skip-calendar",
+        action="store_true",
+        help="Skip calendar inputs and build the plan from the remaining sources.",
+    )
+    planning_daily_parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub issues and build the plan from the remaining sources.",
+    )
+    planning_daily_parser.add_argument(
+        "--reminder-lead-minutes",
+        type=int,
+        default=5,
+        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+    )
+    planning_daily_parser.add_argument(
+        "--use-ollama",
+        action="store_true",
+        help="Use Ollama to rewrite the Discord briefing in a more natural tone.",
+    )
+    planning_daily_parser.add_argument(
+        "--ollama-model",
+        default="gemma3:latest",
+        help="Ollama model to use when --use-ollama is enabled. Defaults to gemma3:latest.",
+    )
+    planning_daily_parser.add_argument(
+        "--ollama-endpoint",
+        default="http://localhost:11434",
+        help="Ollama API endpoint. Defaults to http://localhost:11434.",
+    )
+    planning_daily_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+
+    planning_checkpoints_parser = planning_subparsers.add_parser(
+        "checkpoints",
+        help="Show due planning checkpoints for the target time window.",
+    )
+    planning_checkpoints_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to the date part of --at or today.",
+    )
+    planning_checkpoints_parser.add_argument(
+        "--at",
+        help="Reference time in ISO datetime format. Defaults to now.",
+    )
+    planning_checkpoints_parser.add_argument(
+        "--reminder-lead-minutes",
+        type=int,
+        default=5,
+        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+    )
+    planning_checkpoints_parser.add_argument(
+        "--window-minutes",
+        type=int,
+        default=10,
+        help="How many minutes ahead to scan for due checkpoints. Defaults to 10.",
+    )
+    planning_checkpoints_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+
     return parser
 
 
@@ -218,6 +310,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     args.cache_retention_days,
                     args.state_retention_days,
                 )
+        if args.command == "planning" and args.planning_command == "daily":
+            return run_planning_daily_command(
+                args.date,
+                args.github_limit,
+                args.reminders_file,
+                args.skip_calendar,
+                args.skip_github,
+                args.reminder_lead_minutes,
+                args.use_ollama,
+                args.ollama_model,
+                args.ollama_endpoint,
+                args.json,
+            )
+        if args.command == "planning" and args.planning_command == "checkpoints":
+            return run_planning_checkpoints_command(
+                args.date,
+                args.at,
+                args.reminder_lead_minutes,
+                args.window_minutes,
+                args.json,
+            )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
