@@ -18,6 +18,7 @@ from .calendar import (
     run_calendar_warmup_command,
 )
 from .context import run_context_command
+from .daily import run_daily_warmup_command
 from .discord import run_discord_bot_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
@@ -79,6 +80,62 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=30,
         help="Maximum number of open issues to fetch. Defaults to 30.",
+    )
+    github_issues_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local GitHub issue cache and fetch fresh issues.",
+    )
+
+    daily_parser = subparsers.add_parser(
+        "daily",
+        help="Run daily orchestration jobs for planning and Discord snapshots.",
+    )
+    daily_subparsers = daily_parser.add_subparsers(dest="daily_command", required=True)
+
+    daily_warmup_parser = daily_subparsers.add_parser(
+        "warmup",
+        help="Sync calendar and GitHub data, then generate today's daily-plan snapshot.",
+    )
+    daily_warmup_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to today.",
+    )
+    daily_warmup_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=20,
+        help="Maximum number of GitHub open issues to include. Defaults to 20.",
+    )
+    daily_warmup_parser.add_argument(
+        "--reminders-file",
+        help="Optional JSON file with reminder items.",
+    )
+    daily_warmup_parser.add_argument(
+        "--skip-calendar",
+        action="store_true",
+        help="Skip calendar sync and build the snapshot from the remaining sources.",
+    )
+    daily_warmup_parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub issue sync and build the snapshot from the remaining sources.",
+    )
+    daily_warmup_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore calendar and GitHub caches during the warmup fetch steps.",
+    )
+    daily_warmup_parser.add_argument(
+        "--reminder-lead-minutes",
+        type=int,
+        default=5,
+        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+    )
+    daily_warmup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
     )
 
     calendar_parser = subparsers.add_parser(
@@ -386,7 +443,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if args.command == "doctor":
             return run_doctor_command(repo_root, args.agent_id)
         if args.command == "github" and args.github_command == "issues":
-            return run_github_issues_command(args.limit)
+            return run_github_issues_command(args.limit, args.force_refresh)
+        if args.command == "daily" and args.daily_command == "warmup":
+            return run_daily_warmup_command(
+                args.date,
+                args.github_limit,
+                args.reminders_file,
+                args.skip_calendar,
+                args.skip_github,
+                args.force_refresh,
+                args.reminder_lead_minutes,
+                args.json,
+            )
         if args.command == "calendar" and args.calendar_command == "events":
             return run_calendar_events_command(
                 args.start_date,
