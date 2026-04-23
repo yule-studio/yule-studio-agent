@@ -50,6 +50,7 @@ def load_json_cache(
     cache_key: str,
     ttl_seconds: Optional[int] = None,
     allow_stale: bool = False,
+    touch: bool = True,
 ) -> Optional[LocalCacheEntry]:
     db_path = _database_path()
     if not db_path.exists():
@@ -93,14 +94,17 @@ def load_json_cache(
             return None
 
         metadata = _deserialize_json_object(row["metadata_json"]) or {}
-        connection.execute(
-            """
-            UPDATE local_cache_entries
-            SET last_accessed_at = ?
-            WHERE namespace = ? AND cache_key = ?
-            """,
-            (now, namespace, cache_key),
-        )
+        last_accessed_at = float(row["last_accessed_at"])
+        if touch:
+            last_accessed_at = now
+            connection.execute(
+                """
+                UPDATE local_cache_entries
+                SET last_accessed_at = ?
+                WHERE namespace = ? AND cache_key = ?
+                """,
+                (now, namespace, cache_key),
+            )
         return LocalCacheEntry(
             namespace=row["namespace"],
             cache_key=row["cache_key"],
@@ -112,7 +116,7 @@ def load_json_cache(
             metadata=metadata,
             fetched_at=fetched_at,
             expires_at=expires_at,
-            last_accessed_at=now,
+            last_accessed_at=last_accessed_at,
             is_stale=is_stale,
         )
 

@@ -112,6 +112,7 @@ def load_prefetched_due_checkpoints(
             namespace=CHECKPOINT_SNAPSHOT_NAMESPACE,
             cache_key=_checkpoint_snapshot_cache_key(plan_date),
             allow_stale=True,
+            touch=False,
         )
         if entry is None:
             all_dates_available = False

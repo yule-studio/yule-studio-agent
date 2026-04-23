@@ -36,7 +36,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self._daily_briefing_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
-            self._checkpoint_storage_lock = asyncio.Lock()
+            self._checkpoint_storage_lock: asyncio.Lock | None = None
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -61,6 +61,7 @@ def run_discord_bot(repo_root: Path) -> None:
             )
             guild = discord.Object(id=config.guild_id)
             await self.tree.sync(guild=guild)
+            self._checkpoint_storage_lock = asyncio.Lock()
             if config.daily_channel_id is not None and config.daily_briefing_time is not None:
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
             if config.effective_checkpoint_channel_id is not None:
@@ -164,7 +165,7 @@ def run_discord_bot(repo_root: Path) -> None:
             while not self.is_closed():
                 started_at = datetime.now().astimezone()
                 try:
-                    async with self._checkpoint_storage_lock:
+                    async with self._checkpoint_lock():
                         await asyncio.to_thread(
                             prefetch_checkpoint_snapshots,
                             started_at,
@@ -195,7 +196,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 discord_module=discord,
                 error_label=_checkpoint_channel_error_label(config),
             )
-            async with self._checkpoint_storage_lock:
+            async with self._checkpoint_lock():
                 due_checkpoints = await asyncio.to_thread(
                     _resolve_due_checkpoints,
                     last_scan,
@@ -219,12 +220,17 @@ def run_discord_bot(repo_root: Path) -> None:
                 content,
                 allowed_mentions=_build_allowed_mentions(discord),
             )
-            async with self._checkpoint_storage_lock:
+            async with self._checkpoint_lock():
                 await asyncio.to_thread(
                     _mark_checkpoints_sent,
                     channel_id,
                     unsent_checkpoints,
                 )
+
+        def _checkpoint_lock(self) -> asyncio.Lock:
+            if self._checkpoint_storage_lock is None:
+                self._checkpoint_storage_lock = asyncio.Lock()
+            return self._checkpoint_storage_lock
 
     bot = YuleDiscordBot()
     try:
@@ -476,6 +482,7 @@ def _has_checkpoint_been_sent(channel_id: int, checkpoint_id: str) -> bool:
     entry = load_json_cache(
         namespace=CHECKPOINT_NOTIFICATION_NAMESPACE,
         cache_key=_checkpoint_cache_key(channel_id, checkpoint_id),
+        touch=False,
     )
     return entry is not None
 

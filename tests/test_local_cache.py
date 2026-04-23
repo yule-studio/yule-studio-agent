@@ -151,3 +151,37 @@ class LocalCacheTestCase(unittest.TestCase):
 
         self.assertIsNotNone(fresh_entry)
         self.assertIsNone(stale_entry)
+
+    def test_touch_false_does_not_update_last_accessed_at(self) -> None:
+        save_json_cache(
+            namespace="calendar-query-results",
+            cache_key="read-only-entry",
+            provider="naver-caldav",
+            range_start="2026-04-22",
+            range_end="2026-04-22",
+            scope_hash="scope-5",
+            ttl_seconds=3600,
+            payload={"value": 5},
+        )
+
+        original_last_accessed_at = time.time() - 120
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "UPDATE local_cache_entries SET last_accessed_at = ? WHERE namespace = ? AND cache_key = ?",
+                (
+                    original_last_accessed_at,
+                    "calendar-query-results",
+                    "read-only-entry",
+                ),
+            )
+
+        entry = load_json_cache(
+            "calendar-query-results",
+            "read-only-entry",
+            ttl_seconds=3600,
+            touch=False,
+        )
+
+        self.assertIsNotNone(entry)
+        assert entry is not None
+        self.assertEqual(entry.last_accessed_at, original_last_accessed_at)

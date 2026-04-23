@@ -88,6 +88,7 @@ def load_daily_plan_snapshot(
         cache_key=daily_plan_snapshot_cache_key(plan_date),
         ttl_seconds=_snapshot_ttl_seconds() if ttl_seconds is None else ttl_seconds,
         allow_stale=allow_stale,
+        touch=False,
     )
     if entry is None:
         return None
