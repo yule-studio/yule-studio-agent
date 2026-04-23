@@ -12,6 +12,7 @@ from ..integrations.github.issues import GitHubIssueError
 from .calendar import (
     run_calendar_cache_cleanup_command,
     run_calendar_cache_inspect_command,
+    run_calendar_categories_command,
     run_calendar_events_command,
     run_calendar_sync_command,
     run_calendar_warmup_command,
@@ -149,6 +150,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-refresh",
         action="store_true",
         help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_categories_parser = calendar_subparsers.add_parser(
+        "categories",
+        help="Show Naver category color codes from the local calendar state database.",
+    )
+    calendar_categories_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_categories_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_categories_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_categories_parser.add_argument(
+        "--include-completed",
+        action="store_true",
+        help="Include completed calendar todos in the category summary.",
     )
 
     calendar_cache_parser = calendar_subparsers.add_parser(
@@ -339,6 +363,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.end_date,
                 args.json,
                 args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "categories":
+            return run_calendar_categories_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.include_completed,
             )
         if args.command == "calendar" and args.calendar_command == "cache":
             if args.calendar_cache_command == "inspect":
