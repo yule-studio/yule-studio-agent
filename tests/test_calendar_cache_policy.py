@@ -8,7 +8,7 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 from yule_orchestrator.integrations.calendar.cache import build_calendar_cache_key, resolve_calendar_cache_ttl_seconds
-from yule_orchestrator.integrations.calendar.models import build_fallback_item_uid
+from yule_orchestrator.integrations.calendar.models import CalendarQueryResult, build_fallback_item_uid
 
 
 class CalendarCachePolicyTestCase(unittest.TestCase):
@@ -59,3 +59,21 @@ class CalendarCachePolicyTestCase(unittest.TestCase):
         right = build_fallback_item_uid("todo", "a::b", "c")
 
         self.assertNotEqual(left, right)
+
+    def test_calendar_query_result_keeps_fetch_metrics(self) -> None:
+        result = CalendarQueryResult(
+            source="naver-caldav",
+            start_date=date(2026, 4, 23),
+            end_date=date(2026, 4, 23),
+            events=[],
+            todos=[],
+            metrics={
+                "calendar_fetch_seconds": 1.2,
+                "todo_fetch_seconds": 0.4,
+            },
+        )
+
+        restored = CalendarQueryResult.from_dict(result.to_dict())
+
+        self.assertEqual(restored.metrics["calendar_fetch_seconds"], 1.2)
+        self.assertEqual(restored.metrics["todo_fetch_seconds"], 0.4)

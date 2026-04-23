@@ -142,6 +142,7 @@ class CalendarQueryResult:
     end_date: date
     events: Sequence[CalendarEvent]
     todos: Sequence[CalendarTodo]
+    metrics: Optional[dict[str, float]] = None
 
     def to_dict(self) -> dict:
         return {
@@ -152,6 +153,7 @@ class CalendarQueryResult:
             "todo_count": len(self.todos),
             "events": [event.to_dict() for event in self.events],
             "todos": [todo.to_dict() for todo in self.todos],
+            "metrics": dict(self.metrics or {}),
         }
 
     @classmethod
@@ -162,9 +164,23 @@ class CalendarQueryResult:
             end_date=date.fromisoformat(payload["end_date"]),
             events=[CalendarEvent.from_dict(event) for event in payload.get("events", [])],
             todos=[CalendarTodo.from_dict(todo) for todo in payload.get("todos", [])],
+            metrics=_parse_metrics(payload.get("metrics")),
         )
 
 
 def build_fallback_item_uid(item_type: str, *parts: str) -> str:
     normalized = json.dumps([item_type, *parts], ensure_ascii=False, separators=(",", ":"))
     return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _parse_metrics(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+
+    metrics: dict[str, float] = {}
+    for key, raw_value in value.items():
+        try:
+            metrics[str(key)] = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+    return metrics

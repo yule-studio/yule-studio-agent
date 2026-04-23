@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time as time_module
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
+from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning.models import PlanningCheckpoint
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
@@ -111,10 +113,35 @@ def run_discord_bot(repo_root: Path) -> None:
                     mention_user_id=config.notify_user_id,
                     snapshot=snapshot,
                 )
-            await _send_channel_message_chunks(
-                channel,
-                content,
-                allowed_mentions=_build_allowed_mentions(discord),
+            send_started_at = datetime.now().astimezone()
+            send_started = time_module.perf_counter()
+            try:
+                await _send_channel_message_chunks(
+                    channel,
+                    content,
+                    allowed_mentions=_build_allowed_mentions(discord),
+                )
+            except Exception as exc:
+                _save_discord_send_metric(
+                    workflow="discord-daily-briefing",
+                    started_at=send_started_at,
+                    duration_seconds=time_module.perf_counter() - send_started,
+                    ok=False,
+                    channel_id=config.daily_channel_id,
+                    message_count=len(split_discord_message(content)),
+                    snapshot_state=_snapshot_state_label(snapshot),
+                    error=str(exc),
+                )
+                raise
+
+            _save_discord_send_metric(
+                workflow="discord-daily-briefing",
+                started_at=send_started_at,
+                duration_seconds=time_module.perf_counter() - send_started,
+                ok=True,
+                channel_id=config.daily_channel_id,
+                message_count=len(split_discord_message(content)),
+                snapshot_state=_snapshot_state_label(snapshot),
             )
 
         async def _run_checkpoint_notification_loop(self) -> None:
@@ -283,6 +310,50 @@ def _checkpoint_channel_error_label(config: DiscordBotConfig) -> str:
     if config.checkpoint_channel_id is not None:
         return "DISCORD_CHECKPOINT_CHANNEL_ID"
     return "DISCORD_DAILY_CHANNEL_ID"
+
+
+def _save_discord_send_metric(
+    *,
+    workflow: str,
+    started_at: datetime,
+    duration_seconds: float,
+    ok: bool,
+    channel_id: int,
+    message_count: int,
+    snapshot_state: str,
+    error: str | None = None,
+) -> None:
+    ended_at = datetime.now().astimezone()
+    step = RuntimeStepMetric(
+        name="discord_send",
+        duration_seconds=duration_seconds,
+        ok=ok,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        metadata={
+            "channel_id": channel_id,
+            "message_count": message_count,
+            "snapshot_state": snapshot_state,
+        },
+        error=error,
+    )
+    save_runtime_metric_run(
+        workflow=workflow,
+        started_at=started_at,
+        ended_at=ended_at,
+        steps=[step],
+        metadata={
+            "channel_id": channel_id,
+            "snapshot_state": snapshot_state,
+        },
+    )
+
+
+def _snapshot_state_label(snapshot: object | None) -> str:
+    if snapshot is None:
+        return "missing"
+    is_stale = getattr(snapshot, "is_stale", False)
+    return "stale" if is_stale else "fresh"
 
 
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
