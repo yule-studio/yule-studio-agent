@@ -28,6 +28,10 @@ def run_daily_warmup_command(
     force_refresh: bool,
     reminder_lead_minutes: int | str | Sequence[int],
     json_output: bool,
+    use_ollama: Optional[bool] = None,
+    ollama_model: Optional[str] = None,
+    ollama_endpoint: Optional[str] = None,
+    ollama_timeout_seconds: Optional[int] = None,
 ) -> int:
     plan_date = _parse_date(date_text)
     started_at = datetime.now().astimezone()
@@ -88,6 +92,10 @@ def run_daily_warmup_command(
             skip_calendar=skip_calendar,
             skip_github=skip_github,
             reminder_lead_minutes=reminder_lead_minutes,
+            use_ollama=use_ollama,
+            ollama_model=ollama_model,
+            ollama_endpoint=ollama_endpoint,
+            ollama_timeout_seconds=ollama_timeout_seconds,
         ),
         metadata=lambda result: {
             "recommended_task_count": result["recommended_task_count"],
@@ -141,6 +149,10 @@ def _build_and_save_snapshot(
     skip_calendar: bool,
     skip_github: bool,
     reminder_lead_minutes: int | str | Sequence[int],
+    use_ollama: Optional[bool],
+    ollama_model: Optional[str],
+    ollama_endpoint: Optional[str],
+    ollama_timeout_seconds: Optional[int],
 ) -> dict[str, Any]:
     reminders = load_reminder_items(reminders_file)
     inputs = collect_planning_inputs(
@@ -153,7 +165,10 @@ def _build_and_save_snapshot(
     envelope = build_daily_plan(
         inputs,
         reminder_lead_minutes=reminder_lead_minutes,
-        use_ollama=False,
+        use_ollama=use_ollama,
+        ollama_model=ollama_model,
+        ollama_endpoint=ollama_endpoint,
+        ollama_timeout_seconds=ollama_timeout_seconds,
     )
     snapshot = save_daily_plan_snapshot(envelope)
     return {

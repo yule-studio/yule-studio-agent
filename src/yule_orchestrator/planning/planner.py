@@ -13,6 +13,7 @@ from .day_profile import load_day_profile
 from .inputs import collect_planning_inputs, load_reminder_items
 from .models import DailyPlan, DailyPlanEnvelope, DailyPlanSummary, PlanningInputs
 from .ollama import generate_human_briefing
+from .ollama_config import load_ollama_planning_config
 from .schedule import (
     DEFAULT_CHECKPOINT_LEAD_MINUTES,
     build_checkpoints,
@@ -29,10 +30,21 @@ from .tasks import build_task_candidates
 def build_daily_plan(
     inputs: PlanningInputs,
     reminder_lead_minutes: int | str | Sequence[int] = DEFAULT_CHECKPOINT_LEAD_MINUTES,
-    use_ollama: bool = False,
-    ollama_model: str = "gemma3:latest",
-    ollama_endpoint: str = "http://localhost:11434",
+    use_ollama: bool | None = None,
+    ollama_model: str | None = None,
+    ollama_endpoint: str | None = None,
+    ollama_timeout_seconds: int | None = None,
 ) -> DailyPlanEnvelope:
+    ollama_config = load_ollama_planning_config()
+    resolved_use_ollama = ollama_config.enabled if use_ollama is None else use_ollama
+    resolved_ollama_model = ollama_model or ollama_config.model
+    resolved_ollama_endpoint = ollama_endpoint or ollama_config.endpoint
+    resolved_ollama_timeout_seconds = (
+        ollama_timeout_seconds
+        if ollama_timeout_seconds is not None
+        else ollama_config.timeout_seconds
+    )
+
     fixed_schedule = build_fixed_schedule(inputs.calendar_events)
     execution_blocks = build_execution_blocks(inputs.calendar_events)
     tasks = build_task_candidates(inputs)
@@ -92,7 +104,7 @@ def build_daily_plan(
     morning_briefing_source = "rules"
     discord_briefing_source = "rules"
 
-    if use_ollama:
+    if resolved_use_ollama:
         try:
             morning_briefing = generate_human_briefing(
                 plan_date=inputs.plan_date.isoformat(),
@@ -101,8 +113,9 @@ def build_daily_plan(
                 prioritized_tasks=tasks,
                 time_block_briefings=time_block_briefings,
                 checkpoints=checkpoints,
-                model=ollama_model,
-                endpoint=ollama_endpoint,
+                model=resolved_ollama_model,
+                endpoint=resolved_ollama_endpoint,
+                timeout_seconds=resolved_ollama_timeout_seconds,
             )
             morning_briefing_source = "ollama"
         except ValueError as exc:

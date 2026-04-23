@@ -97,6 +97,39 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(plan.morning_briefing_source, "rules")
         self.assertEqual(plan.discord_briefing_source, "rules")
 
+    @patch("yule_orchestrator.planning.planner.generate_human_briefing")
+    def test_build_daily_plan_can_use_ollama_from_environment(self, generate_human_briefing_mock) -> None:
+        generate_human_briefing_mock.return_value = "Ollama가 정리한 아침 브리핑입니다."
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[],
+            calendar_todos=[],
+            github_issues=[],
+            reminders=[],
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_PLANNING_ENABLED": "true",
+                "OLLAMA_ENDPOINT": "http://ollama.local:11434",
+                "OLLAMA_MODEL": "qwen2.5:3b",
+                "OLLAMA_TIMEOUT_SECONDS": "45",
+            },
+            clear=False,
+        ):
+            envelope = build_daily_plan(inputs)
+
+        self.assertEqual(envelope.daily_plan.morning_briefing, "Ollama가 정리한 아침 브리핑입니다.")
+        self.assertEqual(envelope.daily_plan.morning_briefing_source, "ollama")
+        generate_human_briefing_mock.assert_called_once()
+        self.assertEqual(generate_human_briefing_mock.call_args.kwargs["endpoint"], "http://ollama.local:11434")
+        self.assertEqual(generate_human_briefing_mock.call_args.kwargs["model"], "qwen2.5:3b")
+        self.assertEqual(generate_human_briefing_mock.call_args.kwargs["timeout_seconds"], 45)
+
     @patch.dict("os.environ", {"YULE_WORK_START_TIME": "09:00"}, clear=False)
     def test_build_daily_plan_creates_focus_blocks(self) -> None:
         inputs = PlanningInputs(

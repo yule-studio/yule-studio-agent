@@ -115,6 +115,10 @@ NAVER_APP_PASSWORD=
 YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
 # YULE_SQLITE_BUSY_TIMEOUT_MS=30000
 # PLANNING_DAILY_SNAPSHOT_SECONDS=21600
+# OLLAMA_PLANNING_ENABLED=false
+# OLLAMA_ENDPOINT=http://localhost:11434
+# OLLAMA_MODEL=gemma3:latest
+# OLLAMA_TIMEOUT_SECONDS=20
 # YULE_WAKE_TIME=06:00
 # YULE_WORK_START_TIME=09:00
 # YULE_COMMUTE_MINUTES=45
@@ -147,6 +151,9 @@ DISCORD_GUILD_ID=
 - `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
 - `YULE_SQLITE_BUSY_TIMEOUT_MS`로 Discord Bot, warmup, snapshot이 같은 SQLite를 만질 때 잠금 대기 시간을 조정할 수 있습니다. 기본값은 30000ms입니다.
 - `PLANNING_DAILY_SNAPSHOT_SECONDS`로 daily-plan snapshot 유효 시간을 조정할 수 있습니다. 기본값은 6시간입니다.
+- `OLLAMA_PLANNING_ENABLED=true`를 설정하면 `planning daily`, `planning snapshot`, `daily warmup`에서 Ollama가 아침 브리핑 문장을 다듬습니다.
+- `OLLAMA_ENDPOINT`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`로 로컬 또는 서버 Ollama 연결 정보를 조정할 수 있습니다.
+- CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
@@ -244,7 +251,9 @@ yule planning daily --date 2026-04-22 --github-limit 10
 yule planning daily --reminders-file reminders.json --json
 yule planning daily --use-ollama --json
 yule planning snapshot --json
+yule planning snapshot --use-ollama --json
 yule daily warmup --json
+yule daily warmup --use-ollama --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 ```
 
