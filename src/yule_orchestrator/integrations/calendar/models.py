@@ -18,6 +18,7 @@ class CalendarEvent:
     source: str
     description: str
     last_modified: Optional[str]
+    category_color: Optional[str] = None
 
     def sort_key(self) -> tuple[int, str, str]:
         return (0 if self.all_day else 1, self.start, self.title.lower())
@@ -33,6 +34,7 @@ class CalendarEvent:
             "source": self.source,
             "description": self.description,
             "last_modified": self.last_modified,
+            "category_color": self.category_color,
         }
 
     @classmethod
@@ -54,6 +56,7 @@ class CalendarEvent:
             source=payload["source"],
             description=payload.get("description", ""),
             last_modified=payload.get("last_modified"),
+            category_color=payload.get("category_color"),
         )
 
 
@@ -74,6 +77,7 @@ class CalendarTodo:
     source: str
     description: str
     last_modified: Optional[str]
+    category_color: Optional[str] = None
 
     def sort_key(self) -> tuple[int, str, str]:
         return (
@@ -99,6 +103,7 @@ class CalendarTodo:
             "source": self.source,
             "description": self.description,
             "last_modified": self.last_modified,
+            "category_color": self.category_color,
         }
 
     @classmethod
@@ -126,6 +131,7 @@ class CalendarTodo:
             source=payload["source"],
             description=payload.get("description", ""),
             last_modified=payload.get("last_modified"),
+            category_color=payload.get("category_color"),
         )
 
 

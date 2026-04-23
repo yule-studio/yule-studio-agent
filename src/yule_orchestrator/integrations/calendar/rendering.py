@@ -28,6 +28,8 @@ def render_calendar_items(result: CalendarQueryResult) -> str:
                 lines.append(f"- [{format_time_range(event.start, event.end)}] {event.title} ({event.calendar_name})")
             if event.description:
                 lines.append(f"  description: {event.description}")
+            if event.category_color:
+                lines.append(f"  category_color: {event.category_color}")
 
     if result.todos:
         if len(lines) > 2:
@@ -49,6 +51,8 @@ def render_calendar_items(result: CalendarQueryResult) -> str:
                 lines.append(f"  completed_at: {format_temporal_value(todo.completed_at, all_day=False)}")
             if todo.description:
                 lines.append(f"  description: {todo.description}")
+            if todo.category_color:
+                lines.append(f"  category_color: {todo.category_color}")
 
     return "\n".join(lines) + "\n"
 

@@ -36,6 +36,7 @@ class CalendarStateRecord:
     percent_complete: Optional[int]
     description: str
     last_modified: Optional[str]
+    category_color: Optional[str]
     payload: dict[str, Any]
     first_seen_at: float
     last_seen_at: float
@@ -61,6 +62,7 @@ class CalendarStateRecord:
             "percent_complete": self.percent_complete,
             "description": self.description,
             "last_modified": self.last_modified,
+            "category_color": self.category_color,
             "payload": self.payload,
             "first_seen_at": self.first_seen_at,
             "last_seen_at": self.last_seen_at,
@@ -136,12 +138,13 @@ def sync_calendar_query_result(
                         percent_complete,
                         description,
                         last_modified,
+                        category_color,
                         state_hash,
                         payload_json,
                         first_seen_at,
                         last_seen_at,
                         last_changed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         item["source"],
@@ -162,6 +165,7 @@ def sync_calendar_query_result(
                         item["percent_complete"],
                         item["description"],
                         item["last_modified"],
+                        item["category_color"],
                         item["state_hash"],
                         item["payload_json"],
                         now,
@@ -197,6 +201,7 @@ def sync_calendar_query_result(
                     percent_complete = ?,
                     description = ?,
                     last_modified = ?,
+                    category_color = ?,
                     state_hash = ?,
                     payload_json = ?,
                     last_seen_at = ?,
@@ -219,6 +224,7 @@ def sync_calendar_query_result(
                     item["percent_complete"],
                     item["description"],
                     item["last_modified"],
+                    item["category_color"],
                     item["state_hash"],
                     item["payload_json"],
                     now,
@@ -275,6 +281,7 @@ def list_calendar_state_records(
                 percent_complete,
                 description,
                 last_modified,
+                category_color,
                 payload_json,
                 first_seen_at,
                 last_seen_at,
@@ -305,6 +312,7 @@ def list_calendar_state_records(
             percent_complete=row["percent_complete"],
             description=row["description"] or "",
             last_modified=row["last_modified"],
+            category_color=row["category_color"],
             payload=_deserialize_json_object(row["payload_json"]) or {},
             first_seen_at=float(row["first_seen_at"]),
             last_seen_at=float(row["last_seen_at"]),
@@ -355,6 +363,7 @@ def _iter_event_records(events: Iterable[CalendarEvent]) -> list[dict[str, Any]]
             percent_complete=None,
             description=event.description,
             last_modified=event.last_modified,
+            category_color=event.category_color,
             payload=event.to_dict(),
             identity_parts=(event.item_uid, event.start, event.end, event.calendar_name),
         )
@@ -381,6 +390,7 @@ def _iter_todo_records(todos: Iterable[CalendarTodo]) -> list[dict[str, Any]]:
             percent_complete=todo.percent_complete,
             description=todo.description,
             last_modified=todo.last_modified,
+            category_color=todo.category_color,
             payload=todo.to_dict(),
             identity_parts=(todo.item_uid, todo.due or "", todo.start or "", todo.calendar_name),
         )
@@ -406,6 +416,7 @@ def _build_item_record(
     percent_complete: Optional[int],
     description: str,
     last_modified: Optional[str],
+    category_color: Optional[str],
     payload: dict[str, Any],
     identity_parts: tuple[str, ...],
 ) -> dict[str, Any]:
@@ -430,6 +441,7 @@ def _build_item_record(
         "percent_complete": percent_complete,
         "description": description,
         "last_modified": last_modified,
+        "category_color": category_color,
         "payload_json": payload_json,
         "state_hash": state_hash,
     }
@@ -511,6 +523,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             percent_complete INTEGER,
             description TEXT,
             last_modified TEXT,
+            category_color TEXT,
             state_hash TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             first_seen_at REAL NOT NULL,
@@ -520,6 +533,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_column(connection, "calendar_item_states", "category_color", "TEXT")
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_calendar_item_states_due_start
@@ -532,6 +546,19 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         ON calendar_item_states (scope_hash, item_type, completed)
         """
     )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_calendar_item_states_category_color
+        ON calendar_item_states (category_color, item_type, completed)
+        """
+    )
+
+
+def _ensure_column(connection: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    if any(row["name"] == column_name for row in rows):
+        return
+    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def _database_path() -> Path:
