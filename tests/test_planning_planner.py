@@ -203,6 +203,7 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(plan.checkpoints[0].remind_at, "2026-04-22T08:50:00+09:00")
         self.assertIn("일정 설명에 적어둔 세부 흐름", plan.checkpoints[0].prompt)
         self.assertEqual(plan.checkpoints[1].remind_at, "2026-04-22T09:55:00+09:00")
+        self.assertIn("마감까지 5분 남았습니다", plan.checkpoints[1].prompt)
         self.assertIn("업무 수행 (회의 없음)", plan.checkpoints[1].prompt)
         self.assertIn("남은 핵심 한 가지", plan.checkpoints[1].prompt)
 
@@ -213,6 +214,51 @@ class PlanningPlannerTestCase(unittest.TestCase):
         )
         self.assertEqual(len(due), 1)
         self.assertEqual(due[0].block_title, "할일 목록 정리")
+
+    def test_build_daily_plan_adds_ten_and_five_minute_execution_checkpoints(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-2",
+                    title="업무 수행",
+                    start="2026-04-22T14:00:00+09:00",
+                    end="2026-04-22T18:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description=(
+                        "2시 ~ 5시 : [Feature] Discord + Ollama 기반 개인 개발 오케스트레이터 구축 마무리\n"
+                        "5시 ~ 6시 : OCI 계정 생성 및 yule-lab 구조, docker 설정 마무리 하기"
+                    ),
+                    last_modified=None,
+                )
+            ],
+            calendar_todos=[],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+        plan = envelope.daily_plan
+        execution_checkpoints = [
+            checkpoint for checkpoint in plan.checkpoints if checkpoint.kind == "wrap_up"
+        ]
+
+        self.assertEqual(
+            [checkpoint.remind_at for checkpoint in execution_checkpoints],
+            [
+                "2026-04-22T16:50:00+09:00",
+                "2026-04-22T16:55:00+09:00",
+                "2026-04-22T17:50:00+09:00",
+                "2026-04-22T17:55:00+09:00",
+            ],
+        )
+        self.assertIn("마감까지 10분 남았습니다", execution_checkpoints[0].prompt)
+        self.assertIn("마감까지 5분 남았습니다", execution_checkpoints[1].prompt)
 
     def test_build_daily_plan_adds_missing_event_plan_checkpoint(self) -> None:
         inputs = PlanningInputs(

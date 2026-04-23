@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Sequence
 
 from .briefings import (
     build_time_block_briefings,
@@ -27,7 +28,7 @@ from .tasks import build_task_candidates
 
 def build_daily_plan(
     inputs: PlanningInputs,
-    reminder_lead_minutes: int = DEFAULT_CHECKPOINT_LEAD_MINUTES,
+    reminder_lead_minutes: int | str | Sequence[int] = DEFAULT_CHECKPOINT_LEAD_MINUTES,
     use_ollama: bool = False,
     ollama_model: str = "gemma3:latest",
     ollama_endpoint: str = "http://localhost:11434",

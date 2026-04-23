@@ -225,7 +225,7 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 
 - `agents/planning-agent/agent.json`과 `agents/planning-agent/CLAUDE.md`를 추가했습니다.
 - Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
-- 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 5분 전 체크포인트 생성에 집중합니다.
+- 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 10분 전/5분 전 체크포인트 생성에 집중합니다.
 - 기본 출력은 짧은 `discord_briefing`과 상세한 `morning_briefing`, `time_block_briefings`, `checkpoints`를 함께 제공합니다.
 - 아침 브리핑은 기상, 출근 준비, 권장 출발 시간, 업무 시작 시간을 구분해서 안내합니다.
 - 추천 집중 작업은 기본적으로 `YULE_WORK_START_TIME` 이후 시간대에 배치합니다.
@@ -252,7 +252,7 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 - 10 ~ 1시 : 업무 수행 (회의 없음)
 ```
 
-기본적으로 각 세부 블록이 끝나기 5분 전에 체크포인트를 만들며, `--reminder-lead-minutes`로 조절할 수 있습니다.
+기본적으로 각 세부 블록이 끝나기 10분 전과 5분 전에 체크포인트를 만들며, `--reminder-lead-minutes 15,5`처럼 조절할 수 있습니다.
 
 실제 알림 전송 전에, 지금 시각 기준으로 곧 울려야 하는 체크포인트만 뽑아내는 명령도 사용할 수 있습니다.
 

@@ -128,9 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_warmup_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     daily_warmup_parser.add_argument(
         "--json",
@@ -321,9 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     planning_daily_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     planning_daily_parser.add_argument(
         "--use-ollama",
@@ -360,9 +364,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     planning_checkpoints_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     planning_checkpoints_parser.add_argument(
         "--window-minutes",
@@ -406,9 +412,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     planning_snapshot_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     planning_snapshot_parser.add_argument(
         "--json",

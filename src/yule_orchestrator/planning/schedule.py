@@ -11,7 +11,7 @@ PLANNING_DAY_START = time(hour=6, minute=0)
 PLANNING_DAY_END = time(hour=23, minute=0)
 MINIMUM_FOCUS_BLOCK_MINUTES = 30
 MAXIMUM_FOCUS_BLOCK_MINUTES = 120
-DEFAULT_CHECKPOINT_LEAD_MINUTES = 5
+DEFAULT_CHECKPOINT_LEAD_MINUTES = (10, 5)
 
 DESCRIPTION_BLOCK_PATTERN = re.compile(
     r"^\s*(?:[-*]\s*)?(?P<start>.+?)\s*(?:~|〜|–|-)\s*(?P<end>.+?)\s*:\s*(?P<title>.+?)\s*$"
@@ -87,9 +87,10 @@ def build_execution_blocks(events: Sequence[CalendarEvent]) -> list[PlanningExec
 
 def build_checkpoints(
     execution_blocks: Sequence[PlanningExecutionBlock],
-    lead_minutes: int,
+    lead_minutes: int | str | Sequence[int],
 ) -> list[PlanningCheckpoint]:
-    if lead_minutes <= 0:
+    lead_minute_values = normalize_checkpoint_lead_minutes(lead_minutes)
+    if not lead_minute_values:
         return []
 
     checkpoints: list[PlanningCheckpoint] = []
@@ -98,32 +99,58 @@ def build_checkpoints(
     for index, block in enumerate(sorted_blocks):
         block_start = datetime.fromisoformat(block.start)
         block_end = datetime.fromisoformat(block.end)
-        remind_at = block_end - timedelta(minutes=lead_minutes)
-        if remind_at <= block_start:
-            continue
 
         next_block = sorted_blocks[index + 1] if index + 1 < len(sorted_blocks) else None
-        prompt = _build_checkpoint_prompt(block, next_block, remind_at)
-        checkpoint_id = build_fallback_item_uid(
-            "planning-checkpoint",
-            block.block_id,
-            remind_at.isoformat(),
-        )
-        checkpoints.append(
-            PlanningCheckpoint(
-                checkpoint_id=checkpoint_id,
-                remind_at=remind_at.isoformat(),
-                source_event_uid=block.source_event_uid,
-                source_event_title=block.source_event_title,
-                block_id=block.block_id,
-                block_title=block.title,
-                block_start=block.start,
-                block_end=block.end,
-                prompt=prompt,
-            )
-        )
+        for lead_minute in lead_minute_values:
+            remind_at = block_end - timedelta(minutes=lead_minute)
+            if remind_at <= block_start:
+                continue
 
+            prompt = _build_checkpoint_prompt(block, next_block, remind_at, lead_minute)
+            checkpoint_id = build_fallback_item_uid(
+                "planning-checkpoint",
+                block.block_id,
+                remind_at.isoformat(),
+                str(lead_minute),
+            )
+            checkpoints.append(
+                PlanningCheckpoint(
+                    checkpoint_id=checkpoint_id,
+                    remind_at=remind_at.isoformat(),
+                    source_event_uid=block.source_event_uid,
+                    source_event_title=block.source_event_title,
+                    block_id=block.block_id,
+                    block_title=block.title,
+                    block_start=block.start,
+                    block_end=block.end,
+                    prompt=prompt,
+                )
+            )
+
+    checkpoints.sort(key=lambda checkpoint: checkpoint.remind_at)
     return checkpoints
+
+
+def normalize_checkpoint_lead_minutes(lead_minutes: int | str | Sequence[int]) -> tuple[int, ...]:
+    if isinstance(lead_minutes, int):
+        raw_values: list[int | str] = [lead_minutes]
+    elif isinstance(lead_minutes, str):
+        raw_values = [part.strip() for part in lead_minutes.split(",") if part.strip()]
+    else:
+        raw_values = list(lead_minutes)
+
+    normalized: list[int] = []
+    for raw_value in raw_values:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("--reminder-lead-minutes must be a positive integer or comma-separated integers.") from exc
+        if value <= 0:
+            continue
+        if value not in normalized:
+            normalized.append(value)
+
+    return tuple(sorted(normalized, reverse=True))
 
 
 def build_missing_event_plan_checkpoints(
@@ -432,17 +459,19 @@ def _build_checkpoint_prompt(
     block: PlanningExecutionBlock,
     next_block: Optional[PlanningExecutionBlock],
     remind_at: datetime,
+    lead_minutes: int,
 ) -> str:
     remind_label = remind_at.strftime("%H:%M")
+    lead_message = f"'{block.title}' 마감까지 {lead_minutes}분 남았습니다."
     if next_block is not None and next_block.source_event_uid == block.source_event_uid:
         next_start = datetime.fromisoformat(next_block.start).strftime("%H:%M")
         return (
-            f"{remind_label} 체크: '{block.title}' 마무리됐는지 확인해 주세요. "
+            f"{remind_label} 체크: {lead_message} "
             f"끝났다면 {next_start}부터 '{next_block.title}'로 넘어가고, "
             "아직 안 끝났다면 남은 핵심 한 가지만 정리해서 다음 블록으로 이월해 주세요."
         )
     return (
-        f"{remind_label} 체크: '{block.title}' 마무리됐는지 확인해 주세요. "
+        f"{remind_label} 체크: {lead_message} "
         f"'{block.source_event_title}' 일정 종료 전 정리할 시간입니다. "
         "완료 여부와 남은 한 가지를 짧게 남겨두면 다음 판단이 쉬워집니다."
     )

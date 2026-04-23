@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..planning import (
     build_daily_plan,
@@ -20,7 +20,7 @@ def run_planning_daily_command(
     reminders_file: Optional[str],
     skip_calendar: bool,
     skip_github: bool,
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     use_ollama: bool,
     ollama_model: str,
     ollama_endpoint: str,
@@ -54,7 +54,7 @@ def run_planning_daily_command(
 def run_planning_checkpoints_command(
     date_text: Optional[str],
     at_text: Optional[str],
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     window_minutes: int,
     json_output: bool,
 ) -> int:
@@ -107,7 +107,7 @@ def run_planning_snapshot_command(
     reminders_file: Optional[str],
     skip_calendar: bool,
     skip_github: bool,
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     json_output: bool,
 ) -> int:
     plan_date = _parse_plan_date(date_text)

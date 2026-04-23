@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 import json
 import time
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.github.issues import list_open_issues
@@ -26,7 +26,7 @@ def run_daily_warmup_command(
     skip_calendar: bool,
     skip_github: bool,
     force_refresh: bool,
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     json_output: bool,
 ) -> int:
     plan_date = _parse_date(date_text)
@@ -140,7 +140,7 @@ def _build_and_save_snapshot(
     reminders_file: Optional[str],
     skip_calendar: bool,
     skip_github: bool,
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
 ) -> dict[str, Any]:
     reminders = load_reminder_items(reminders_file)
     inputs = collect_planning_inputs(
