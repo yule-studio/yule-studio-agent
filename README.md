@@ -62,6 +62,7 @@ macOS + Homebrew 기준:
 - `pip`, `setuptools`, `wheel` 업그레이드
 - 프로젝트 editable install
 - `.env.example`이 있으면 `.env.local` 템플릿 생성
+- 기존 `.env.local`이 있으면 덮어쓰지 않고, `.env.example` 대비 빠진 키만 안내
 
 선택 AI CLI까지 함께 설치하려면:
 
@@ -111,14 +112,16 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
-# YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
+YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
+# DISCORD_CHECKPOINT_CHANNEL_ID=
 # DISCORD_NOTIFY_USER_ID=
-# DISCORD_DAILY_BRIEFING_TIME=16:15
+# DISCORD_DAILY_BRIEFING_TIME=06:00
+# DISCORD_CHECKPOINT_PREFETCH_MINUTES=5
 
 # GITHUB_ISSUES_CACHE_SECONDS=300
 ```
@@ -126,6 +129,7 @@ DISCORD_GUILD_ID=
 - 실제 값은 `.env.local`에 넣습니다.
 - 예시는 `.env.example`에 둡니다.
 - `.env.local`은 Git에 올리지 않습니다.
+- `./scripts/bootstrap`은 기존 `.env.local`을 덮어쓰지 않습니다. 새 설정 키가 추가되면 빠진 키만 알려줍니다.
 - 응답이 오래 걸리면 `NAVER_CALDAV_TIMEOUT_SECONDS`로 요청 타임아웃을 조절할 수 있습니다.
 - `NAVER_CALDAV_CACHE_SECONDS`를 지정하면 해당 TTL을 우선 사용합니다.
 - 값을 지정하지 않으면 오늘이 포함된 범위는 5분, 미래 범위는 30분, 과거 범위는 24시간 동안 SQLite 로컬 캐시를 재사용합니다.
@@ -156,7 +160,6 @@ yule context planning-agent
 yule github issues --limit 30
 yule calendar events --json
 yule calendar sync --force-refresh --json
-yule calendar warmup --force-refresh --json
 yule calendar categories --json
 yule calendar cache inspect --json
 yule calendar cache cleanup --json
@@ -200,6 +203,7 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - `yule calendar sync`는 원격 캘린더를 읽어 캐시와 상태 DB를 채우는 운영용 명령입니다.
 - `yule calendar categories`는 상태 DB에 저장된 `category_color` 숫자 코드와 항목을 보여줍니다.
 - 범주 색상 정책은 [policies/runtime/agents/planning-agent/naver-category-policy.md](policies/runtime/agents/planning-agent/naver-category-policy.md)에 정리합니다.
+- Discord 봇을 오래 켜둘 때는 먼저 `yule calendar sync`로 상태 DB를 채워두면, Planning Agent가 원격 조회보다 로컬 상태를 우선 사용합니다.
 
 ## Planning Agent
 
@@ -240,6 +244,14 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
 
 ```bash
+yule discord bot
+```
+
+아침 브리핑 운영 흐름은 아래 순서를 권장합니다.
+
+```bash
+yule calendar sync --json
+yule planning daily --json
 yule discord bot
 ```
 

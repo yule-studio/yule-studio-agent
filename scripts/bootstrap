@@ -19,7 +19,7 @@ Default setup:
   - Homebrew check
   - Python and GitHub CLI
   - .venv creation
-  - .env.local template creation
+  - .env.local template creation/check
   - editable install
 
 Manual steps still required:
@@ -32,6 +32,8 @@ Quick start after bootstrap:
   yule doctor
   yule context coding-agent
   yule context planning-agent
+  yule calendar sync --json
+  yule calendar categories
   yule planning daily --json
 EOF
 }
@@ -169,6 +171,51 @@ install_optional_ai_tools() {
   fi
 }
 
+check_env_local_template() {
+  if [[ ! -f .env.local || ! -f .env.example ]]; then
+    return
+  fi
+
+  local missing_keys
+  missing_keys="$(
+    .venv/bin/python - <<'PY'
+from pathlib import Path
+
+
+def collect_keys(path: Path) -> set[str]:
+    keys: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            line = line[1:].strip()
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+example_keys = collect_keys(Path(".env.example"))
+local_keys = collect_keys(Path(".env.local"))
+for key in sorted(example_keys - local_keys):
+    print(key)
+PY
+  )"
+
+  if [[ -n "$missing_keys" ]]; then
+    warn ".env.local is missing keys from .env.example:"
+    while IFS= read -r key; do
+      [[ -n "$key" ]] && warn "  - $key"
+    done <<<"$missing_keys"
+    warn "Review .env.example and add only the keys you need. Existing .env.local values were not modified."
+  else
+    log ".env.local contains all known template keys"
+  fi
+}
+
 log "Installing base tools"
 install_brew_if_missing gh gh
 PYTHON_BIN="$(select_python)"
@@ -189,6 +236,8 @@ if [[ ! -f .env.local && -f .env.example ]]; then
   log "Creating .env.local from .env.example"
   cp .env.example .env.local
   warn "Fill in .env.local with local credentials before using calendar integrations."
+else
+  check_env_local_template
 fi
 
 if [[ "$WITH_ALL_TOOLS" -eq 1 ]]; then
@@ -217,7 +266,10 @@ Quick start:
   yule doctor
   yule context coding-agent
   yule context planning-agent
+  yule calendar sync --json
+  yule calendar categories
   yule planning daily --json
+  yule discord bot
 
 EOF
 
