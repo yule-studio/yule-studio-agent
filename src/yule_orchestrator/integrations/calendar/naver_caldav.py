@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
 import os
+import time as time_module
 from typing import Any, Iterable, List, Optional
 
 from ...storage.calendar_state import sync_calendar_query_result
@@ -105,6 +106,11 @@ def _fetch_naver_calendar_items(
     todos = []
     seen_events: set[tuple[str, str, str]] = set()
     seen_todos: set[tuple[str, Optional[str], Optional[str], str]] = set()
+    metrics = {
+        "calendar_fetch_seconds": 0.0,
+        "todo_fetch_seconds": 0.0,
+        "calendar_discovery_seconds": 0.0,
+    }
 
     try:
         with client_cls(
@@ -113,8 +119,10 @@ def _fetch_naver_calendar_items(
             password=config.password,
             timeout=config.timeout_seconds,
         ) as client:
+            discovery_started = time_module.perf_counter()
             principal = client.principal()
             all_calendars = list(principal.calendars())
+            metrics["calendar_discovery_seconds"] += time_module.perf_counter() - discovery_started
             selected_calendars = _select_calendars(all_calendars, config.calendar_name)
             todo_calendars = _select_todo_calendars(
                 all_calendars=all_calendars,
@@ -136,23 +144,34 @@ def _fetch_naver_calendar_items(
                     continue
                 processed_calendar_ids.add(calendar_id)
                 calendar_label = _calendar_label(calendar)
+                include_events = calendar_id in event_calendar_ids
+                include_todos = calendar_id in todo_calendar_ids
+                fetch_started = time_module.perf_counter()
+                event_count_before = len(events)
+                todo_count_before = len(todos)
                 _collect_dated_items(
                     calendar=calendar,
                     calendar_label=calendar_label,
                     calendar_cls=calendar_cls,
                     query_start=query_start,
                     query_end=query_end,
-                    include_events=calendar_id in event_calendar_ids,
-                    include_todos=calendar_id in todo_calendar_ids,
+                    include_events=include_events,
+                    include_todos=include_todos,
                     events=events,
                     todos=todos,
                     seen_events=seen_events,
                     seen_todos=seen_todos,
                 )
+                elapsed = time_module.perf_counter() - fetch_started
+                if include_events or len(events) > event_count_before:
+                    metrics["calendar_fetch_seconds"] += elapsed
+                if include_todos or len(todos) > todo_count_before:
+                    metrics["todo_fetch_seconds"] += elapsed
 
             if not todos:
                 for calendar in todo_calendars:
                     calendar_label = _calendar_label(calendar)
+                    todo_fetch_started = time_module.perf_counter()
                     _collect_search_todos(
                         calendar=calendar,
                         calendar_label=calendar_label,
@@ -164,10 +183,12 @@ def _fetch_naver_calendar_items(
                         todos=todos,
                         seen_todos=seen_todos,
                     )
+                    metrics["todo_fetch_seconds"] += time_module.perf_counter() - todo_fetch_started
 
                 if config.include_all_todos:
                     for calendar in todo_calendars:
                         calendar_label = _calendar_label(calendar)
+                        todo_fetch_started = time_module.perf_counter()
                         _collect_all_todos(
                             calendar=calendar,
                             calendar_label=calendar_label,
@@ -177,6 +198,7 @@ def _fetch_naver_calendar_items(
                             todos=todos,
                             seen_todos=seen_todos,
                         )
+                        metrics["todo_fetch_seconds"] += time_module.perf_counter() - todo_fetch_started
     except CalendarIntegrationError:
         raise
     except Exception as exc:
@@ -190,6 +212,7 @@ def _fetch_naver_calendar_items(
         end_date=end_date,
         events=events,
         todos=todos,
+        metrics={key: round(value, 3) for key, value in metrics.items()},
     )
 
 

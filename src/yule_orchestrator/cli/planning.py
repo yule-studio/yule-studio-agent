@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..planning import (
     build_daily_plan,
     collect_planning_inputs,
     load_reminder_items,
     render_daily_plan,
+    save_daily_plan_snapshot,
     select_due_checkpoints,
 )
 
@@ -19,7 +20,7 @@ def run_planning_daily_command(
     reminders_file: Optional[str],
     skip_calendar: bool,
     skip_github: bool,
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     use_ollama: bool,
     ollama_model: str,
     ollama_endpoint: str,
@@ -53,7 +54,7 @@ def run_planning_daily_command(
 def run_planning_checkpoints_command(
     date_text: Optional[str],
     at_text: Optional[str],
-    reminder_lead_minutes: int,
+    reminder_lead_minutes: int | str | Sequence[int],
     window_minutes: int,
     json_output: bool,
 ) -> int:
@@ -97,6 +98,50 @@ def run_planning_checkpoints_command(
 
     for checkpoint in due_checkpoints:
         print(f"- {checkpoint.remind_at} | {checkpoint.prompt}")
+    return 0
+
+
+def run_planning_snapshot_command(
+    date_text: Optional[str],
+    github_limit: int,
+    reminders_file: Optional[str],
+    skip_calendar: bool,
+    skip_github: bool,
+    reminder_lead_minutes: int | str | Sequence[int],
+    json_output: bool,
+) -> int:
+    plan_date = _parse_plan_date(date_text)
+    reminders = load_reminder_items(reminders_file)
+    inputs = collect_planning_inputs(
+        plan_date=plan_date,
+        github_limit=github_limit,
+        include_calendar=not skip_calendar,
+        include_github=not skip_github,
+        reminders=reminders,
+    )
+    envelope = build_daily_plan(
+        inputs,
+        reminder_lead_minutes=reminder_lead_minutes,
+        use_ollama=False,
+    )
+    snapshot = save_daily_plan_snapshot(envelope)
+    payload = {
+        "action": "planning_snapshot",
+        "plan_date": plan_date.isoformat(),
+        "generated_at": snapshot.generated_at.isoformat(),
+        "is_stale": snapshot.is_stale,
+        "cache_key": snapshot.cache_key,
+        "summary": envelope.daily_plan.summary.to_dict(),
+    }
+
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"saved daily-plan snapshot for {plan_date.isoformat()}")
+    print(f"generated_at: {snapshot.generated_at.isoformat()}")
+    print(f"cache_key: {snapshot.cache_key}")
+    print(f"recommended tasks: {envelope.daily_plan.summary.recommended_task_count}")
     return 0
 
 

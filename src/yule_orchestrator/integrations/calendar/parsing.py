@@ -11,6 +11,7 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
     title = str(title_value) if title_value else "(untitled event)"
     description = extract_description(component)
     last_modified = extract_last_modified(component)
+    category_color = extract_category_color(component)
 
     start_value = component.decoded("dtstart")
     end_value = component.decoded("dtend") if component.get("dtend") else None
@@ -36,6 +37,7 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
             source="naver-caldav",
             description=description,
             last_modified=last_modified,
+            category_color=category_color,
         )
 
     if not isinstance(start_value, datetime):
@@ -62,6 +64,7 @@ def build_event(component: Any, calendar_name: str) -> Optional[CalendarEvent]:
         source="naver-caldav",
         description=description,
         last_modified=last_modified,
+        category_color=category_color,
     )
 
 
@@ -70,6 +73,7 @@ def build_todo(component: Any, calendar_name: str) -> CalendarTodo:
     title = str(title_value) if title_value else "(untitled todo)"
     description = extract_description(component)
     last_modified = extract_last_modified(component)
+    category_color = extract_category_color(component)
 
     start_value = component.decoded("dtstart") if component.get("dtstart") else None
     due_value = component.decoded("due") if component.get("due") else None
@@ -111,6 +115,7 @@ def build_todo(component: Any, calendar_name: str) -> CalendarTodo:
         source="naver-caldav",
         description=description,
         last_modified=last_modified,
+        category_color=category_color,
     )
 
 
@@ -157,6 +162,17 @@ def extract_last_modified(component: Any) -> Optional[str]:
             if value:
                 return str(value).strip()
 
+    return None
+
+
+def extract_category_color(component: Any) -> Optional[str]:
+    for field_name in ("x-naver-category-color", "color"):
+        value = component.get(field_name)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
     return None
 
 

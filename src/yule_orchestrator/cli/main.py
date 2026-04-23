@@ -12,13 +12,21 @@ from ..integrations.github.issues import GitHubIssueError
 from .calendar import (
     run_calendar_cache_cleanup_command,
     run_calendar_cache_inspect_command,
+    run_calendar_categories_command,
     run_calendar_events_command,
+    run_calendar_sync_command,
     run_calendar_warmup_command,
 )
 from .context import run_context_command
+from .daily import run_daily_warmup_command
+from .discord import run_discord_bot_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
-from .planning import run_planning_checkpoints_command, run_planning_daily_command
+from .planning import (
+    run_planning_checkpoints_command,
+    run_planning_daily_command,
+    run_planning_snapshot_command,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,6 +81,64 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help="Maximum number of open issues to fetch. Defaults to 30.",
     )
+    github_issues_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local GitHub issue cache and fetch fresh issues.",
+    )
+
+    daily_parser = subparsers.add_parser(
+        "daily",
+        help="Run daily orchestration jobs for planning and Discord snapshots.",
+    )
+    daily_subparsers = daily_parser.add_subparsers(dest="daily_command", required=True)
+
+    daily_warmup_parser = daily_subparsers.add_parser(
+        "warmup",
+        help="Sync calendar and GitHub data, then generate today's daily-plan snapshot.",
+    )
+    daily_warmup_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to today.",
+    )
+    daily_warmup_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=20,
+        help="Maximum number of GitHub open issues to include. Defaults to 20.",
+    )
+    daily_warmup_parser.add_argument(
+        "--reminders-file",
+        help="Optional JSON file with reminder items.",
+    )
+    daily_warmup_parser.add_argument(
+        "--skip-calendar",
+        action="store_true",
+        help="Skip calendar sync and build the snapshot from the remaining sources.",
+    )
+    daily_warmup_parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub issue sync and build the snapshot from the remaining sources.",
+    )
+    daily_warmup_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore calendar and GitHub caches during the warmup fetch steps.",
+    )
+    daily_warmup_parser.add_argument(
+        "--reminder-lead-minutes",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
+    )
+    daily_warmup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
 
     calendar_parser = subparsers.add_parser(
         "calendar",
@@ -124,6 +190,52 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-refresh",
         action="store_true",
         help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_sync_parser = calendar_subparsers.add_parser(
+        "sync",
+        help="Fetch calendar data and sync it into the local cache/state database.",
+    )
+    calendar_sync_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_sync_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_sync_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_sync_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_categories_parser = calendar_subparsers.add_parser(
+        "categories",
+        help="Show Naver category color codes from the local calendar state database.",
+    )
+    calendar_categories_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_categories_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_categories_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_categories_parser.add_argument(
+        "--include-completed",
+        action="store_true",
+        help="Include completed calendar todos in the category summary.",
     )
 
     calendar_cache_parser = calendar_subparsers.add_parser(
@@ -211,9 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     planning_daily_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     planning_daily_parser.add_argument(
         "--use-ollama",
@@ -250,9 +364,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     planning_checkpoints_parser.add_argument(
         "--reminder-lead-minutes",
-        type=int,
-        default=5,
-        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
     )
     planning_checkpoints_parser.add_argument(
         "--window-minutes",
@@ -264,6 +380,59 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print structured JSON instead of the default text view.",
+    )
+
+    planning_snapshot_parser = planning_subparsers.add_parser(
+        "snapshot",
+        help="Generate and store a daily-plan snapshot for Discord and automation use.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to today.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=20,
+        help="Maximum number of GitHub open issues to include. Defaults to 20.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--reminders-file",
+        help="Optional JSON file with reminder items.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--skip-calendar",
+        action="store_true",
+        help="Skip calendar inputs and build the snapshot from the remaining sources.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub issues and build the snapshot from the remaining sources.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--reminder-lead-minutes",
+        default="10,5",
+        help=(
+            "Comma-separated minutes before a parsed execution block ends to generate checkpoints. "
+            "Defaults to 10,5."
+        ),
+    )
+    planning_snapshot_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+
+    discord_parser = subparsers.add_parser(
+        "discord",
+        help="Run Discord integrations backed by the local orchestrator.",
+    )
+    discord_subparsers = discord_parser.add_subparsers(dest="discord_command", required=True)
+
+    discord_bot_parser = discord_subparsers.add_parser(
+        "bot",
+        help="Run the Discord bot process.",
     )
 
     return parser
@@ -282,7 +451,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if args.command == "doctor":
             return run_doctor_command(repo_root, args.agent_id)
         if args.command == "github" and args.github_command == "issues":
-            return run_github_issues_command(args.limit)
+            return run_github_issues_command(args.limit, args.force_refresh)
+        if args.command == "daily" and args.daily_command == "warmup":
+            return run_daily_warmup_command(
+                args.date,
+                args.github_limit,
+                args.reminders_file,
+                args.skip_calendar,
+                args.skip_github,
+                args.force_refresh,
+                args.reminder_lead_minutes,
+                args.json,
+            )
         if args.command == "calendar" and args.calendar_command == "events":
             return run_calendar_events_command(
                 args.start_date,
@@ -296,6 +476,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.end_date,
                 args.json,
                 args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "sync":
+            return run_calendar_sync_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "categories":
+            return run_calendar_categories_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.include_completed,
             )
         if args.command == "calendar" and args.calendar_command == "cache":
             if args.calendar_cache_command == "inspect":
@@ -331,6 +525,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.window_minutes,
                 args.json,
             )
+        if args.command == "planning" and args.planning_command == "snapshot":
+            return run_planning_snapshot_command(
+                args.date,
+                args.github_limit,
+                args.reminders_file,
+                args.skip_calendar,
+                args.skip_github,
+                args.reminder_lead_minutes,
+                args.json,
+            )
+        if args.command == "discord" and args.discord_command == "bot":
+            return run_discord_bot_command(repo_root)
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

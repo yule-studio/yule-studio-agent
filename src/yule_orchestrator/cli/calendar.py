@@ -13,6 +13,7 @@ from ..integrations.calendar import (
 from ..integrations.calendar.cache import CALENDAR_CACHE_NAMESPACE, list_calendar_cache_entries
 from ..integrations.calendar.errors import build_calendar_validation_error
 from ..storage import (
+    CalendarStateRecord,
     cleanup_calendar_state_records,
     cleanup_json_cache,
     list_calendar_state_records,
@@ -58,6 +59,40 @@ def run_calendar_warmup_command(
     json_output: bool,
     force_refresh: bool,
 ) -> int:
+    return _run_calendar_sync_command(
+        action="warmup",
+        text_verb="warmed calendar cache",
+        start_date_text=start_date_text,
+        end_date_text=end_date_text,
+        json_output=json_output,
+        force_refresh=force_refresh,
+    )
+
+
+def run_calendar_sync_command(
+    start_date_text: Optional[str],
+    end_date_text: Optional[str],
+    json_output: bool,
+    force_refresh: bool,
+) -> int:
+    return _run_calendar_sync_command(
+        action="sync",
+        text_verb="synced calendar state",
+        start_date_text=start_date_text,
+        end_date_text=end_date_text,
+        json_output=json_output,
+        force_refresh=force_refresh,
+    )
+
+
+def _run_calendar_sync_command(
+    action: str,
+    text_verb: str,
+    start_date_text: Optional[str],
+    end_date_text: Optional[str],
+    json_output: bool,
+    force_refresh: bool,
+) -> int:
     start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
     result = list_naver_calendar_items(
         start_date=start_date,
@@ -66,7 +101,7 @@ def run_calendar_warmup_command(
     )
 
     payload = {
-        "action": "warmup",
+        "action": action,
         "database_path": str(local_cache_database_path()),
         "force_refresh": force_refresh,
         **_result_to_dict(result),
@@ -77,7 +112,7 @@ def run_calendar_warmup_command(
         return 0
 
     print(
-        f"warmed calendar cache for {start_date.isoformat()}..{end_date.isoformat()} "
+        f"{text_verb} for {start_date.isoformat()}..{end_date.isoformat()} "
         f"({len(result.events)} events, {len(result.todos)} todos)"
     )
     print(f"cache db: {local_cache_database_path()}")
@@ -154,6 +189,49 @@ def run_calendar_cache_cleanup_command(
     return 0
 
 
+def run_calendar_categories_command(
+    start_date_text: Optional[str],
+    end_date_text: Optional[str],
+    json_output: bool,
+    include_completed: bool,
+) -> int:
+    start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
+    records = list_calendar_state_records(
+        start_date=start_date,
+        end_date=end_date,
+        include_completed=include_completed,
+    )
+    categories = _build_category_summary(records)
+    payload = {
+        "action": "categories",
+        "database_path": str(local_cache_database_path()),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "category_count": len(categories),
+        "item_count": sum(category["item_count"] for category in categories),
+        "categories": categories,
+    }
+
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"calendar categories for {start_date.isoformat()}..{end_date.isoformat()}")
+    print(f"cache db: {payload['database_path']}")
+    if not categories:
+        print("no calendar state records. run `yule calendar sync` first.")
+        return 0
+
+    for category in categories:
+        color_label = category["category_color"] or "no-color"
+        print(f"- color {color_label}: {category['item_count']} item(s)")
+        for item in category["items"]:
+            when_label = item["due_at"] or item["start_at"] or item["end_at"] or "no-date"
+            completed_label = " completed" if item["completed"] else ""
+            print(f"  - {item['item_type']} | {when_label} | {item['title']}{completed_label}")
+    return 0
+
+
 def _resolve_date_range(
     start_date_text: Optional[str],
     end_date_text: Optional[str],
@@ -199,3 +277,42 @@ def _format_cache_entry(entry: dict) -> dict:
 
 def _timestamp_to_iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp).astimezone().isoformat()
+
+
+def _build_category_summary(records: list[CalendarStateRecord]) -> list[dict]:
+    grouped: dict[tuple[str, str], list[CalendarStateRecord]] = {}
+    for record in records:
+        group_key = (record.category_color or "", record.item_type)
+        grouped.setdefault(group_key, []).append(record)
+
+    summaries: list[dict] = []
+    for (category_color, item_type), group_records in grouped.items():
+        group_records.sort(key=lambda record: (record.due_at or record.start_at or record.end_at or "", record.title))
+        summaries.append(
+            {
+                "category_color": category_color or None,
+                "item_type": item_type,
+                "item_count": len(group_records),
+                "items": [
+                    {
+                        "item_type": record.item_type,
+                        "calendar_name": record.calendar_name,
+                        "title": record.title,
+                        "start_at": record.start_at,
+                        "end_at": record.end_at,
+                        "due_at": record.due_at,
+                        "completed": record.completed,
+                    }
+                    for record in group_records
+                ],
+            }
+        )
+
+    summaries.sort(
+        key=lambda category: (
+            category["category_color"] is None,
+            category["category_color"] or "",
+            category["item_type"],
+        )
+    )
+    return summaries

@@ -5,10 +5,13 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from threading import RLock
 import time
 from typing import Any, Mapping, Optional, Sequence
 
 DEFAULT_STALE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 30_000
+_LOCAL_CACHE_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -47,12 +50,13 @@ def load_json_cache(
     cache_key: str,
     ttl_seconds: Optional[int] = None,
     allow_stale: bool = False,
+    touch: bool = True,
 ) -> Optional[LocalCacheEntry]:
     db_path = _database_path()
     if not db_path.exists():
         return None
 
-    with _connect(db_path) as connection:
+    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         row = connection.execute(
             """
@@ -90,14 +94,17 @@ def load_json_cache(
             return None
 
         metadata = _deserialize_json_object(row["metadata_json"]) or {}
-        connection.execute(
-            """
-            UPDATE local_cache_entries
-            SET last_accessed_at = ?
-            WHERE namespace = ? AND cache_key = ?
-            """,
-            (now, namespace, cache_key),
-        )
+        last_accessed_at = float(row["last_accessed_at"])
+        if touch:
+            last_accessed_at = now
+            connection.execute(
+                """
+                UPDATE local_cache_entries
+                SET last_accessed_at = ?
+                WHERE namespace = ? AND cache_key = ?
+                """,
+                (now, namespace, cache_key),
+            )
         return LocalCacheEntry(
             namespace=row["namespace"],
             cache_key=row["cache_key"],
@@ -109,7 +116,7 @@ def load_json_cache(
             metadata=metadata,
             fetched_at=fetched_at,
             expires_at=expires_at,
-            last_accessed_at=now,
+            last_accessed_at=last_accessed_at,
             is_stale=is_stale,
         )
 
@@ -135,7 +142,7 @@ def save_json_cache(
     now = time.time()
     expires_at = now + ttl_seconds
 
-    with _connect(db_path) as connection:
+    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         connection.execute(
             """
@@ -213,7 +220,7 @@ def list_json_cache_entries(
     if clauses:
         where_clause = "WHERE " + " AND ".join(clauses)
 
-    with _connect(db_path) as connection:
+    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         rows = connection.execute(
             f"""
@@ -280,7 +287,7 @@ def cleanup_json_cache(
         clauses.append("namespace = ?")
         params.append(namespace)
 
-    with _connect(db_path) as connection:
+    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         cursor = connection.execute(
             f"DELETE FROM local_cache_entries WHERE {' AND '.join(clauses)}",
@@ -294,10 +301,30 @@ def local_cache_database_path() -> Path:
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
+    busy_timeout_ms = _sqlite_busy_timeout_ms()
+    connection = sqlite3.connect(db_path, timeout=busy_timeout_ms / 1000)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+    _try_sqlite_pragma(connection, "PRAGMA journal_mode = WAL")
+    _try_sqlite_pragma(connection, "PRAGMA synchronous = NORMAL")
     return connection
+
+
+def _sqlite_busy_timeout_ms() -> int:
+    configured_value = os.getenv("YULE_SQLITE_BUSY_TIMEOUT_MS")
+    if configured_value and configured_value.strip():
+        try:
+            return max(1000, int(configured_value.strip()))
+        except ValueError:
+            return DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+
+
+def _try_sqlite_pragma(connection: sqlite3.Connection, statement: str) -> None:
+    try:
+        connection.execute(statement)
+    except sqlite3.OperationalError:
+        pass
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:

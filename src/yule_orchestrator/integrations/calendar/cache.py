@@ -81,6 +81,7 @@ def save_calendar_cache(
                 "source": result.source,
                 "event_count": len(result.events),
                 "todo_count": len(result.todos),
+                "metrics": dict(result.metrics or {}),
             },
         )
     except Exception:

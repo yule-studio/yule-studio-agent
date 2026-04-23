@@ -25,6 +25,16 @@ class PlanningSourceStatus:
             "warning": self.warning,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningSourceStatus":
+        return cls(
+            source_id=str(payload["source_id"]),
+            source_type=str(payload["source_type"]),
+            ok=bool(payload["ok"]),
+            item_count=int(payload["item_count"]),
+            warning=_optional_string(payload.get("warning")),
+        )
+
 
 @dataclass(frozen=True)
 class ReminderItem:
@@ -88,6 +98,39 @@ class PlanningInputs:
             "reminders": [reminder.to_dict() for reminder in self.reminders],
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningInputs":
+        return cls(
+            plan_date=date.fromisoformat(str(payload["plan_date"])),
+            timezone=str(payload["timezone"]),
+            source_statuses=[
+                PlanningSourceStatus.from_dict(item)
+                for item in payload.get("source_statuses", [])
+                if isinstance(item, dict)
+            ],
+            warnings=[str(warning) for warning in payload.get("warnings", [])],
+            calendar_events=[
+                CalendarEvent.from_dict(item)
+                for item in payload.get("calendar_events", [])
+                if isinstance(item, dict)
+            ],
+            calendar_todos=[
+                CalendarTodo.from_dict(item)
+                for item in payload.get("calendar_todos", [])
+                if isinstance(item, dict)
+            ],
+            github_issues=[
+                GitHubIssue.from_dict(item)
+                for item in payload.get("github_issues", [])
+                if isinstance(item, dict)
+            ],
+            reminders=[
+                ReminderItem.from_dict(item)
+                for item in payload.get("reminders", [])
+                if isinstance(item, dict)
+            ],
+        )
+
 
 @dataclass(frozen=True)
 class DailyPlanSummary:
@@ -110,6 +153,18 @@ class DailyPlanSummary:
             "available_focus_minutes": self.available_focus_minutes,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "DailyPlanSummary":
+        return cls(
+            fixed_event_count=int(payload["fixed_event_count"]),
+            all_day_event_count=int(payload["all_day_event_count"]),
+            todo_count=int(payload["todo_count"]),
+            github_issue_count=int(payload["github_issue_count"]),
+            reminder_count=int(payload["reminder_count"]),
+            recommended_task_count=int(payload["recommended_task_count"]),
+            available_focus_minutes=int(payload["available_focus_minutes"]),
+        )
+
 
 @dataclass(frozen=True)
 class PlanningTaskCandidate:
@@ -123,6 +178,8 @@ class PlanningTaskCandidate:
     estimated_minutes: int
     reasons: Sequence[str]
     coding_candidate: bool
+    category_color: Optional[str] = None
+    category_label: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -136,7 +193,26 @@ class PlanningTaskCandidate:
             "estimated_minutes": self.estimated_minutes,
             "reasons": list(self.reasons),
             "coding_candidate": self.coding_candidate,
+            "category_color": self.category_color,
+            "category_label": self.category_label,
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningTaskCandidate":
+        return cls(
+            task_id=str(payload["task_id"]),
+            source_type=str(payload["source_type"]),
+            title=str(payload["title"]),
+            description=str(payload.get("description") or ""),
+            due_date=_optional_string(payload.get("due_date")),
+            priority_score=int(payload["priority_score"]),
+            priority_level=str(payload["priority_level"]),
+            estimated_minutes=int(payload["estimated_minutes"]),
+            reasons=[str(reason) for reason in payload.get("reasons", [])],
+            coding_candidate=bool(payload["coding_candidate"]),
+            category_color=_optional_string(payload.get("category_color")),
+            category_label=_optional_string(payload.get("category_label")),
+        )
 
 
 @dataclass(frozen=True)
@@ -157,6 +233,17 @@ class PlanningTimeBlock:
             "task_id": self.task_id,
             "locked": self.locked,
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningTimeBlock":
+        return cls(
+            start=str(payload["start"]),
+            end=str(payload["end"]),
+            block_type=str(payload["block_type"]),
+            title=str(payload["title"]),
+            task_id=_optional_string(payload.get("task_id")),
+            locked=bool(payload["locked"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -180,6 +267,18 @@ class PlanningExecutionBlock:
             "description": self.description,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningExecutionBlock":
+        return cls(
+            block_id=str(payload["block_id"]),
+            source_event_uid=str(payload["source_event_uid"]),
+            source_event_title=str(payload["source_event_title"]),
+            start=str(payload["start"]),
+            end=str(payload["end"]),
+            title=str(payload["title"]),
+            description=str(payload.get("description") or ""),
+        )
+
 
 @dataclass(frozen=True)
 class PlanningBlockBriefing:
@@ -201,6 +300,18 @@ class PlanningBlockBriefing:
             "source_ref": self.source_ref,
             "briefing": self.briefing,
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningBlockBriefing":
+        return cls(
+            briefing_id=str(payload["briefing_id"]),
+            start=str(payload["start"]),
+            end=str(payload["end"]),
+            title=str(payload["title"]),
+            block_type=str(payload["block_type"]),
+            source_ref=_optional_string(payload.get("source_ref")),
+            briefing=str(payload["briefing"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -229,6 +340,21 @@ class PlanningCheckpoint:
             "prompt": self.prompt,
             "kind": self.kind,
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningCheckpoint":
+        return cls(
+            checkpoint_id=str(payload["checkpoint_id"]),
+            remind_at=str(payload["remind_at"]),
+            source_event_uid=str(payload["source_event_uid"]),
+            source_event_title=str(payload["source_event_title"]),
+            block_id=str(payload["block_id"]),
+            block_title=str(payload["block_title"]),
+            block_start=str(payload["block_start"]),
+            block_end=str(payload["block_end"]),
+            prompt=str(payload["prompt"]),
+            kind=str(payload.get("kind") or "wrap_up"),
+        )
 
 
 @dataclass(frozen=True)
@@ -270,6 +396,59 @@ class DailyPlan:
             "discord_briefing_source": self.discord_briefing_source,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "DailyPlan":
+        return cls(
+            plan_date=date.fromisoformat(str(payload["plan_date"])),
+            timezone=str(payload["timezone"]),
+            source_statuses=[
+                PlanningSourceStatus.from_dict(item)
+                for item in payload.get("source_statuses", [])
+                if isinstance(item, dict)
+            ],
+            warnings=[str(warning) for warning in payload.get("warnings", [])],
+            summary=DailyPlanSummary.from_dict(payload["summary"]),
+            fixed_schedule=[
+                PlanningTimeBlock.from_dict(item)
+                for item in payload.get("fixed_schedule", [])
+                if isinstance(item, dict)
+            ],
+            execution_blocks=[
+                PlanningExecutionBlock.from_dict(item)
+                for item in payload.get("execution_blocks", [])
+                if isinstance(item, dict)
+            ],
+            prioritized_tasks=[
+                PlanningTaskCandidate.from_dict(item)
+                for item in payload.get("prioritized_tasks", [])
+                if isinstance(item, dict)
+            ],
+            suggested_time_blocks=[
+                PlanningTimeBlock.from_dict(item)
+                for item in payload.get("suggested_time_blocks", [])
+                if isinstance(item, dict)
+            ],
+            morning_briefing=str(payload["morning_briefing"]),
+            time_block_briefings=[
+                PlanningBlockBriefing.from_dict(item)
+                for item in payload.get("time_block_briefings", [])
+                if isinstance(item, dict)
+            ],
+            checkpoints=[
+                PlanningCheckpoint.from_dict(item)
+                for item in payload.get("checkpoints", [])
+                if isinstance(item, dict)
+            ],
+            coding_agent_handoff=[
+                PlanningTaskCandidate.from_dict(item)
+                for item in payload.get("coding_agent_handoff", [])
+                if isinstance(item, dict)
+            ],
+            discord_briefing=str(payload["discord_briefing"]),
+            morning_briefing_source=str(payload.get("morning_briefing_source") or "rules"),
+            discord_briefing_source=str(payload.get("discord_briefing_source") or "rules"),
+        )
+
 
 def _optional_string(value: object) -> Optional[str]:
     if value is None:
@@ -299,3 +478,10 @@ class DailyPlanEnvelope:
             "inputs": self.inputs.to_dict(),
             "daily_plan": self.daily_plan.to_dict(),
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "DailyPlanEnvelope":
+        return cls(
+            inputs=PlanningInputs.from_dict(payload["inputs"]),
+            daily_plan=DailyPlan.from_dict(payload["daily_plan"]),
+        )

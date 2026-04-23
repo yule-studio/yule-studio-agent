@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 
 from ..integrations.calendar.models import CalendarTodo
 from ..integrations.github.issues import GitHubIssue
+from .category_policy import resolve_naver_category_policy
 from .models import PlanningInputs, PlanningTaskCandidate, ReminderItem
 
 
@@ -30,6 +31,7 @@ def _build_todo_candidate(plan_date: date, todo: CalendarTodo) -> PlanningTaskCa
     score = 40
     reasons = ["calendar todo"]
     due_date = _date_only(todo.due or todo.start)
+    category_policy = resolve_naver_category_policy(todo.category_color)
 
     if due_date is not None:
         offset = (due_date - plan_date).days
@@ -47,6 +49,10 @@ def _build_todo_candidate(plan_date: date, todo: CalendarTodo) -> PlanningTaskCa
     score += keyword_score
     reasons.extend(keyword_reasons)
 
+    if category_policy is not None:
+        score += category_policy.priority_boost
+        reasons.append(f"naver category: {category_policy.reason_label}")
+
     return PlanningTaskCandidate(
         task_id=f"todo:{todo.item_uid}",
         source_type="calendar_todo",
@@ -57,7 +63,10 @@ def _build_todo_candidate(plan_date: date, todo: CalendarTodo) -> PlanningTaskCa
         priority_level=_priority_level(score),
         estimated_minutes=60,
         reasons=reasons,
-        coding_candidate=_looks_like_coding_work(todo.title, todo.description),
+        coding_candidate=_looks_like_coding_work(todo.title, todo.description)
+        or bool(category_policy and category_policy.coding_candidate),
+        category_color=todo.category_color,
+        category_label=category_policy.label if category_policy is not None else None,
     )
 
 

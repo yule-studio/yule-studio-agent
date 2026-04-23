@@ -9,6 +9,8 @@ description = "Personal agent orchestration platform for Yule Studio workflows."
 requires-python = ">=3.9"
 dependencies = [
   "caldav>=1.4.0",
+  "certifi>=2024.0.0",
+  "discord.py>=2.4.0",
   "icalendar>=6.0.0",
 ]
 
