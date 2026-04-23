@@ -11,10 +11,11 @@ from .commands import register_discord_commands
 from .config import DiscordBotConfig
 from .formatter import (
     format_checkpoints_message,
+    format_missing_plan_snapshot_message,
     format_plan_today_message,
     split_discord_message,
 )
-from .planning_runtime import build_due_checkpoints, build_plan_today_envelope
+from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
 from .planning_runtime import load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
@@ -99,11 +100,17 @@ def run_discord_bot(repo_root: Path) -> None:
                 error_label="DISCORD_DAILY_CHANNEL_ID",
             )
             plan_date = datetime.now().astimezone().date()
-            envelope = await asyncio.to_thread(build_plan_today_envelope, plan_date)
-            content = format_plan_today_message(
-                envelope,
-                mention_user_id=config.notify_user_id,
-            )
+            snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+            if snapshot is None:
+                content = format_missing_plan_snapshot_message(
+                    mention_user_id=config.notify_user_id,
+                )
+            else:
+                content = format_plan_today_message(
+                    snapshot.envelope,
+                    mention_user_id=config.notify_user_id,
+                    snapshot=snapshot,
+                )
             await _send_channel_message_chunks(
                 channel,
                 content,

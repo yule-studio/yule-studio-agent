@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
+from ..planning.snapshots import DailyPlanSnapshot
 
 DISCORD_MESSAGE_LIMIT = 1900
 
@@ -11,10 +12,19 @@ DISCORD_MESSAGE_LIMIT = 1900
 def format_plan_today_message(
     envelope: DailyPlanEnvelope,
     mention_user_id: Optional[int] = None,
+    snapshot: Optional[DailyPlanSnapshot] = None,
 ) -> str:
     plan = envelope.daily_plan
     lines: list[str] = []
     _append_mention(lines, mention_user_id)
+    if snapshot is not None:
+        if snapshot.is_stale:
+            lines.append(
+                f"마지막 동기화 기준 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+        else:
+            lines.append(f"스냅샷 기준 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append("")
     lines.append("**오늘 브리핑**")
     lines.extend(_non_empty_lines(plan.discord_briefing))
     lines.append("")
@@ -45,6 +55,23 @@ def format_plan_today_message(
             lines.append(f"- {checkpoint.prompt}")
 
     return "\n".join(lines).strip()
+
+
+def format_missing_plan_snapshot_message(
+    *,
+    mention_user_id: Optional[int] = None,
+) -> str:
+    lines: list[str] = []
+    _append_mention(lines, mention_user_id)
+    lines.append("아직 오늘 daily-plan snapshot이 없습니다.")
+    lines.append("아래 순서로 로컬 동기화를 먼저 실행한 뒤 다시 확인해 주세요.")
+    lines.append("")
+    lines.append("```bash")
+    lines.append("yule calendar sync --json")
+    lines.append("yule github issues --limit 30")
+    lines.append("yule planning snapshot --json")
+    lines.append("```")
+    return "\n".join(lines)
 
 
 def format_checkpoints_message(

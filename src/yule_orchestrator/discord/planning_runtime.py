@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 
 from ..planning import build_daily_plan, collect_planning_inputs
 from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
+from ..planning.snapshots import DailyPlanSnapshot, load_daily_plan_snapshot
 from ..storage import load_json_cache, save_json_cache
 
 CHECKPOINT_SNAPSHOT_NAMESPACE = "planning-checkpoint-snapshots"
@@ -20,15 +21,15 @@ def build_plan_today_envelope(
     return build_daily_plan(inputs, use_ollama=use_ollama)
 
 
+def load_plan_today_snapshot(plan_date: date) -> DailyPlanSnapshot | None:
+    return load_daily_plan_snapshot(plan_date, allow_stale=True)
+
+
 def build_daily_checkpoints_for_date(plan_date: date) -> list[PlanningCheckpoint]:
-    inputs = collect_planning_inputs(
-        plan_date=plan_date,
-        include_calendar=True,
-        include_github=False,
-        reminders=[],
-    )
-    envelope = build_daily_plan(inputs)
-    return list(envelope.daily_plan.checkpoints)
+    snapshot = load_daily_plan_snapshot(plan_date, allow_stale=True)
+    if snapshot is None:
+        return []
+    return list(snapshot.envelope.daily_plan.checkpoints)
 
 
 def build_due_checkpoints(
@@ -44,14 +45,12 @@ def build_due_checkpoints(
     plan_date = window_start.date()
 
     while plan_date <= window_end.date():
-        inputs = collect_planning_inputs(
-            plan_date=plan_date,
-            include_calendar=True,
-            include_github=False,
-            reminders=[],
-        )
-        envelope = build_daily_plan(inputs)
-        for checkpoint in envelope.daily_plan.checkpoints:
+        snapshot = load_daily_plan_snapshot(plan_date, allow_stale=True)
+        if snapshot is None:
+            plan_date += timedelta(days=1)
+            continue
+
+        for checkpoint in snapshot.envelope.daily_plan.checkpoints:
             remind_at = datetime.fromisoformat(checkpoint.remind_at)
             if window_start <= remind_at <= window_end:
                 checkpoints[checkpoint.checkpoint_id] = checkpoint

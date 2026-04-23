@@ -4,8 +4,13 @@ import asyncio
 from datetime import date, datetime
 from typing import Any
 
-from .formatter import format_checkpoints_message, format_plan_today_message, split_discord_message
-from .planning_runtime import build_due_checkpoints, build_plan_today_envelope
+from .formatter import (
+    format_checkpoints_message,
+    format_missing_plan_snapshot_message,
+    format_plan_today_message,
+    split_discord_message,
+)
+from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
 
 
 def register_discord_commands(
@@ -24,20 +29,21 @@ def register_discord_commands(
     async def ping(interaction: discord.Interaction) -> None:
         await interaction.response.send_message("pong")
 
-    @bot.tree.command(name="plan_today", description="오늘 Planning Agent 브리핑을 생성합니다.", guild=guild)
-    @app_commands.describe(use_ollama="Ollama로 아침 브리핑을 더 자연스럽게 다듬을지 선택합니다.")
-    async def plan_today(interaction: discord.Interaction, use_ollama: bool = False) -> None:
+    @bot.tree.command(name="plan_today", description="저장된 오늘 daily-plan snapshot을 보여줍니다.", guild=guild)
+    async def plan_today(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         plan_date = date.today()
-        envelope = await asyncio.to_thread(
-            build_plan_today_envelope,
-            plan_date,
-            use_ollama=use_ollama,
-        )
-        content = format_plan_today_message(
-            envelope,
-            mention_user_id=notify_user_id or interaction.user.id,
-        )
+        snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+        if snapshot is None:
+            content = format_missing_plan_snapshot_message(
+                mention_user_id=notify_user_id or interaction.user.id,
+            )
+        else:
+            content = format_plan_today_message(
+                snapshot.envelope,
+                mention_user_id=notify_user_id or interaction.user.id,
+                snapshot=snapshot,
+            )
         await _send_message_chunks(
             interaction,
             content,
