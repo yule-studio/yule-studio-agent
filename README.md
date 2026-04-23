@@ -113,6 +113,12 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
+# YULE_WAKE_TIME=06:00
+# YULE_WORK_START_TIME=09:00
+# YULE_COMMUTE_MINUTES=45
+# YULE_DEPARTURE_BUFFER_MINUTES=10
+# YULE_HOME_AREA=신정동
+# YULE_WORK_AREA=마곡
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
@@ -137,6 +143,8 @@ DISCORD_GUILD_ID=
 - 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
 - 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
 - `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
+- `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
+- `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
@@ -211,6 +219,10 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
 - 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 5분 전 체크포인트 생성에 집중합니다.
 - 기본 출력은 짧은 `discord_briefing`과 상세한 `morning_briefing`, `time_block_briefings`, `checkpoints`를 함께 제공합니다.
+- 아침 브리핑은 기상, 출근 준비, 권장 출발 시간, 업무 시작 시간을 구분해서 안내합니다.
+- 추천 집중 작업은 기본적으로 `YULE_WORK_START_TIME` 이후 시간대에 배치합니다.
+- 일정 이벤트가 없으면 전체 일정 작성 안내를 포함합니다.
+- 설명이 비어 있는 일정 이벤트는 시작 10분 전에 세부 계획 작성 체크포인트를 생성합니다.
 
 ```bash
 yule planning daily --json
