@@ -13,6 +13,7 @@ from .calendar import (
     run_calendar_cache_cleanup_command,
     run_calendar_cache_inspect_command,
     run_calendar_events_command,
+    run_calendar_sync_command,
     run_calendar_warmup_command,
 )
 from .context import run_context_command
@@ -122,6 +123,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print structured JSON instead of the default text view.",
     )
     calendar_warmup_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the local cache and fetch fresh calendar data.",
+    )
+
+    calendar_sync_parser = calendar_subparsers.add_parser(
+        "sync",
+        help="Fetch calendar data and sync it into the local cache/state database.",
+    )
+    calendar_sync_parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format. Defaults to today.",
+    )
+    calendar_sync_parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format. Defaults to the same value as --start-date.",
+    )
+    calendar_sync_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+    calendar_sync_parser.add_argument(
         "--force-refresh",
         action="store_true",
         help="Ignore the local cache and fetch fresh calendar data.",
@@ -304,6 +328,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         if args.command == "calendar" and args.calendar_command == "warmup":
             return run_calendar_warmup_command(
+                args.start_date,
+                args.end_date,
+                args.json,
+                args.force_refresh,
+            )
+        if args.command == "calendar" and args.calendar_command == "sync":
+            return run_calendar_sync_command(
                 args.start_date,
                 args.end_date,
                 args.json,

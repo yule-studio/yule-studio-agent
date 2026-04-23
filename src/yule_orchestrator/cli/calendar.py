@@ -58,6 +58,40 @@ def run_calendar_warmup_command(
     json_output: bool,
     force_refresh: bool,
 ) -> int:
+    return _run_calendar_sync_command(
+        action="warmup",
+        text_verb="warmed calendar cache",
+        start_date_text=start_date_text,
+        end_date_text=end_date_text,
+        json_output=json_output,
+        force_refresh=force_refresh,
+    )
+
+
+def run_calendar_sync_command(
+    start_date_text: Optional[str],
+    end_date_text: Optional[str],
+    json_output: bool,
+    force_refresh: bool,
+) -> int:
+    return _run_calendar_sync_command(
+        action="sync",
+        text_verb="synced calendar state",
+        start_date_text=start_date_text,
+        end_date_text=end_date_text,
+        json_output=json_output,
+        force_refresh=force_refresh,
+    )
+
+
+def _run_calendar_sync_command(
+    action: str,
+    text_verb: str,
+    start_date_text: Optional[str],
+    end_date_text: Optional[str],
+    json_output: bool,
+    force_refresh: bool,
+) -> int:
     start_date, end_date = _resolve_date_range(start_date_text, end_date_text)
     result = list_naver_calendar_items(
         start_date=start_date,
@@ -66,7 +100,7 @@ def run_calendar_warmup_command(
     )
 
     payload = {
-        "action": "warmup",
+        "action": action,
         "database_path": str(local_cache_database_path()),
         "force_refresh": force_refresh,
         **_result_to_dict(result),
@@ -77,7 +111,7 @@ def run_calendar_warmup_command(
         return 0
 
     print(
-        f"warmed calendar cache for {start_date.isoformat()}..{end_date.isoformat()} "
+        f"{text_verb} for {start_date.isoformat()}..{end_date.isoformat()} "
         f"({len(result.events)} events, {len(result.todos)} todos)"
     )
     print(f"cache db: {local_cache_database_path()}")
