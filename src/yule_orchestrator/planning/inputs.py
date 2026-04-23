@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
 from ..integrations.calendar.models import CalendarEvent, CalendarTodo
 from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
+from ..storage import list_calendar_state_records
 from .models import PlanningInputs, PlanningSourceStatus, ReminderItem
 
 
@@ -55,30 +56,43 @@ def collect_planning_inputs(
     reminder_items = list(reminders or [])
 
     if include_calendar:
-        try:
-            result = list_naver_calendar_items(plan_date, plan_date)
-            calendar_events = result.events
-            calendar_todos = result.todos
+        state_events, state_todos = _load_calendar_items_from_state(plan_date)
+        if state_events or state_todos:
+            calendar_events = state_events
+            calendar_todos = state_todos
             source_statuses.append(
                 PlanningSourceStatus(
-                    source_id="calendar",
+                    source_id="calendar-state",
                     source_type="calendar",
                     ok=True,
                     item_count=len(calendar_events) + len(calendar_todos),
                 )
             )
-        except CalendarIntegrationError as exc:
-            warning = exc.details.message
-            warnings.append(f"calendar: {warning}")
-            source_statuses.append(
-                PlanningSourceStatus(
-                    source_id="calendar",
-                    source_type="calendar",
-                    ok=False,
-                    item_count=0,
-                    warning=warning,
+        else:
+            try:
+                result = list_naver_calendar_items(plan_date, plan_date)
+                calendar_events = result.events
+                calendar_todos = result.todos
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="calendar",
+                        source_type="calendar",
+                        ok=True,
+                        item_count=len(calendar_events) + len(calendar_todos),
+                    )
                 )
-            )
+            except CalendarIntegrationError as exc:
+                warning = exc.details.message
+                warnings.append(f"calendar: {warning}")
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="calendar",
+                        source_type="calendar",
+                        ok=False,
+                        item_count=0,
+                        warning=warning,
+                    )
+                )
 
     if include_github:
         try:
@@ -122,4 +136,28 @@ def collect_planning_inputs(
         calendar_todos=calendar_todos,
         github_issues=github_issues,
         reminders=reminder_items,
+    )
+
+
+def _load_calendar_items_from_state(plan_date: date) -> tuple[list[CalendarEvent], list[CalendarTodo]]:
+    records = list_calendar_state_records(
+        start_date=plan_date,
+        end_date=plan_date,
+        include_completed=True,
+    )
+    events: list[CalendarEvent] = []
+    todos: list[CalendarTodo] = []
+
+    for record in records:
+        try:
+            if record.item_type == "event":
+                events.append(CalendarEvent.from_dict(record.payload))
+            elif record.item_type == "todo":
+                todos.append(CalendarTodo.from_dict(record.payload))
+        except Exception:
+            continue
+
+    return (
+        sorted(events, key=lambda event: event.sort_key()),
+        sorted(todos, key=lambda todo: todo.sort_key()),
     )
