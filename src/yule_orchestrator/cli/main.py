@@ -21,7 +21,11 @@ from .context import run_context_command
 from .discord import run_discord_bot_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
-from .planning import run_planning_checkpoints_command, run_planning_daily_command
+from .planning import (
+    run_planning_checkpoints_command,
+    run_planning_daily_command,
+    run_planning_snapshot_command,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -315,6 +319,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print structured JSON instead of the default text view.",
     )
 
+    planning_snapshot_parser = planning_subparsers.add_parser(
+        "snapshot",
+        help="Generate and store a daily-plan snapshot for Discord and automation use.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--date",
+        help="Target date in YYYY-MM-DD format. Defaults to today.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=20,
+        help="Maximum number of GitHub open issues to include. Defaults to 20.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--reminders-file",
+        help="Optional JSON file with reminder items.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--skip-calendar",
+        action="store_true",
+        help="Skip calendar inputs and build the snapshot from the remaining sources.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub issues and build the snapshot from the remaining sources.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--reminder-lead-minutes",
+        type=int,
+        default=5,
+        help="How many minutes before a parsed execution block ends to generate a checkpoint. Defaults to 5.",
+    )
+    planning_snapshot_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured JSON instead of the default text view.",
+    )
+
     discord_parser = subparsers.add_parser(
         "discord",
         help="Run Discord integrations backed by the local orchestrator.",
@@ -403,6 +447,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.at,
                 args.reminder_lead_minutes,
                 args.window_minutes,
+                args.json,
+            )
+        if args.command == "planning" and args.planning_command == "snapshot":
+            return run_planning_snapshot_command(
+                args.date,
+                args.github_limit,
+                args.reminders_file,
+                args.skip_calendar,
+                args.skip_github,
+                args.reminder_lead_minutes,
                 args.json,
             )
         if args.command == "discord" and args.discord_command == "bot":
