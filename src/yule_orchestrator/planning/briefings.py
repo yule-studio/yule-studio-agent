@@ -351,15 +351,22 @@ def _summarize_reasons(reasons: Sequence[str]) -> str:
         "urgent keyword": "긴급 키워드 포함",
     }
     labels: list[str] = []
+    category_labels: list[str] = []
     for reason in reasons:
         label = label_map.get(reason)
+        if label is None and reason.startswith("naver category: "):
+            label = reason.replace("naver category: ", "", 1)
+            if label and label not in category_labels:
+                category_labels.append(label)
+            continue
         if label and label not in labels:
             labels.append(label)
-        if len(labels) == 2:
-            break
 
+    labels = category_labels + [label for label in labels if label not in category_labels]
     if not labels:
         return ""
+    if len(labels) > 2 and "캘린더에 잡힌 할 일" in labels:
+        labels.remove("캘린더에 잡힌 할 일")
     return ", ".join(labels[:2])
 
 

@@ -123,6 +123,8 @@ class PlanningTaskCandidate:
     estimated_minutes: int
     reasons: Sequence[str]
     coding_candidate: bool
+    category_color: Optional[str] = None
+    category_label: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -136,6 +138,8 @@ class PlanningTaskCandidate:
             "estimated_minutes": self.estimated_minutes,
             "reasons": list(self.reasons),
             "coding_candidate": self.coding_candidate,
+            "category_color": self.category_color,
+            "category_label": self.category_label,
         }
 
 
