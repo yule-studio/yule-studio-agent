@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
 
 DEFAULT_CALENDAR_STATE_RETENTION_SECONDS = 30 * 24 * 60 * 60
+DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -495,10 +496,30 @@ def _hash_value(value: str) -> str:
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
+    busy_timeout_ms = _sqlite_busy_timeout_ms()
+    connection = sqlite3.connect(db_path, timeout=busy_timeout_ms / 1000)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+    _try_sqlite_pragma(connection, "PRAGMA journal_mode = WAL")
+    _try_sqlite_pragma(connection, "PRAGMA synchronous = NORMAL")
     return connection
+
+
+def _sqlite_busy_timeout_ms() -> int:
+    configured_value = os.getenv("YULE_SQLITE_BUSY_TIMEOUT_MS")
+    if configured_value and configured_value.strip():
+        try:
+            return max(1000, int(configured_value.strip()))
+        except ValueError:
+            return DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+
+
+def _try_sqlite_pragma(connection: sqlite3.Connection, statement: str) -> None:
+    try:
+        connection.execute(statement)
+    except sqlite3.OperationalError:
+        pass
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:

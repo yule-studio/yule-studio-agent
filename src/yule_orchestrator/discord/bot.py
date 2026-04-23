@@ -36,6 +36,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self._daily_briefing_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
+            self._checkpoint_storage_lock = asyncio.Lock()
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -163,11 +164,12 @@ def run_discord_bot(repo_root: Path) -> None:
             while not self.is_closed():
                 started_at = datetime.now().astimezone()
                 try:
-                    await asyncio.to_thread(
-                        prefetch_checkpoint_snapshots,
-                        started_at,
-                        prefetch_minutes=config.checkpoint_prefetch_minutes,
-                    )
+                    async with self._checkpoint_storage_lock:
+                        await asyncio.to_thread(
+                            prefetch_checkpoint_snapshots,
+                            started_at,
+                            prefetch_minutes=config.checkpoint_prefetch_minutes,
+                        )
                 except Exception as exc:
                     print(f"warning: failed to prefetch checkpoint snapshots: {exc}")
 
@@ -193,16 +195,17 @@ def run_discord_bot(repo_root: Path) -> None:
                 discord_module=discord,
                 error_label=_checkpoint_channel_error_label(config),
             )
-            due_checkpoints = await asyncio.to_thread(
-                _resolve_due_checkpoints,
-                last_scan,
-                scan_time,
-            )
-            unsent_checkpoints = await asyncio.to_thread(
-                _filter_unsent_checkpoints,
-                channel_id,
-                due_checkpoints,
-            )
+            async with self._checkpoint_storage_lock:
+                due_checkpoints = await asyncio.to_thread(
+                    _resolve_due_checkpoints,
+                    last_scan,
+                    scan_time,
+                )
+                unsent_checkpoints = await asyncio.to_thread(
+                    _filter_unsent_checkpoints,
+                    channel_id,
+                    due_checkpoints,
+                )
             if not unsent_checkpoints:
                 return
 
@@ -216,11 +219,12 @@ def run_discord_bot(repo_root: Path) -> None:
                 content,
                 allowed_mentions=_build_allowed_mentions(discord),
             )
-            await asyncio.to_thread(
-                _mark_checkpoints_sent,
-                channel_id,
-                unsent_checkpoints,
-            )
+            async with self._checkpoint_storage_lock:
+                await asyncio.to_thread(
+                    _mark_checkpoints_sent,
+                    channel_id,
+                    unsent_checkpoints,
+                )
 
     bot = YuleDiscordBot()
     try:
@@ -262,6 +266,8 @@ def _next_daily_run(target_time: time | None) -> datetime:
 def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     messages: list[str] = []
 
+    messages.extend(_channel_configuration_warnings(config))
+
     if config.daily_briefing_time is not None and config.daily_channel_id is None:
         messages.append(
             "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID is missing. "
@@ -296,6 +302,24 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
         messages.append("info: Discord notifications will be sent without a user mention")
 
     return messages
+
+
+def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
+    if config.application_id is None:
+        return []
+
+    warnings = []
+    configured_channels = [
+        ("DISCORD_DAILY_CHANNEL_ID", config.daily_channel_id),
+        ("DISCORD_CHECKPOINT_CHANNEL_ID", config.checkpoint_channel_id),
+    ]
+    for label, channel_id in configured_channels:
+        if channel_id is not None and channel_id == config.application_id:
+            warnings.append(
+                f"warning: {label} looks like DISCORD_APPLICATION_ID. "
+                "Use the target Discord text channel id instead."
+            )
+    return warnings
 
 
 def _next_checkpoint_scan(after: datetime | None = None) -> datetime:

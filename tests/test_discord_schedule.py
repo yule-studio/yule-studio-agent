@@ -81,3 +81,22 @@ class DiscordScheduleTestCase(unittest.TestCase):
         self.assertTrue(any("checkpoint notifications enabled" in message for message in messages))
         self.assertTrue(any("channel=789" in message for message in messages))
         self.assertIn("info: Discord notifications will mention user 999", messages)
+
+    def test_startup_messages_warn_when_channel_id_looks_like_application_id(self) -> None:
+        fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
+        config = DiscordBotConfig(
+            token="token",
+            application_id=456,
+            guild_id=123,
+            daily_channel_id=456,
+            checkpoint_channel_id=None,
+            notify_user_id=None,
+            daily_briefing_time=time(17, 30),
+            checkpoint_prefetch_minutes=5,
+        )
+
+        messages = _startup_messages(config, now=fake_now)
+
+        self.assertTrue(
+            any("DISCORD_DAILY_CHANNEL_ID looks like DISCORD_APPLICATION_ID" in message for message in messages)
+        )
