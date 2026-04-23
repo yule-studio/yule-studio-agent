@@ -34,7 +34,8 @@ Quick start after bootstrap:
   yule context planning-agent
   yule calendar sync --json
   yule calendar categories
-  yule planning daily --json
+  yule daily warmup --json
+  yule planning snapshot --json
 EOF
 }
 
@@ -268,7 +269,8 @@ Quick start:
   yule context planning-agent
   yule calendar sync --json
   yule calendar categories
-  yule planning daily --json
+  yule daily warmup --json
+  yule planning snapshot --json
   yule discord bot
 
 EOF

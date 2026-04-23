@@ -113,6 +113,7 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
+# PLANNING_DAILY_SNAPSHOT_SECONDS=21600
 # YULE_WAKE_TIME=06:00
 # YULE_WORK_START_TIME=09:00
 # YULE_COMMUTE_MINUTES=45
@@ -143,6 +144,7 @@ DISCORD_GUILD_ID=
 - 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
 - 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
 - `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
+- `PLANNING_DAILY_SNAPSHOT_SECONDS`로 daily-plan snapshot 유효 시간을 조정할 수 있습니다. 기본값은 6시간입니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
@@ -166,12 +168,15 @@ yule doctor
 yule context coding-agent
 yule context planning-agent
 yule github issues --limit 30
+yule github issues --limit 30 --force-refresh
 yule calendar events --json
 yule calendar sync --force-refresh --json
 yule calendar categories --json
 yule calendar cache inspect --json
 yule calendar cache cleanup --json
 yule planning daily --json
+yule planning snapshot --json
+yule daily warmup --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 yule discord bot
 ```
@@ -185,6 +190,8 @@ PYTHONPATH=src python3 -m yule_orchestrator calendar events --json
 PYTHONPATH=src python3 -m yule_orchestrator calendar sync --json
 PYTHONPATH=src python3 -m yule_orchestrator calendar cache cleanup --json
 PYTHONPATH=src python3 -m yule_orchestrator planning daily --json
+PYTHONPATH=src python3 -m yule_orchestrator planning snapshot --json
+PYTHONPATH=src python3 -m yule_orchestrator daily warmup --json
 PYTHONPATH=src python3 -m yule_orchestrator discord bot
 ```
 
@@ -209,6 +216,7 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
 - 조회 결과를 동기화할 때 일정/할 일 항목 단위 상태를 upsert 하므로, 이후 완료 여부 변화와 최근 본 항목을 기준으로 다음 작업 추천 로직을 붙일 수 있습니다.
 - `yule calendar sync`는 원격 캘린더를 읽어 캐시와 상태 DB를 채우는 운영용 명령입니다.
+- CalDAV 원격 조회 시 `calendar_fetch_seconds`, `todo_fetch_seconds`, `calendar_discovery_seconds`를 결과 metrics에 남깁니다.
 - `yule calendar categories`는 상태 DB에 저장된 `category_color` 숫자 코드와 항목을 보여줍니다.
 - 범주 색상 정책은 [policies/runtime/agents/planning-agent/naver-category-policy.md](policies/runtime/agents/planning-agent/naver-category-policy.md)에 정리합니다.
 - Discord 봇을 오래 켜둘 때는 먼저 `yule calendar sync`로 상태 DB를 채워두면, Planning Agent가 원격 조회보다 로컬 상태를 우선 사용합니다.
@@ -224,12 +232,16 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - 일정 이벤트가 없으면 전체 일정 작성 안내를 포함합니다.
 - 설명이 있는 일정 이벤트는 시작 10분 전에 다음 일정으로 전환하는 재브리핑 체크포인트를 생성합니다.
 - 설명이 비어 있는 일정 이벤트는 시작 10분 전에 세부 계획 작성 체크포인트를 생성합니다.
+- `yule planning snapshot`은 daily-plan 결과 자체를 SQLite snapshot으로 저장합니다.
+- `yule daily warmup`은 캘린더 동기화, GitHub issue 캐시, daily-plan snapshot 생성을 순서대로 실행하고 단계별 소요 시간을 `runtime-metrics`에 남깁니다.
 
 ```bash
 yule planning daily --json
 yule planning daily --date 2026-04-22 --github-limit 10
 yule planning daily --reminders-file reminders.json --json
 yule planning daily --use-ollama --json
+yule planning snapshot --json
+yule daily warmup --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 ```
 
@@ -252,21 +264,34 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 
 - 최소 Discord Bot은 `yule discord bot`으로 실행합니다.
 - 현재 MVP 명령은 `/ping`, `/plan_today`, `/checkpoints_now` 입니다.
-- `/plan_today`는 Planning Agent 결과를 Discord 메시지로 정리해 보여줍니다.
+- `/plan_today`는 외부 API를 직접 기다리지 않고 저장된 daily-plan snapshot을 Discord 메시지로 정리해 보여줍니다.
 - `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
+- snapshot이 없으면 `/plan_today`는 로컬 동기화와 snapshot 생성 명령을 안내합니다.
+- snapshot이 만료된 상태면 “마지막 동기화 기준 브리핑입니다” 문구를 붙입니다.
+- 자동 브리핑 전송 시간은 `runtime-metrics`에 `discord_send` 단계로 저장됩니다.
 
 ```bash
 yule discord bot
 ```
 
-아침 브리핑 운영 흐름은 아래 순서를 권장합니다.
+아침 브리핑 운영 흐름은 먼저 snapshot을 만든 뒤 Discord 봇이 그 결과만 읽는 방식을 권장합니다.
 
 ```bash
-yule calendar sync --json
-yule planning daily --json
+yule daily warmup --json
 yule discord bot
 ```
+
+더 잘게 나누어 운영하고 싶다면 아래 순서로 스케줄링할 수 있습니다.
+
+```text
+05:50 yule calendar sync --force-refresh --json
+05:55 yule github issues --limit 30 --force-refresh
+05:58 yule planning snapshot --json
+06:00 Discord bot scheduled briefing
+```
+
+이 구조에서는 Discord 봇이 브리핑 시점에 캘린더나 GitHub API 응답을 기다리지 않습니다.
 
 ## 테스트
 
