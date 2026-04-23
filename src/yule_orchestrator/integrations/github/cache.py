@@ -14,20 +14,22 @@ DEFAULT_GITHUB_VIEWER_CONTEXT_CACHE_SECONDS = 1800
 
 
 def load_cached_issue_payload(cache_key: str, ttl_seconds: int) -> Optional[list[dict[str, Any]]]:
-    return _load_cached_payload(
+    payload = _load_cached_payload(
         namespace=GITHUB_ISSUE_CACHE_NAMESPACE,
         cache_key=cache_key,
         ttl_seconds=ttl_seconds,
     )
+    return _extract_issue_payload(payload)
 
 
 def load_stale_issue_payload(cache_key: str) -> Optional[list[dict[str, Any]]]:
-    return _load_cached_payload(
+    payload = _load_cached_payload(
         namespace=GITHUB_ISSUE_CACHE_NAMESPACE,
         cache_key=cache_key,
         ttl_seconds=None,
         allow_stale=True,
     )
+    return _extract_issue_payload(payload)
 
 
 def save_issue_payload(
@@ -41,7 +43,7 @@ def save_issue_payload(
         cache_key=cache_key,
         scope_hash=scope_hash,
         ttl_seconds=ttl_seconds,
-        payload=list(payload),
+        payload={"issues": list(payload)},
         metadata={"issue_count": len(payload)},
     )
 
@@ -87,6 +89,18 @@ def save_viewer_context_payload(
 def build_github_cache_key(*parts: str) -> str:
     normalized = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
     return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _extract_issue_payload(payload: Optional[Any]) -> Optional[list[dict[str, Any]]]:
+    if payload is None:
+        return None
+
+    if isinstance(payload, dict):
+        issues = payload.get("issues")
+        if isinstance(issues, list):
+            return [item for item in issues if isinstance(item, dict)]
+
+    return None
 
 
 def _load_cached_payload(

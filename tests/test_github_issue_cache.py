@@ -5,10 +5,17 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
+import os
+from pathlib import Path
+import shutil
 import subprocess
 import unittest
 from unittest.mock import patch
 
+from yule_orchestrator.integrations.github.cache import (
+    load_cached_issue_payload,
+    save_issue_payload,
+)
 from yule_orchestrator.integrations.github.issues import (
     GitHubIssue,
     GitHubViewerContext,
@@ -17,6 +24,46 @@ from yule_orchestrator.integrations.github.issues import (
 
 
 class GitHubIssueCacheTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path("tests/.tmp/github-issue-cache")
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
+        try:
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+        except (FileNotFoundError, PermissionError) as exc:
+            self.skipTest(f"temporary directory is not writable in this environment: {exc}")
+        self.db_path = self.temp_dir / "cache.sqlite3"
+        self.previous_db_path = os.environ.get("YULE_CACHE_DB_PATH")
+        os.environ["YULE_CACHE_DB_PATH"] = str(self.db_path)
+
+    def tearDown(self) -> None:
+        if self.previous_db_path is None:
+            os.environ.pop("YULE_CACHE_DB_PATH", None)
+        else:
+            os.environ["YULE_CACHE_DB_PATH"] = self.previous_db_path
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
+
+    def test_issue_payload_round_trips_through_local_cache(self) -> None:
+        issue = {
+            "number": 12,
+            "repository": "yule-studio/yule-studio-agent",
+            "title": "Cached issue",
+            "url": "https://example.com/issues/12",
+            "owner": "yule-studio",
+            "scope": "org:yule-studio",
+        }
+
+        save_issue_payload(
+            cache_key="cache-key",
+            scope_hash="scope-hash",
+            ttl_seconds=60,
+            payload=[issue],
+        )
+        payload = load_cached_issue_payload(cache_key="cache-key", ttl_seconds=60)
+
+        self.assertEqual(payload, [issue])
+
     def test_list_open_issues_uses_cached_result_before_remote_fetch(self) -> None:
         cached_issue = GitHubIssue(
             number=12,
