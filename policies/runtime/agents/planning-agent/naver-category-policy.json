@@ -1,0 +1,11 @@
+{
+  "colors": {
+    "27": {
+      "label": "회사 업무",
+      "priority_boost": 60,
+      "reason": "회사 업무 범주",
+      "coding_candidate": true,
+      "alert_policy": "same_day_highest"
+    }
+  }
+}

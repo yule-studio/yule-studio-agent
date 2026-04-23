@@ -111,6 +111,7 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_TIMEOUT_SECONDS=15
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
+# YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
@@ -131,6 +132,7 @@ DISCORD_GUILD_ID=
 - 캐시 저장소 기본 위치는 `.cache/yule/cache.sqlite3`입니다.
 - 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
 - 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
+- `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
@@ -153,7 +155,9 @@ yule context coding-agent
 yule context planning-agent
 yule github issues --limit 30
 yule calendar events --json
+yule calendar sync --force-refresh --json
 yule calendar warmup --force-refresh --json
+yule calendar categories --json
 yule calendar cache inspect --json
 yule calendar cache cleanup --json
 yule planning daily --json
@@ -167,6 +171,7 @@ yule discord bot
 PYTHONPATH=src python3 -m yule_orchestrator doctor
 PYTHONPATH=src python3 -m yule_orchestrator context planning-agent
 PYTHONPATH=src python3 -m yule_orchestrator calendar events --json
+PYTHONPATH=src python3 -m yule_orchestrator calendar sync --json
 PYTHONPATH=src python3 -m yule_orchestrator calendar cache cleanup --json
 PYTHONPATH=src python3 -m yule_orchestrator planning daily --json
 PYTHONPATH=src python3 -m yule_orchestrator discord bot
@@ -192,6 +197,9 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - stale cache는 기본적으로 만료 후 7일 동안 남겨두고, `yule calendar cache cleanup`에서 정리합니다.
 - 이 캐시 구조는 이후 daily-plan, Planning Agent, Discord 브리핑이 같은 저장소를 재사용할 수 있도록 설계되었습니다.
 - 조회 결과를 동기화할 때 일정/할 일 항목 단위 상태를 upsert 하므로, 이후 완료 여부 변화와 최근 본 항목을 기준으로 다음 작업 추천 로직을 붙일 수 있습니다.
+- `yule calendar sync`는 원격 캘린더를 읽어 캐시와 상태 DB를 채우는 운영용 명령입니다.
+- `yule calendar categories`는 상태 DB에 저장된 `category_color` 숫자 코드와 항목을 보여줍니다.
+- 범주 색상 정책은 [policies/runtime/agents/planning-agent/naver-category-policy.md](policies/runtime/agents/planning-agent/naver-category-policy.md)에 정리합니다.
 
 ## Planning Agent
 
