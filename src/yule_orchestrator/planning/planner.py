@@ -16,6 +16,7 @@ from .schedule import (
     DEFAULT_CHECKPOINT_LEAD_MINUTES,
     build_checkpoints,
     build_execution_blocks,
+    build_event_rebriefing_checkpoints,
     build_fixed_schedule,
     build_focus_blocks,
     build_missing_event_plan_checkpoints,
@@ -44,6 +45,7 @@ def build_daily_plan(
     checkpoints = sorted(
         [
             *build_missing_event_plan_checkpoints(inputs.calendar_events, lead_minutes=10),
+            *build_event_rebriefing_checkpoints(inputs.calendar_events, lead_minutes=10),
             *build_checkpoints(execution_blocks, lead_minutes=reminder_lead_minutes),
         ],
         key=lambda checkpoint: checkpoint.remind_at,

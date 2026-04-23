@@ -173,6 +173,53 @@ def build_missing_event_plan_checkpoints(
     return checkpoints
 
 
+def build_event_rebriefing_checkpoints(
+    events: Sequence[CalendarEvent],
+    lead_minutes: int = 10,
+) -> list[PlanningCheckpoint]:
+    if lead_minutes <= 0:
+        return []
+
+    checkpoints: list[PlanningCheckpoint] = []
+    for event in events:
+        if event.all_day or not event.description.strip():
+            continue
+
+        try:
+            event_start = datetime.fromisoformat(event.start)
+            event_end = datetime.fromisoformat(event.end)
+        except ValueError:
+            continue
+
+        remind_at = event_start - timedelta(minutes=lead_minutes)
+        checkpoint_id = build_fallback_item_uid(
+            "planning-event-rebriefing",
+            event.item_uid,
+            remind_at.isoformat(),
+        )
+        prompt = (
+            f"10분 뒤 '{event.title}' 일정이 시작됩니다. "
+            "지금 하던 일을 정리하고, 일정 설명에 적어둔 세부 흐름으로 전환할 준비를 해주세요."
+        )
+        checkpoints.append(
+            PlanningCheckpoint(
+                checkpoint_id=checkpoint_id,
+                remind_at=remind_at.isoformat(),
+                source_event_uid=event.item_uid,
+                source_event_title=event.title,
+                block_id=event.item_uid,
+                block_title=event.title,
+                block_start=event.start,
+                block_end=event_end.isoformat(),
+                prompt=prompt,
+                kind="event_rebriefing",
+            )
+        )
+
+    checkpoints.sort(key=lambda checkpoint: checkpoint.remind_at)
+    return checkpoints
+
+
 def select_due_checkpoints(
     checkpoints: Sequence[PlanningCheckpoint],
     at: datetime,

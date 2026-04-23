@@ -198,10 +198,13 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(len(plan.time_block_briefings), 2)
         self.assertEqual(plan.time_block_briefings[0].title, "할일 목록 정리")
         self.assertIn("10:00부터", plan.time_block_briefings[0].briefing)
-        self.assertEqual(len(plan.checkpoints), 2)
-        self.assertEqual(plan.checkpoints[0].remind_at, "2026-04-22T09:55:00+09:00")
-        self.assertIn("업무 수행 (회의 없음)", plan.checkpoints[0].prompt)
-        self.assertIn("남은 핵심 한 가지", plan.checkpoints[0].prompt)
+        self.assertEqual(len(plan.checkpoints), 3)
+        self.assertEqual(plan.checkpoints[0].kind, "event_rebriefing")
+        self.assertEqual(plan.checkpoints[0].remind_at, "2026-04-22T08:50:00+09:00")
+        self.assertIn("일정 설명에 적어둔 세부 흐름", plan.checkpoints[0].prompt)
+        self.assertEqual(plan.checkpoints[1].remind_at, "2026-04-22T09:55:00+09:00")
+        self.assertIn("업무 수행 (회의 없음)", plan.checkpoints[1].prompt)
+        self.assertIn("남은 핵심 한 가지", plan.checkpoints[1].prompt)
 
         due = select_due_checkpoints(
             plan.checkpoints,
