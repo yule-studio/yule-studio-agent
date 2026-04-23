@@ -68,6 +68,8 @@ def run_discord_bot(repo_root: Path) -> None:
         async def on_ready(self) -> None:
             user_text = str(self.user) if self.user is not None else "unknown-user"
             print(f"Discord bot logged in as {user_text} (guild={config.guild_id})")
+            for message in _startup_messages(config, now=datetime.now().astimezone()):
+                print(message)
 
         async def close(self) -> None:
             await _cancel_task(self._daily_briefing_task)
@@ -221,6 +223,45 @@ def _next_daily_run(target_time: time | None) -> datetime:
     if next_run <= now:
         next_run = next_run + timedelta(days=1)
     return next_run
+
+
+def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
+    messages: list[str] = []
+
+    if config.daily_briefing_time is not None and config.daily_channel_id is None:
+        messages.append(
+            "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID is missing. "
+            "Scheduled daily briefings will not run."
+        )
+    elif config.daily_briefing_time is None and config.daily_channel_id is not None:
+        messages.append(
+            "warning: DISCORD_DAILY_CHANNEL_ID is set but DISCORD_DAILY_BRIEFING_TIME is missing. "
+            "Scheduled daily briefings will not run."
+        )
+    elif config.daily_briefing_time is not None and config.daily_channel_id is not None:
+        next_run = _next_daily_run(config.daily_briefing_time)
+        messages.append(
+            "info: daily briefing enabled "
+            f"(channel={config.daily_channel_id}, next_run={next_run.isoformat()})"
+        )
+
+    checkpoint_channel_id = config.effective_checkpoint_channel_id
+    if checkpoint_channel_id is not None:
+        next_run = _next_checkpoint_scan(after=now)
+        messages.append(
+            "info: checkpoint notifications enabled "
+            f"(channel={checkpoint_channel_id}, prefetch_minutes={config.checkpoint_prefetch_minutes}, "
+            f"next_scan={next_run.isoformat()})"
+        )
+    else:
+        messages.append("info: checkpoint notifications disabled")
+
+    if config.notify_user_id is not None:
+        messages.append(f"info: Discord notifications will mention user {config.notify_user_id}")
+    else:
+        messages.append("info: Discord notifications will be sent without a user mention")
+
+    return messages
 
 
 def _next_checkpoint_scan(after: datetime | None = None) -> datetime:
