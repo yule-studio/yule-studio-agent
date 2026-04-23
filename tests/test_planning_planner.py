@@ -7,6 +7,7 @@ except ModuleNotFoundError:
 
 from datetime import date, datetime
 import unittest
+from unittest.mock import patch
 
 from yule_orchestrator.integrations.calendar.models import CalendarEvent, CalendarTodo
 from yule_orchestrator.integrations.github.issues import GitHubIssue
@@ -96,6 +97,7 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(plan.morning_briefing_source, "rules")
         self.assertEqual(plan.discord_briefing_source, "rules")
 
+    @patch.dict("os.environ", {"YULE_WORK_START_TIME": "09:00"}, clear=False)
     def test_build_daily_plan_creates_focus_blocks(self) -> None:
         inputs = PlanningInputs(
             plan_date=date(2026, 4, 22),
@@ -128,6 +130,39 @@ class PlanningPlannerTestCase(unittest.TestCase):
 
         envelope = build_daily_plan(inputs)
         self.assertTrue(envelope.daily_plan.suggested_time_blocks)
+        self.assertTrue(envelope.daily_plan.suggested_time_blocks[0].start.endswith("09:00:00+09:00"))
+        self.assertIn("오늘의 전체 일정을 작성", envelope.daily_plan.morning_briefing)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "YULE_WAKE_TIME": "06:00",
+            "YULE_WORK_START_TIME": "09:00",
+            "YULE_COMMUTE_MINUTES": "45",
+            "YULE_DEPARTURE_BUFFER_MINUTES": "10",
+            "YULE_HOME_AREA": "신정동",
+            "YULE_WORK_AREA": "마곡",
+        },
+        clear=False,
+    )
+    def test_morning_briefing_includes_commute_ready_flow(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[],
+            calendar_todos=[],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+
+        self.assertIn("06:00 기상 기준", envelope.daily_plan.morning_briefing)
+        self.assertIn("신정동에서 마곡까지", envelope.daily_plan.morning_briefing)
+        self.assertIn("08:05 전후 출발", envelope.daily_plan.morning_briefing)
+        self.assertIn("09:00에는 업무를 바로 시작", envelope.daily_plan.morning_briefing)
 
     def test_build_daily_plan_parses_execution_blocks_and_checkpoints(self) -> None:
         inputs = PlanningInputs(
@@ -175,6 +210,38 @@ class PlanningPlannerTestCase(unittest.TestCase):
         )
         self.assertEqual(len(due), 1)
         self.assertEqual(due[0].block_title, "할일 목록 정리")
+
+    def test_build_daily_plan_adds_missing_event_plan_checkpoint(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-empty-description",
+                    title="업무 수행",
+                    start="2026-04-22T09:00:00+09:00",
+                    end="2026-04-22T10:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                )
+            ],
+            calendar_todos=[],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+        plan = envelope.daily_plan
+
+        self.assertEqual(len(plan.checkpoints), 1)
+        self.assertEqual(plan.checkpoints[0].kind, "missing_event_plan")
+        self.assertEqual(plan.checkpoints[0].remind_at, "2026-04-22T08:50:00+09:00")
+        self.assertIn("세부 계획을 작성", plan.checkpoints[0].prompt)
 
     def test_build_daily_plan_keeps_focus_blocks_in_event_timezone(self) -> None:
         inputs = PlanningInputs(

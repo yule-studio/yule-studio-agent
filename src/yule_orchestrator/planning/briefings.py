@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Optional, Sequence
 
 from ..integrations.calendar.models import build_fallback_item_uid
+from .day_profile import DayProfile
 from .models import (
     DailyPlanEnvelope,
     DailyPlanSummary,
@@ -171,12 +172,18 @@ def render_morning_briefing(
     time_block_briefings: Sequence[PlanningBlockBriefing],
     coding_agent_handoff: Sequence[PlanningTaskCandidate],
     checkpoints: Sequence[PlanningCheckpoint],
+    day_profile: DayProfile,
 ) -> str:
     lines: list[str] = []
     lines.append(f"{plan_date.isoformat()} 아침 브리핑")
     lines.append(
         f"- 오늘은 고정 일정 {summary.fixed_event_count}건과 우선 작업 {summary.recommended_task_count}건을 기준으로 움직입니다."
     )
+
+    if summary.fixed_event_count == 0 and summary.all_day_event_count == 0:
+        lines.append("- 오늘 등록된 일정이 없습니다. 먼저 오늘의 전체 일정을 작성하셔야 합니다.")
+
+    lines.extend(_build_morning_routine_lines(plan_date, day_profile))
 
     first_fixed = fixed_schedule[0] if fixed_schedule else None
     first_focus = suggested_time_blocks[0] if suggested_time_blocks else None
@@ -241,6 +248,28 @@ def render_morning_briefing(
             )
 
     return "\n".join(lines)
+
+
+def _build_morning_routine_lines(plan_date: date, day_profile: DayProfile) -> list[str]:
+    departure_at = day_profile.recommended_departure_at(plan_date)
+    wake_label = day_profile.wake_time.strftime("%H:%M")
+    departure_label = departure_at.strftime("%H:%M")
+    work_start_label = day_profile.work_start_time.strftime("%H:%M")
+    lines = [
+        (
+            f"- {wake_label} 기상 기준으로는 바로 업무를 시작하기보다 세면, 식사, 복장, "
+            "가방/노트북/충전기 확인을 먼저 마무리하는 편이 좋습니다."
+        ),
+        (
+            f"- {day_profile.home_area}에서 {day_profile.work_area}까지는 이동 {day_profile.commute_minutes}분과 "
+            f"여유 {day_profile.departure_buffer_minutes}분을 잡아 {departure_label} 전후 출발을 권장합니다."
+        ),
+        (
+            f"- {departure_label} 전까지 오늘 첫 일정과 필요한 자료를 확인하고, "
+            f"{work_start_label}에는 업무를 바로 시작할 수 있는 상태로 맞춥니다."
+        ),
+    ]
+    return lines
 
 
 def render_discord_briefing(

@@ -44,8 +44,9 @@ def build_focus_blocks(
     plan_date: date,
     fixed_schedule: Sequence[PlanningTimeBlock],
     tasks: Sequence[PlanningTaskCandidate],
+    focus_start_time: time = PLANNING_DAY_START,
 ) -> tuple[list[PlanningTimeBlock], int]:
-    windows = _available_windows(plan_date, fixed_schedule)
+    windows = _available_windows(plan_date, fixed_schedule, day_start_time=focus_start_time)
     focus_blocks: list[PlanningTimeBlock] = []
     available_focus_minutes = sum(int((end - start).total_seconds() // 60) for start, end in windows)
     if not windows:
@@ -125,6 +126,53 @@ def build_checkpoints(
     return checkpoints
 
 
+def build_missing_event_plan_checkpoints(
+    events: Sequence[CalendarEvent],
+    lead_minutes: int = 10,
+) -> list[PlanningCheckpoint]:
+    if lead_minutes <= 0:
+        return []
+
+    checkpoints: list[PlanningCheckpoint] = []
+    for event in events:
+        if event.all_day or event.description.strip():
+            continue
+
+        try:
+            event_start = datetime.fromisoformat(event.start)
+            event_end = datetime.fromisoformat(event.end)
+        except ValueError:
+            continue
+
+        remind_at = event_start - timedelta(minutes=lead_minutes)
+        checkpoint_id = build_fallback_item_uid(
+            "planning-event-plan-checkpoint",
+            event.item_uid,
+            remind_at.isoformat(),
+        )
+        prompt = (
+            f"일정 '{event.title}'의 세부 계획이 비어 있습니다. "
+            "이 일정을 위한 세부 계획을 작성하셔야 합니다."
+        )
+        checkpoints.append(
+            PlanningCheckpoint(
+                checkpoint_id=checkpoint_id,
+                remind_at=remind_at.isoformat(),
+                source_event_uid=event.item_uid,
+                source_event_title=event.title,
+                block_id=event.item_uid,
+                block_title=event.title,
+                block_start=event.start,
+                block_end=event_end.isoformat(),
+                prompt=prompt,
+                kind="missing_event_plan",
+            )
+        )
+
+    checkpoints.sort(key=lambda checkpoint: checkpoint.remind_at)
+    return checkpoints
+
+
 def select_due_checkpoints(
     checkpoints: Sequence[PlanningCheckpoint],
     at: datetime,
@@ -144,9 +192,10 @@ def select_due_checkpoints(
 def _available_windows(
     plan_date: date,
     fixed_schedule: Sequence[PlanningTimeBlock],
+    day_start_time: time = PLANNING_DAY_START,
 ) -> list[tuple[datetime, datetime]]:
     timezone = _derive_schedule_timezone(fixed_schedule)
-    day_start = datetime.combine(plan_date, PLANNING_DAY_START, tzinfo=timezone)
+    day_start = datetime.combine(plan_date, day_start_time, tzinfo=timezone)
     day_end = datetime.combine(plan_date, PLANNING_DAY_END, tzinfo=timezone)
     cursor = day_start
     windows: list[tuple[datetime, datetime]] = []

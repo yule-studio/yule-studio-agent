@@ -8,6 +8,7 @@ from .briefings import (
     render_discord_briefing,
     render_morning_briefing,
 )
+from .day_profile import load_day_profile
 from .inputs import collect_planning_inputs, load_reminder_items
 from .models import DailyPlan, DailyPlanEnvelope, DailyPlanSummary, PlanningInputs
 from .ollama import generate_human_briefing
@@ -17,6 +18,7 @@ from .schedule import (
     build_execution_blocks,
     build_fixed_schedule,
     build_focus_blocks,
+    build_missing_event_plan_checkpoints,
     select_due_checkpoints,
 )
 from .tasks import build_task_candidates
@@ -32,12 +34,20 @@ def build_daily_plan(
     fixed_schedule = build_fixed_schedule(inputs.calendar_events)
     execution_blocks = build_execution_blocks(inputs.calendar_events)
     tasks = build_task_candidates(inputs)
+    day_profile = load_day_profile()
     suggested_blocks, available_focus_minutes = build_focus_blocks(
         inputs.plan_date,
         fixed_schedule,
         tasks,
+        focus_start_time=day_profile.work_start_time,
     )
-    checkpoints = build_checkpoints(execution_blocks, lead_minutes=reminder_lead_minutes)
+    checkpoints = sorted(
+        [
+            *build_missing_event_plan_checkpoints(inputs.calendar_events, lead_minutes=10),
+            *build_checkpoints(execution_blocks, lead_minutes=reminder_lead_minutes),
+        ],
+        key=lambda checkpoint: checkpoint.remind_at,
+    )
     coding_agent_handoff = [task for task in tasks if task.coding_candidate][:3]
     warnings = list(inputs.warnings)
 
@@ -74,6 +84,7 @@ def build_daily_plan(
         time_block_briefings=time_block_briefings,
         coding_agent_handoff=coding_agent_handoff,
         checkpoints=checkpoints,
+        day_profile=day_profile,
     )
     morning_briefing_source = "rules"
     discord_briefing_source = "rules"
