@@ -9,7 +9,7 @@ from typing import Optional
 
 NAVER_CATEGORY_POLICY_JSON_ENV = "YULE_NAVER_CATEGORY_POLICY_JSON"
 NAVER_CATEGORY_POLICY_FILE_ENV = "YULE_NAVER_CATEGORY_POLICY_FILE"
-DEFAULT_NAVER_CATEGORY_POLICY_PATH = Path("policies/runtime/planning/naver-category-policy.json")
+DEFAULT_NAVER_CATEGORY_POLICY_PATH = Path("policies/runtime/agents/planning-agent/naver-category-policy.json")
 
 
 @dataclass(frozen=True)
