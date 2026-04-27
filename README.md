@@ -189,7 +189,8 @@ DISCORD_GUILD_ID=
 - `DISCORD_CONVERSATION_REPLY_MODE=disabled`로 두면 대화형 응답을 완전히 끌 수 있습니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
-- 봇은 `YULE_WAKE_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/lunch/evening` 브리핑을 읽어 전송합니다.
+- 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
+- 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.
 - 아침 준비 작업은 `YULE_WAKE_TIME` 기준으로 자동 수행되며, `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 순서로 진행합니다.
 - `DISCORD_DAILY_BRIEFING_TIME`은 더 이상 사용하지 않으며, 설정되어 있어도 경고만 출력하고 무시합니다.
 - 준비 단계가 실패하면 `DISCORD_PREPARATION_RETRY_COUNT`와 `DISCORD_PREPARATION_RETRY_DELAY_SECONDS` 기준으로 자동 재시도합니다.
@@ -197,7 +198,7 @@ DISCORD_GUILD_ID=
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
-- 채팅 경로에서 오늘 snapshot이 없으면 즉시 "지금 다시 만들고 있어요" ack를 보낸 뒤, 백그라운드에서 캘린더 sync, GitHub 이슈, planning snapshot을 자동으로 다시 만들고 follow-up 메시지로 실제 브리핑을 이어 보냅니다.
+- snapshot이 없을 때 동작은 모든 경로(`/plan_today`, 자동 브리핑, 채팅)에서 동일하게 처리됩니다. 즉시 "브리핑 데이터를 준비하고 있습니다" ack를 보낸 뒤, 백그라운드에서 캘린더 sync, GitHub 이슈, planning snapshot을 자동으로 만들고 follow-up 메시지로 실제 브리핑을 이어 보냅니다.
 - 같은 날짜에 동시 요청이 들어와도 per-date 잠금 덕분에 자동 재생성 파이프라인은 한 번만 실행됩니다.
 - 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
@@ -271,6 +272,7 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
 - 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 10분 전/5분 전 체크포인트 생성에 집중합니다.
 - 기본 출력은 짧은 `discord_briefing`과 상세한 `morning_briefing`, `time_block_briefings`, `checkpoints`를 함께 제공합니다.
+- snapshot에 저장되는 scheduled briefing은 `morning`, `work_start`, `lunch`, `evening` 4개입니다. Discord 자동 발송도 같은 4개 슬롯을 사용합니다.
 - 아침 브리핑은 기상, 출근 준비, 권장 출발 시간, 업무 시작 시간을 구분해서 안내합니다.
 - 추천 집중 작업은 기본적으로 `YULE_WORK_START_TIME` 이후 시간대에 배치합니다.
 - 일정 이벤트가 없으면 전체 일정 작성 안내를 포함합니다.
@@ -313,7 +315,7 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 - `/plan_today`는 외부 API를 직접 기다리지 않고 저장된 daily-plan snapshot을 Discord 메시지로 정리해 보여줍니다.
 - `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
-- snapshot이 없으면 `/plan_today`는 로컬 동기화와 snapshot 생성 명령을 안내합니다(채팅 경로의 자동 재생성과는 의도적으로 분리되어 있으며, slash interaction 3초 timeout 때문에 별도 설계가 필요합니다).
+- snapshot이 없으면 `/plan_today`도 채팅 경로와 동일하게 즉시 "브리핑 데이터를 준비하고 있습니다" 안내 후 백그라운드에서 snapshot을 만들고 followup으로 브리핑을 이어 보냅니다.
 - snapshot이 만료된 상태면 "마지막 동기화 기준 브리핑입니다" 문구를 붙입니다.
 - 자동 브리핑 전송 시간은 `runtime-metrics`에 `discord_send` 단계로 저장됩니다.
 
