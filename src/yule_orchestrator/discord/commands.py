@@ -6,8 +6,9 @@ from typing import Any
 
 from .formatter import (
     format_checkpoints_message,
-    format_missing_plan_snapshot_message,
     format_plan_today_message,
+    format_snapshot_regenerating_message,
+    format_snapshot_regeneration_failed_message,
     split_discord_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
@@ -34,17 +35,52 @@ def register_discord_commands(
         if not await _safe_defer(interaction, discord_module=discord):
             return
         plan_date = date.today()
+        recipient_mention = notify_user_id or interaction.user.id
         snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+
         if snapshot is None:
-            content = format_missing_plan_snapshot_message(
-                mention_user_id=notify_user_id or interaction.user.id,
+            ack = format_snapshot_regenerating_message(
+                mention_user_id=recipient_mention,
+                slot_title="오늘 브리핑",
             )
-        else:
-            content = format_plan_today_message(
-                snapshot.envelope,
-                mention_user_id=notify_user_id or interaction.user.id,
-                snapshot=snapshot,
+            await _send_message_chunks(
+                interaction,
+                ack,
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
             )
+            ensure_snapshot = getattr(bot, "ensure_snapshot", None)
+            if ensure_snapshot is None:
+                fail = format_snapshot_regeneration_failed_message(
+                    mention_user_id=recipient_mention,
+                    error="snapshot 자동 재생성 기능을 찾지 못했습니다.",
+                )
+                await _send_message_chunks(
+                    interaction,
+                    fail,
+                    allowed_mentions=allowed_mentions,
+                    discord_module=discord,
+                )
+                return
+            snapshot, error = await ensure_snapshot(plan_date)
+            if snapshot is None:
+                fail = format_snapshot_regeneration_failed_message(
+                    mention_user_id=recipient_mention,
+                    error=error,
+                )
+                await _send_message_chunks(
+                    interaction,
+                    fail,
+                    allowed_mentions=allowed_mentions,
+                    discord_module=discord,
+                )
+                return
+
+        content = format_plan_today_message(
+            snapshot.envelope,
+            mention_user_id=recipient_mention,
+            snapshot=snapshot,
+        )
         await _send_message_chunks(
             interaction,
             content,

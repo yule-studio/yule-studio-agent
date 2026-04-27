@@ -129,3 +129,102 @@ class DiscordFormatterTestCase(unittest.TestCase):
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk) <= 200 for chunk in chunks))
+
+    def test_format_plan_today_message_preserves_morning_briefing_paragraphs(self) -> None:
+        from yule_orchestrator.discord.formatter import format_plan_today_message
+        envelope = DailyPlanEnvelope(
+            inputs=PlanningInputs(
+                plan_date=date(2026, 4, 22),
+                timezone="KST",
+                source_statuses=[
+                    PlanningSourceStatus(source_id="calendar", source_type="calendar", ok=True, item_count=1),
+                ],
+                warnings=[],
+                calendar_events=[],
+                calendar_todos=[],
+                github_issues=[],
+                reminders=[],
+            ),
+            daily_plan=DailyPlan(
+                plan_date=date(2026, 4, 22),
+                timezone="KST",
+                source_statuses=[
+                    PlanningSourceStatus(source_id="calendar", source_type="calendar", ok=True, item_count=1),
+                ],
+                warnings=[],
+                summary=DailyPlanSummary(
+                    fixed_event_count=0,
+                    all_day_event_count=0,
+                    todo_count=0,
+                    github_issue_count=0,
+                    reminder_count=0,
+                    recommended_task_count=0,
+                    available_focus_minutes=0,
+                ),
+                fixed_schedule=[],
+                execution_blocks=[],
+                prioritized_tasks=[],
+                suggested_time_blocks=[],
+                morning_briefing="첫 문단입니다.\n둘째 문단입니다.\n셋째 문단입니다.",
+                time_block_briefings=[],
+                checkpoints=[],
+                briefings=[],
+                coding_agent_handoff=[],
+                discord_briefing="짧은 요약",
+                morning_briefing_source="ollama",
+                discord_briefing_source="rules",
+            ),
+        )
+
+        message = format_plan_today_message(envelope)
+
+        self.assertIn("첫 문단입니다.", message)
+        self.assertIn("둘째 문단입니다.", message)
+        self.assertIn("셋째 문단입니다.", message)
+        self.assertIn("첫 문단입니다.\n\n둘째 문단입니다.", message)
+
+    def test_format_plan_today_message_with_slot_title_prepends_header(self) -> None:
+        from yule_orchestrator.discord.formatter import format_plan_today_message
+        envelope = DailyPlanEnvelope(
+            inputs=PlanningInputs(
+                plan_date=date(2026, 4, 22),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                calendar_events=[],
+                calendar_todos=[],
+                github_issues=[],
+                reminders=[],
+            ),
+            daily_plan=DailyPlan(
+                plan_date=date(2026, 4, 22),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                summary=DailyPlanSummary(
+                    fixed_event_count=0,
+                    all_day_event_count=0,
+                    todo_count=0,
+                    github_issue_count=0,
+                    reminder_count=0,
+                    recommended_task_count=0,
+                    available_focus_minutes=0,
+                ),
+                fixed_schedule=[],
+                execution_blocks=[],
+                prioritized_tasks=[],
+                suggested_time_blocks=[],
+                morning_briefing="아침 본문",
+                time_block_briefings=[],
+                checkpoints=[],
+                briefings=[],
+                coding_agent_handoff=[],
+                discord_briefing="요약",
+                morning_briefing_source="rules",
+                discord_briefing_source="rules",
+            ),
+        )
+
+        message = format_plan_today_message(envelope, slot_title="업무 시작 브리핑")
+
+        self.assertTrue(message.startswith("**[업무 시작 브리핑]**"))

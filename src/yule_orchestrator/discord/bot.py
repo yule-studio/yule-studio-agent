@@ -8,10 +8,11 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from ..integrations.calendar import list_naver_calendar_items
+from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_items, save_daily_plan_snapshot
-from ..planning.day_profile import DayProfile, load_day_profile
+from ..planning.day_profile import DayProfile, DayProfileBriefingSlot, load_day_profile
 from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
@@ -21,6 +22,7 @@ from .formatter import (
     format_checkpoints_message,
     format_plan_today_message,
     format_scheduled_briefing_message,
+    format_snapshot_regenerating_message,
     format_snapshot_regeneration_failed_message,
     split_discord_message,
 )
@@ -163,6 +165,20 @@ def run_discord_bot(repo_root: Path) -> None:
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
 
+        async def ensure_snapshot(self, plan_date) -> tuple[object | None, str | None]:
+            lock = self._snapshot_refresh_locks.setdefault(plan_date.isoformat(), asyncio.Lock())
+            async with lock:
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is not None:
+                    return snapshot, None
+                result = await asyncio.to_thread(regenerate_today_snapshot, plan_date)
+                if not result.ok:
+                    return None, result.error
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is None:
+                    return None, "snapshot 재생성 직후에도 snapshot을 다시 읽지 못했습니다."
+                return snapshot, None
+
         async def _regenerate_snapshot_and_followup(
             self,
             *,
@@ -175,40 +191,25 @@ def run_discord_bot(repo_root: Path) -> None:
             discord_module: "discord",
         ) -> None:
             plan_date = datetime.now().astimezone().date()
-            lock = self._snapshot_refresh_locks.setdefault(plan_date.isoformat(), asyncio.Lock())
-            async with lock:
-                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
-                if snapshot is None:
-                    result = await asyncio.to_thread(regenerate_today_snapshot, plan_date)
-                    if not result.ok:
-                        await _send_channel_message_chunks(
-                            channel,
-                            format_snapshot_regeneration_failed_message(
-                                mention_user_id=mention_user_id,
-                                error=result.error,
-                            ),
-                            allowed_mentions=_build_allowed_mentions(discord_module),
-                        )
-                        return
-
-                followup = await asyncio.to_thread(
-                    build_conversation_response_envelope,
-                    prompt,
-                    author_user_id=author_user_id,
-                    conversation_scope=conversation_scope,
-                    mention_user=mention_user,
-                )
-
-            if followup.regenerate_snapshot:
+            snapshot, error = await self.ensure_snapshot(plan_date)
+            if snapshot is None:
                 await _send_channel_message_chunks(
                     channel,
                     format_snapshot_regeneration_failed_message(
                         mention_user_id=mention_user_id,
-                        error="snapshot 재생성 직후에도 snapshot을 다시 읽지 못했습니다.",
+                        error=error,
                     ),
                     allowed_mentions=_build_allowed_mentions(discord_module),
                 )
                 return
+
+            followup = await asyncio.to_thread(
+                build_conversation_response_envelope,
+                prompt,
+                author_user_id=author_user_id,
+                conversation_scope=conversation_scope,
+                mention_user=mention_user,
+            )
 
             await _send_channel_message_chunks(
                 channel,
@@ -523,22 +524,55 @@ def run_discord_bot(repo_root: Path) -> None:
                 error_label="DISCORD_DAILY_CHANNEL_ID",
             )
             resolved_channel_id = getattr(channel, "id", None) or config.daily_channel_id
-            async with self._checkpoint_lock():
-                due_briefings = await asyncio.to_thread(
-                    _resolve_due_briefings,
-                    last_scan,
-                    scan_time,
-                )
-                unsent_briefings = await asyncio.to_thread(
-                    _filter_unsent_briefings,
-                    resolved_channel_id,
-                    due_briefings,
-                )
-            for briefing in unsent_briefings:
-                snapshot = await asyncio.to_thread(
-                    load_plan_today_snapshot,
-                    datetime.fromisoformat(briefing.send_at).date(),
-                )
+            due_slots = _collect_due_briefing_slots(
+                last_scan=last_scan,
+                scan_time=scan_time,
+                day_profile=day_profile,
+            )
+
+            for slot, plan_date in due_slots:
+                briefing = _synthesize_scheduled_briefing(slot, plan_date)
+                async with self._checkpoint_lock():
+                    already_sent = await asyncio.to_thread(
+                        _has_briefing_been_sent_async,
+                        resolved_channel_id,
+                        briefing.briefing_id,
+                    )
+                if already_sent:
+                    continue
+
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is None:
+                    ack = format_snapshot_regenerating_message(
+                        mention_user_id=config.notify_user_id,
+                        slot_title=slot.title,
+                    )
+                    try:
+                        await _send_channel_message_chunks(
+                            channel,
+                            ack,
+                            allowed_mentions=_build_allowed_mentions(discord),
+                        )
+                    except Exception as exc:
+                        print(f"warning: failed to send scheduled briefing ack: {exc}")
+                        continue
+
+                    snapshot, error = await self.ensure_snapshot(plan_date)
+                    if snapshot is None:
+                        fail = format_snapshot_regeneration_failed_message(
+                            mention_user_id=config.notify_user_id,
+                            error=error,
+                        )
+                        try:
+                            await _send_channel_message_chunks(
+                                channel,
+                                fail,
+                                allowed_mentions=_build_allowed_mentions(discord),
+                            )
+                        except Exception as exc:
+                            print(f"warning: failed to send scheduled briefing failure: {exc}")
+                        continue
+
                 content = format_scheduled_briefing_message(
                     briefing,
                     mention_user_id=config.notify_user_id,
@@ -916,6 +950,55 @@ def _resolve_due_briefings(
 ) -> list[PlanningScheduledBriefing]:
     window_minutes = max(1, math.ceil((window_end - window_start).total_seconds() / 60))
     return build_due_briefings(window_start, window_minutes=window_minutes)
+
+
+def _collect_due_briefing_slots(
+    *,
+    last_scan: datetime,
+    scan_time: datetime,
+    day_profile: DayProfile,
+) -> list[tuple[DayProfileBriefingSlot, object]]:
+    if scan_time <= last_scan:
+        return []
+
+    slots: list[tuple[DayProfileBriefingSlot, object]] = []
+    plan_date = last_scan.date()
+    end_date = scan_time.date()
+    while plan_date <= end_date:
+        for slot in day_profile.briefing_schedule(plan_date):
+            if last_scan < slot.send_at <= scan_time:
+                slots.append((slot, plan_date))
+        plan_date += timedelta(days=1)
+    slots.sort(key=lambda item: item[0].send_at)
+    return slots
+
+
+def _synthesize_scheduled_briefing(
+    slot: DayProfileBriefingSlot,
+    plan_date,
+) -> PlanningScheduledBriefing:
+    return PlanningScheduledBriefing(
+        briefing_id=build_fallback_item_uid(
+            "planning-scheduled-briefing", plan_date.isoformat(), slot.briefing_type
+        ),
+        briefing_type=slot.briefing_type,
+        title=slot.title,
+        send_at=slot.send_at.astimezone().isoformat(),
+        content="",
+        source="rules",
+    )
+
+
+def _has_briefing_been_sent_async(channel_id: int | None, briefing_id: str) -> bool:
+    if channel_id is None:
+        return False
+    entry = load_json_cache(
+        namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+        cache_key=_briefing_notification_cache_key(channel_id, briefing_id),
+        allow_stale=False,
+        touch=False,
+    )
+    return entry is not None
 
 
 def _briefing_notification_cache_key(channel_id: int, briefing_id: str) -> str:

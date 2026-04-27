@@ -195,7 +195,7 @@ class DiscordConversationTestCase(unittest.TestCase):
 
         self.assertTrue(envelope.regenerate_snapshot)
         self.assertEqual(envelope.intent_id, "briefing_refresh")
-        self.assertIn("지금 다시 만들고 있어요", envelope.content)
+        self.assertIn("브리핑 데이터를 준비하고 있습니다", envelope.content)
 
     @patch("yule_orchestrator.discord.conversation.save_json_cache")
     @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")

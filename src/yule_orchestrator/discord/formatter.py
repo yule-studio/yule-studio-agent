@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Sequence
 
+from ..planning.briefings import normalize_paragraph_spacing
 from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint, PlanningScheduledBriefing
 from ..planning.snapshots import DailyPlanSnapshot
 
@@ -13,10 +14,14 @@ def format_plan_today_message(
     envelope: DailyPlanEnvelope,
     mention_user_id: Optional[int] = None,
     snapshot: Optional[DailyPlanSnapshot] = None,
+    slot_title: Optional[str] = None,
 ) -> str:
     plan = envelope.daily_plan
     lines: list[str] = []
     _append_mention(lines, mention_user_id)
+    if slot_title is not None:
+        lines.append(f"**[{slot_title}]**")
+        lines.append("")
     if snapshot is not None:
         if snapshot.is_stale:
             lines.append(
@@ -77,11 +82,15 @@ def format_missing_plan_snapshot_message(
 def format_snapshot_regenerating_message(
     *,
     mention_user_id: Optional[int] = None,
+    slot_title: Optional[str] = None,
 ) -> str:
     lines: list[str] = []
     _append_mention(lines, mention_user_id)
-    lines.append("오늘 snapshot이 아직 없어서 지금 다시 만들고 있어요.")
-    lines.append("캘린더와 GitHub 이슈를 모은 뒤 곧 브리핑을 이어서 보내드릴게요.")
+    if slot_title is not None:
+        lines.append(f"**[{slot_title}]**")
+        lines.append("")
+    lines.append("브리핑 데이터를 준비하고 있습니다.")
+    lines.append("캘린더와 GitHub 이슈를 모아 snapshot을 만든 뒤 곧 이어서 보내드릴게요.")
     return "\n".join(lines)
 
 
@@ -131,14 +140,19 @@ def format_scheduled_briefing_message(
     snapshot: Optional[DailyPlanSnapshot] = None,
     mention_user_id: Optional[int] = None,
 ) -> str:
+    if snapshot is not None:
+        return format_plan_today_message(
+            snapshot.envelope,
+            mention_user_id=mention_user_id,
+            snapshot=snapshot,
+            slot_title=briefing.title,
+        )
+
     lines: list[str] = []
     _append_mention(lines, mention_user_id)
-    if snapshot is not None:
-        label = "마지막 동기화 기준 브리핑입니다." if snapshot.is_stale else "오늘의 브리핑입니다."
-        lines.append(f"{label} 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
-        lines.append("")
-    lines.append(f"**{briefing.title}**")
-    lines.extend(_non_empty_lines(briefing.content))
+    lines.append(f"**[{briefing.title}]**")
+    lines.append("")
+    lines.extend(_paragraph_lines(normalize_paragraph_spacing(briefing.content)))
     return "\n".join(lines).strip()
 
 
@@ -175,13 +189,39 @@ def _non_empty_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.strip()] or [text]
 
 
+def _paragraph_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    raw_lines = text.replace("\r\n", "\n").splitlines()
+    result: list[str] = []
+    previous_blank = False
+    started = False
+    for raw in raw_lines:
+        line = raw.rstrip()
+        if not line.strip():
+            if not started or previous_blank:
+                continue
+            result.append("")
+            previous_blank = True
+            continue
+        result.append(line)
+        previous_blank = False
+        started = True
+    while result and not result[-1].strip():
+        result.pop()
+    return result
+
+
 def _morning_summary_lines(text: str) -> list[str]:
+    normalized = normalize_paragraph_spacing(text)
     lines: list[str] = []
-    for line in _non_empty_lines(text):
-        if line in {"추천 작업", "초반 흐름"}:
+    for line in _paragraph_lines(normalized):
+        if line.strip() in {"추천 작업", "초반 흐름"}:
             break
         lines.append(line)
-    return lines or _non_empty_lines(text)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines or _paragraph_lines(normalized) or _non_empty_lines(text)
 
 
 def _priority_label(value: str) -> str:
