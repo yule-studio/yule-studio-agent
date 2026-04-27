@@ -10,6 +10,8 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
+from yule_orchestrator.integrations.calendar.models import CalendarQueryResult
+from yule_orchestrator.integrations.github.issues import GitHubIssue
 from yule_orchestrator.planning.inputs import collect_planning_inputs
 
 
@@ -76,3 +78,47 @@ class PlanningInputsTestCase(unittest.TestCase):
 
         list_naver_calendar_items_mock.assert_called_once_with(date(2026, 4, 23), date(2026, 4, 23))
         self.assertEqual(inputs.source_statuses[0].source_id, "calendar")
+
+    @patch("yule_orchestrator.planning.inputs.list_open_issues")
+    @patch("yule_orchestrator.planning.inputs.list_naver_calendar_items")
+    @patch("yule_orchestrator.planning.inputs.list_calendar_state_records")
+    def test_collect_planning_inputs_uses_prefetched_sources_without_refetch(
+        self,
+        list_calendar_state_records_mock,
+        list_naver_calendar_items_mock,
+        list_open_issues_mock,
+    ) -> None:
+        list_calendar_state_records_mock.return_value = []
+        prefetched_calendar_result = CalendarQueryResult(
+            source="naver-caldav",
+            start_date=date(2026, 4, 23),
+            end_date=date(2026, 4, 23),
+            events=[],
+            todos=[],
+            metrics={},
+        )
+        prefetched_github_issues = [
+            GitHubIssue(
+                number=1,
+                repository="owner/repo",
+                title="Issue title",
+                url="https://github.com/owner/repo/issues/1",
+                owner="owner",
+                scope="personal",
+            )
+        ]
+
+        inputs = collect_planning_inputs(
+            plan_date=date(2026, 4, 23),
+            include_calendar=True,
+            include_github=True,
+            reminders=[],
+            prefetched_calendar_result=prefetched_calendar_result,
+            prefetched_github_issues=prefetched_github_issues,
+        )
+
+        list_naver_calendar_items_mock.assert_not_called()
+        list_open_issues_mock.assert_not_called()
+        self.assertEqual(inputs.source_statuses[0].source_id, "calendar-prefetched")
+        self.assertEqual(inputs.source_statuses[1].source_id, "github-issues-prefetched")
+        self.assertEqual(len(inputs.github_issues), 1)

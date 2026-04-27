@@ -69,6 +69,14 @@ class DailyWarmupTestCase(unittest.TestCase):
         list_naver_calendar_items_mock.assert_called_once()
         self.assertTrue(list_naver_calendar_items_mock.call_args.kwargs["force_refresh"])
         list_open_issues_mock.assert_called_once_with(limit=20, force_refresh=True)
+        self.assertIs(
+            collect_planning_inputs_mock.call_args.kwargs["prefetched_calendar_result"],
+            list_naver_calendar_items_mock.return_value,
+        )
+        self.assertIs(
+            collect_planning_inputs_mock.call_args.kwargs["prefetched_github_issues"],
+            list_open_issues_mock.return_value,
+        )
         save_daily_plan_snapshot_mock.assert_called_once()
         save_runtime_metric_run_mock.assert_called_once()
         self.assertIn('"action": "daily_warmup"', stdout.getvalue())

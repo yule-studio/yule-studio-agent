@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
-from ..integrations.calendar.models import CalendarEvent, CalendarTodo
+from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
 from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
 from ..storage import list_calendar_state_records
 from .models import PlanningInputs, PlanningSourceStatus, ReminderItem
@@ -46,6 +46,8 @@ def collect_planning_inputs(
     include_calendar: bool = True,
     include_github: bool = True,
     reminders: Optional[Sequence[ReminderItem]] = None,
+    prefetched_calendar_result: Optional[CalendarQueryResult] = None,
+    prefetched_github_issues: Optional[Sequence[GitHubIssue]] = None,
 ) -> PlanningInputs:
     timezone = datetime.now().astimezone().tzname() or "local"
     warnings: list[str] = []
@@ -56,67 +58,90 @@ def collect_planning_inputs(
     reminder_items = list(reminders or [])
 
     if include_calendar:
-        state_events, state_todos = _load_calendar_items_from_state(plan_date)
-        if state_events or state_todos:
-            calendar_events = state_events
-            calendar_todos = state_todos
+        if prefetched_calendar_result is not None:
+            calendar_events = prefetched_calendar_result.events
+            calendar_todos = prefetched_calendar_result.todos
             source_statuses.append(
                 PlanningSourceStatus(
-                    source_id="calendar-state",
+                    source_id="calendar-prefetched",
                     source_type="calendar",
                     ok=True,
                     item_count=len(calendar_events) + len(calendar_todos),
                 )
             )
         else:
-            try:
-                result = list_naver_calendar_items(plan_date, plan_date)
-                calendar_events = result.events
-                calendar_todos = result.todos
+            state_events, state_todos = _load_calendar_items_from_state(plan_date)
+            if state_events or state_todos:
+                calendar_events = state_events
+                calendar_todos = state_todos
                 source_statuses.append(
                     PlanningSourceStatus(
-                        source_id="calendar",
+                        source_id="calendar-state",
                         source_type="calendar",
                         ok=True,
                         item_count=len(calendar_events) + len(calendar_todos),
                     )
                 )
-            except CalendarIntegrationError as exc:
-                warning = exc.details.message
-                warnings.append(f"calendar: {warning}")
-                source_statuses.append(
-                    PlanningSourceStatus(
-                        source_id="calendar",
-                        source_type="calendar",
-                        ok=False,
-                        item_count=0,
-                        warning=warning,
+            else:
+                try:
+                    result = list_naver_calendar_items(plan_date, plan_date)
+                    calendar_events = result.events
+                    calendar_todos = result.todos
+                    source_statuses.append(
+                        PlanningSourceStatus(
+                            source_id="calendar",
+                            source_type="calendar",
+                            ok=True,
+                            item_count=len(calendar_events) + len(calendar_todos),
+                        )
                     )
-                )
+                except CalendarIntegrationError as exc:
+                    warning = exc.details.message
+                    warnings.append(f"calendar: {warning}")
+                    source_statuses.append(
+                        PlanningSourceStatus(
+                            source_id="calendar",
+                            source_type="calendar",
+                            ok=False,
+                            item_count=0,
+                            warning=warning,
+                        )
+                    )
 
     if include_github:
-        try:
-            github_issues = list_open_issues(limit=github_limit)
+        if prefetched_github_issues is not None:
+            github_issues = list(prefetched_github_issues)
             source_statuses.append(
                 PlanningSourceStatus(
-                    source_id="github-issues",
+                    source_id="github-issues-prefetched",
                     source_type="github",
                     ok=True,
                     item_count=len(github_issues),
                 )
             )
-        except GitHubIssueError as exc:
-            warning = str(exc)
-            warnings.append(f"github: {warning}")
-            source_statuses.append(
-                PlanningSourceStatus(
-                    source_id="github-issues",
-                    source_type="github",
-                    ok=False,
-                    item_count=0,
-                    warning=warning,
+        else:
+            try:
+                github_issues = list_open_issues(limit=github_limit)
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="github-issues",
+                        source_type="github",
+                        ok=True,
+                        item_count=len(github_issues),
+                    )
                 )
-            )
+            except GitHubIssueError as exc:
+                warning = str(exc)
+                warnings.append(f"github: {warning}")
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="github-issues",
+                        source_type="github",
+                        ok=False,
+                        item_count=0,
+                        warning=warning,
+                    )
+                )
 
     source_statuses.append(
         PlanningSourceStatus(
