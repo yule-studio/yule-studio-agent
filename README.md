@@ -136,6 +136,8 @@ DISCORD_BOT_TOKEN=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
 # DISCORD_DAILY_CHANNEL_NAME=
+# DISCORD_DEBUG_CHANNEL_ID=
+# DISCORD_DEBUG_CHANNEL_NAME=
 # DISCORD_CHECKPOINT_CHANNEL_ID=
 # DISCORD_CHECKPOINT_CHANNEL_NAME=
 # DISCORD_CONVERSATION_CHANNEL_ID=
@@ -143,6 +145,8 @@ DISCORD_GUILD_ID=
 # DISCORD_NOTIFY_USER_ID=
 # DISCORD_DAILY_BRIEFING_TIME=06:00
 # DISCORD_CHECKPOINT_PREFETCH_MINUTES=5
+# DISCORD_PREPARATION_RETRY_COUNT=2
+# DISCORD_PREPARATION_RETRY_DELAY_SECONDS=15
 
 # GITHUB_ISSUES_CACHE_SECONDS=300
 ```
@@ -178,16 +182,20 @@ DISCORD_GUILD_ID=
 - `DISCORD_APPLICATION_ID`는 선택값입니다. 비워두면 토큰 기준으로 실제 Discord 애플리케이션 ID를 자동 사용합니다.
 - `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`, `DISCORD_CONVERSATION_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
 - `DISCORD_DAILY_CHANNEL_NAME`, `DISCORD_CHECKPOINT_CHANNEL_NAME`, `DISCORD_CONVERSATION_CHANNEL_NAME`을 같이 넣으면 채널 ID가 바뀌었거나 잘못 들어간 경우 이름 기반 fallback 으로 채널을 다시 찾을 수 있습니다.
+- `DISCORD_DEBUG_CHANNEL_ID` 또는 `DISCORD_DEBUG_CHANNEL_NAME`을 넣으면 자동 준비 단계(`calendar sync`, `github sync`, `planning snapshot`)의 성공/실패 결과를 Discord 메시지로도 확인할 수 있습니다.
 - `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`을 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
 - 같은 기준 시각을 따라 봇이 자동으로 `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 준비 작업도 순서대로 수행합니다.
+- 준비 단계가 실패하면 `DISCORD_PREPARATION_RETRY_COUNT`와 `DISCORD_PREPARATION_RETRY_DELAY_SECONDS` 기준으로 자동 재시도합니다.
+- 채널 ID가 잘못되었어도 해당 이름 설정이 있으면 이름 기반 fallback 을 먼저 시도하고, 시작 로그와 런타임 경고에서 그 사실을 알려줍니다.
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
 - 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
 - `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
+- 자동 준비 단계는 표준 출력에 구조화된 JSON 로그를 남기고, debug 채널을 지정한 경우 Discord에서도 같은 흐름을 확인할 수 있습니다.
 
 ## 실행
 
