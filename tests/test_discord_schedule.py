@@ -141,6 +141,29 @@ class DiscordScheduleTestCase(unittest.TestCase):
         )
         self.assertIn("info: Discord debug messages disabled", messages)
 
+    def test_startup_messages_warn_when_daily_and_conversation_channels_overlap(self) -> None:
+        fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
+        config = DiscordBotConfig(
+            token="token",
+            application_id=None,
+            guild_id=123,
+            daily_channel_id=456,
+            daily_channel_name="planning",
+            checkpoint_channel_id=None,
+            checkpoint_channel_name=None,
+            conversation_channel_id=456,
+            conversation_channel_name="planning",
+            notify_user_id=None,
+            daily_briefing_time=time(17, 30),
+            checkpoint_prefetch_minutes=5,
+        )
+
+        messages = _startup_messages(config, now=fake_now)
+
+        self.assertTrue(
+            any("daily briefing channel and conversation channel are the same" in message for message in messages)
+        )
+
     def test_startup_messages_warn_when_channel_id_looks_like_application_id(self) -> None:
         fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
         config = DiscordBotConfig(

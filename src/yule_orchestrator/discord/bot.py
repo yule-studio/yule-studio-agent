@@ -50,6 +50,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
             self._checkpoint_storage_lock: asyncio.Lock | None = None
             self._completed_preparation_steps: set[tuple[str, str]] = set()
+            self._daily_preparation_context: dict[str, dict[str, object]] = {}
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -170,6 +171,10 @@ def run_discord_bot(repo_root: Path) -> None:
                         )
                 _cleanup_completed_preparation_steps(
                     self._completed_preparation_steps,
+                    today=scan_time.date(),
+                )
+                _cleanup_preparation_context(
+                    self._daily_preparation_context,
                     today=scan_time.date(),
                 )
                 last_scan = scan_time
@@ -297,12 +302,14 @@ def run_discord_bot(repo_root: Path) -> None:
             step_name: str,
             plan_date,
         ) -> dict[str, object]:
+            context = self._daily_preparation_context.setdefault(plan_date.isoformat(), {})
             if step_name == "calendar_sync":
                 result = await asyncio.to_thread(
                     list_naver_calendar_items,
                     plan_date,
                     plan_date,
                 )
+                context["calendar_result"] = result
                 return {
                     "event_count": len(result.events),
                     "todo_count": len(result.todos),
@@ -313,10 +320,17 @@ def run_discord_bot(repo_root: Path) -> None:
                     list_open_issues,
                     DAILY_PREPARATION_GITHUB_LIMIT,
                 )
+                context["github_issues"] = list(issues)
                 return {"issue_count": len(issues)}
 
             if step_name == "planning_snapshot":
                 reminders = await asyncio.to_thread(load_reminder_items, None)
+                prefetched_calendar_result = context.get("calendar_result")
+                if prefetched_calendar_result is not None and not hasattr(prefetched_calendar_result, "events"):
+                    prefetched_calendar_result = None
+                prefetched_github_issues = context.get("github_issues")
+                if prefetched_github_issues is not None and not isinstance(prefetched_github_issues, list):
+                    prefetched_github_issues = None
                 inputs = await asyncio.to_thread(
                     collect_planning_inputs,
                     plan_date,
@@ -324,15 +338,19 @@ def run_discord_bot(repo_root: Path) -> None:
                     include_calendar=True,
                     include_github=True,
                     reminders=reminders,
-                    allow_live_calendar_fetch=False,
-                    allow_live_github_fetch=False,
+                    prefetched_calendar_result=prefetched_calendar_result,
+                    prefetched_github_issues=prefetched_github_issues,
+                    allow_live_calendar_fetch=prefetched_calendar_result is None,
+                    allow_live_github_fetch=prefetched_github_issues is None,
                 )
                 envelope = await asyncio.to_thread(build_daily_plan, inputs)
                 await asyncio.to_thread(save_daily_plan_snapshot, envelope)
                 return {
-                    "recommended_task_count": len(envelope.daily_plan.recommended_tasks),
+                    "recommended_task_count": envelope.daily_plan.summary.recommended_task_count,
                     "checkpoint_count": len(envelope.daily_plan.checkpoints),
                     "warning_count": len(inputs.warnings),
+                    "calendar_source": _preparation_source_label(inputs.source_statuses, "calendar"),
+                    "github_source": _preparation_source_label(inputs.source_statuses, "github"),
                 }
 
             raise ValueError(f"Unsupported daily preparation step: {step_name}")
@@ -654,6 +672,7 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
 
     messages.extend(_channel_configuration_warnings(config))
+    messages.extend(_channel_overlap_warnings(config))
 
     if config.daily_briefing_time is not None and not daily_channel_configured:
         messages.append(
@@ -744,6 +763,23 @@ def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
                 f"warning: {label} looks like DISCORD_GUILD_ID. "
                 "Use the target Discord text channel id instead."
             )
+    return warnings
+
+
+def _channel_overlap_warnings(config: DiscordBotConfig) -> list[str]:
+    warnings: list[str] = []
+    daily_id = config.daily_channel_id
+    daily_name = _normalize_channel_name(config.daily_channel_name)
+    conversation_id = config.effective_conversation_channel_id
+    conversation_name = _normalize_channel_name(config.effective_conversation_channel_name)
+
+    same_id = daily_id is not None and conversation_id is not None and daily_id == conversation_id
+    same_name = daily_name and conversation_name and daily_name == conversation_name
+    if same_id or same_name:
+        warnings.append(
+            "warning: daily briefing channel and conversation channel are the same. "
+            "Manual chat replies can look like duplicate briefings in that channel."
+        )
     return warnings
 
 
@@ -1039,6 +1075,23 @@ def _channel_target_text(channel_id: int | None, channel_name: str | None) -> st
     if channel_name:
         parts.append(f"channel_name={channel_name}")
     return ", ".join(parts) if parts else "channel=unconfigured"
+
+
+def _cleanup_preparation_context(
+    context_store: dict[str, dict[str, object]],
+    *,
+    today,
+) -> None:
+    stale_keys = [key for key in context_store if key < today.isoformat()]
+    for key in stale_keys:
+        context_store.pop(key, None)
+
+
+def _preparation_source_label(source_statuses, source_type: str) -> str:
+    for status in source_statuses:
+        if getattr(status, "source_type", None) == source_type:
+            return str(getattr(status, "source_id", "unknown"))
+    return "unknown"
 
 
 def _log_preparation_event(
