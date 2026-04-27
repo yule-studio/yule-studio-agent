@@ -349,6 +349,52 @@ def render_discord_briefing(
     return "\n".join(lines)
 
 
+def render_work_start_briefing(
+    *,
+    plan_date: date,
+    summary: DailyPlanSummary,
+    fixed_schedule: Sequence[PlanningTimeBlock],
+    prioritized_tasks: Sequence[PlanningTaskCandidate],
+    suggested_time_blocks: Sequence[PlanningTimeBlock],
+    checkpoints: Sequence[PlanningCheckpoint],
+    day_profile: DayProfile,
+) -> str:
+    work_start_label = day_profile.work_start_time.strftime("%H:%M")
+    lines = [f"{plan_date.isoformat()} 업무 시작 브리핑"]
+    lines.append(
+        f"- {work_start_label} 기준으로 오전에 집중할 작업과 남은 일정을 빠르게 점검하는 시간입니다."
+    )
+    if prioritized_tasks:
+        top_task = prioritized_tasks[0]
+        lines.append(f"- 지금 가장 먼저 잡으면 좋은 작업은 '{top_task.title}'입니다.")
+    morning_focus_blocks = [
+        block for block in suggested_time_blocks
+        if datetime.fromisoformat(block.start).time() < day_profile.lunch_start_time
+    ]
+    if morning_focus_blocks:
+        focus = morning_focus_blocks[0]
+        lines.append(
+            f"- 오전 집중 시간대는 {_format_time_range(focus.start, focus.end)} '{focus.title}'로 잡혀 있습니다."
+        )
+    morning_events = [
+        block for block in fixed_schedule
+        if datetime.fromisoformat(block.start).time() < day_profile.lunch_start_time
+    ]
+    if morning_events:
+        next_event = morning_events[0]
+        lines.append(
+            f"- 가장 먼저 챙겨야 할 일정은 {_format_time_range(next_event.start, next_event.end)} '{next_event.title}'입니다."
+        )
+    morning_checkpoints = [
+        checkpoint for checkpoint in checkpoints
+        if datetime.fromisoformat(checkpoint.remind_at).time() < day_profile.lunch_start_time
+    ]
+    if morning_checkpoints:
+        first_time = datetime.fromisoformat(morning_checkpoints[0].remind_at).strftime("%H:%M")
+        lines.append(f"- 오전 첫 체크포인트는 {first_time}입니다.")
+    return "\n".join(lines)
+
+
 def render_lunch_briefing(
     *,
     plan_date: date,
@@ -413,12 +459,14 @@ def build_scheduled_briefings(
     day_profile: DayProfile,
     discord_briefing: str,
     morning_briefing: str,
+    work_start_briefing: str,
     lunch_briefing: str,
     evening_briefing: str,
     morning_source: str,
 ) -> Sequence[PlanningScheduledBriefing]:
     schedule_map = {slot.briefing_type: slot for slot in day_profile.briefing_schedule(plan_date)}
     morning_slot = schedule_map["morning"]
+    work_start_slot = schedule_map["work_start"]
     lunch_slot = schedule_map["lunch"]
     evening_slot = schedule_map["evening"]
     morning_content = "\n\n".join(
@@ -437,6 +485,14 @@ def build_scheduled_briefings(
             send_at=morning_slot.send_at.astimezone().isoformat(),
             content=morning_content,
             source=morning_source,
+        ),
+        PlanningScheduledBriefing(
+            briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "work_start"),
+            briefing_type="work_start",
+            title=work_start_slot.title,
+            send_at=work_start_slot.send_at.astimezone().isoformat(),
+            content=work_start_briefing,
+            source="rules",
         ),
         PlanningScheduledBriefing(
             briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "lunch"),

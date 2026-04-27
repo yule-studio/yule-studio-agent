@@ -30,6 +30,11 @@ class DayProfile:
                 send_at=datetime.combine(plan_date, self.wake_time).replace(tzinfo=timezone),
             ),
             DayProfileBriefingSlot(
+                briefing_type="work_start",
+                title="업무 시작 브리핑",
+                send_at=datetime.combine(plan_date, self.work_start_time).replace(tzinfo=timezone),
+            ),
+            DayProfileBriefingSlot(
                 briefing_type="lunch",
                 title="점심 브리핑",
                 send_at=datetime.combine(plan_date, self.lunch_start_time).replace(tzinfo=timezone),

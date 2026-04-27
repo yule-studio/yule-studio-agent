@@ -96,7 +96,10 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("초반 흐름", plan.morning_briefing)
         self.assertTrue(plan.time_block_briefings)
         self.assertTrue(any(briefing.block_type == "focus_block" for briefing in plan.time_block_briefings))
-        self.assertEqual([briefing.briefing_type for briefing in plan.briefings], ["morning", "lunch", "evening"])
+        self.assertEqual(
+            [briefing.briefing_type for briefing in plan.briefings],
+            ["morning", "work_start", "lunch", "evening"],
+        )
         self.assertEqual(plan.morning_briefing_source, "rules")
         self.assertEqual(plan.discord_briefing_source, "rules")
 
@@ -484,3 +487,25 @@ class PlanningPlannerTestCase(unittest.TestCase):
         normalized = normalize_paragraph_spacing(text)
 
         self.assertEqual(normalized, "첫 문장입니다.\n\n두 번째 문장입니다.")
+
+    def test_day_profile_briefing_schedule_has_four_slots(self) -> None:
+        from yule_orchestrator.planning.day_profile import DayProfile
+        from datetime import time as dt_time
+
+        profile = DayProfile(
+            wake_time=dt_time(5, 30),
+            work_start_time=dt_time(9, 0),
+            lunch_start_time=dt_time(13, 0),
+            work_end_time=dt_time(18, 0),
+            commute_minutes=45,
+            departure_buffer_minutes=10,
+            home_area="신정동",
+            work_area="마곡",
+        )
+
+        slots = profile.briefing_schedule(date(2026, 4, 27))
+        types = [slot.briefing_type for slot in slots]
+
+        self.assertEqual(types, ["morning", "work_start", "lunch", "evening"])
+        send_times = [slot.send_at.strftime("%H:%M") for slot in slots]
+        self.assertEqual(send_times, ["05:30", "09:00", "13:00", "18:00"])

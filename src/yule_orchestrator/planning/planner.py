@@ -12,6 +12,7 @@ from .briefings import (
     render_evening_briefing,
     render_lunch_briefing,
     render_morning_briefing,
+    render_work_start_briefing,
 )
 from .day_profile import load_day_profile
 from .models import DailyPlan, DailyPlanEnvelope, DailyPlanSummary, PlanningInputs
@@ -125,6 +126,15 @@ def build_daily_plan(
         except ValueError as exc:
             warnings.append(f"ollama: {exc}")
 
+    work_start_briefing = render_work_start_briefing(
+        plan_date=inputs.plan_date,
+        summary=summary,
+        fixed_schedule=fixed_schedule,
+        prioritized_tasks=tasks,
+        suggested_time_blocks=suggested_blocks,
+        checkpoints=checkpoints,
+        day_profile=day_profile,
+    )
     lunch_briefing = render_lunch_briefing(
         plan_date=inputs.plan_date,
         summary=summary,
@@ -146,6 +156,7 @@ def build_daily_plan(
         day_profile=day_profile,
         discord_briefing=discord_briefing,
         morning_briefing=morning_briefing,
+        work_start_briefing=work_start_briefing,
         lunch_briefing=lunch_briefing,
         evening_briefing=evening_briefing,
         morning_source=morning_briefing_source,
