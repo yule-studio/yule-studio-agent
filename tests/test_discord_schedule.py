@@ -69,6 +69,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             guild_id=123,
             daily_channel_id=456,
             checkpoint_channel_id=789,
+            conversation_channel_id=654,
             notify_user_id=999,
             daily_briefing_time=time(17, 30),
             checkpoint_prefetch_minutes=7,
@@ -81,6 +82,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
         self.assertTrue(any("checkpoint notifications enabled" in message for message in messages))
         self.assertTrue(any("channel=789" in message for message in messages))
         self.assertIn("info: Discord notifications will mention user 999", messages)
+        self.assertIn("info: conversation replies enabled (channel=654, mode=plain-message-or-mention)", messages)
 
     def test_startup_messages_warn_when_channel_id_looks_like_application_id(self) -> None:
         fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
@@ -90,6 +92,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             guild_id=123,
             daily_channel_id=456,
             checkpoint_channel_id=None,
+            conversation_channel_id=None,
             notify_user_id=None,
             daily_briefing_time=time(17, 30),
             checkpoint_prefetch_minutes=5,

@@ -10,6 +10,7 @@ from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning.models import PlanningCheckpoint
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
+from .conversation import build_conversation_response
 from .config import DiscordBotConfig
 from .formatter import (
     format_checkpoints_message,
@@ -33,6 +34,8 @@ def run_discord_bot(repo_root: Path) -> None:
     class YuleDiscordBot(commands.Bot):
         def __init__(self) -> None:
             intents = discord.Intents.default()
+            intents.message_content = True
+            intents.messages = True
             self._daily_briefing_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
@@ -75,6 +78,37 @@ def run_discord_bot(repo_root: Path) -> None:
             print(f"Discord bot logged in as {user_text} (guild={config.guild_id})")
             for message in _startup_messages(config, now=datetime.now().astimezone()):
                 print(message)
+
+        async def on_message(self, message: "discord.Message") -> None:
+            if message.author.bot:
+                return
+            if message.guild is None or message.guild.id != config.guild_id:
+                return
+            if self.user is None:
+                return
+            if not _should_handle_message(
+                message=message,
+                bot_user=self.user,
+                conversation_channel_id=config.conversation_channel_id,
+            ):
+                return
+
+            prompt = _extract_conversation_prompt(message=message, bot_user=self.user).strip()
+            if not prompt:
+                prompt = "오늘 뭐부터 해야 해?"
+
+            async with message.channel.typing():
+                content = await asyncio.to_thread(
+                    build_conversation_response,
+                    prompt,
+                    author_user_id=message.author.id,
+                )
+
+            await _send_channel_message_chunks(
+                message.channel,
+                content,
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
 
         async def close(self) -> None:
             await _cancel_task(self._daily_briefing_task)
@@ -307,6 +341,13 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     else:
         messages.append("info: Discord notifications will be sent without a user mention")
 
+    if config.conversation_channel_id is not None:
+        messages.append(
+            f"info: conversation replies enabled (channel={config.conversation_channel_id}, mode=plain-message-or-mention)"
+        )
+    else:
+        messages.append("info: conversation replies enabled in mention-only mode")
+
     return messages
 
 
@@ -318,6 +359,7 @@ def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
     configured_channels = [
         ("DISCORD_DAILY_CHANNEL_ID", config.daily_channel_id),
         ("DISCORD_CHECKPOINT_CHANNEL_ID", config.checkpoint_channel_id),
+        ("DISCORD_CONVERSATION_CHANNEL_ID", config.conversation_channel_id),
     ]
     for label, channel_id in configured_channels:
         if channel_id is not None and channel_id == config.application_id:
@@ -421,6 +463,36 @@ async def _send_channel_message_chunks(
 ) -> None:
     for chunk in split_discord_message(message):
         await channel.send(chunk, allowed_mentions=allowed_mentions)
+
+
+def _should_handle_message(
+    *,
+    message: object,
+    bot_user: object,
+    conversation_channel_id: int | None,
+) -> bool:
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    if conversation_channel_id is not None and channel_id == conversation_channel_id:
+        return True
+
+    mentions = getattr(message, "mentions", None) or []
+    bot_id = getattr(bot_user, "id", None)
+    return any(getattr(user, "id", None) == bot_id for user in mentions)
+
+
+def _extract_conversation_prompt(*, message: object, bot_user: object) -> str:
+    content = str(getattr(message, "content", "") or "")
+    bot_id = getattr(bot_user, "id", None)
+    bot_name = str(getattr(bot_user, "name", "") or "").strip()
+
+    if bot_id is not None:
+        content = content.replace(f"<@{bot_id}>", " ")
+        content = content.replace(f"<@!{bot_id}>", " ")
+    if bot_name:
+        content = content.replace(f"@{bot_name}", " ")
+
+    return " ".join(content.split())
 
 
 def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentions":

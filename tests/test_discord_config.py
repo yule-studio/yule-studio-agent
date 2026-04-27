@@ -21,6 +21,7 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_DAILY_CHANNEL_ID": "555",
+                "DISCORD_CONVERSATION_CHANNEL_ID": "666",
                 "DISCORD_NOTIFY_USER_ID": "777",
                 "DISCORD_DAILY_BRIEFING_TIME": "16:15",
             },
@@ -32,6 +33,7 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertIsNone(config.application_id)
         self.assertEqual(config.guild_id, 987654321)
         self.assertEqual(config.daily_channel_id, 555)
+        self.assertEqual(config.conversation_channel_id, 666)
         self.assertIsNone(config.checkpoint_channel_id)
         self.assertEqual(config.effective_checkpoint_channel_id, 555)
         self.assertEqual(config.notify_user_id, 777)

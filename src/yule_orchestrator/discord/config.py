@@ -13,6 +13,7 @@ class DiscordBotConfig:
     guild_id: int
     daily_channel_id: Optional[int] = None
     checkpoint_channel_id: Optional[int] = None
+    conversation_channel_id: Optional[int] = None
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
     checkpoint_prefetch_minutes: int = 5
@@ -29,6 +30,7 @@ class DiscordBotConfig:
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
             checkpoint_channel_id=_optional_int_env("DISCORD_CHECKPOINT_CHANNEL_ID"),
+            conversation_channel_id=_optional_int_env("DISCORD_CONVERSATION_CHANNEL_ID"),
             notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
             daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
             checkpoint_prefetch_minutes=_optional_positive_int_env(
