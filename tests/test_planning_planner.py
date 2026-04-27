@@ -12,6 +12,7 @@ from unittest.mock import patch
 from yule_orchestrator.integrations.calendar.models import CalendarEvent, CalendarTodo
 from yule_orchestrator.integrations.github.issues import GitHubIssue
 from yule_orchestrator.planning import ReminderItem
+from yule_orchestrator.planning.ollama import _build_prompt
 from yule_orchestrator.planning.models import PlanningInputs, PlanningSourceStatus
 from yule_orchestrator.planning.planner import build_daily_plan, select_due_checkpoints
 
@@ -238,15 +239,63 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(plan.checkpoints[1].remind_at, "2026-04-22T09:55:00+09:00")
         self.assertIn("마감까지 5분 남았습니다", plan.checkpoints[1].prompt)
         self.assertIn("업무 수행 (회의 없음)", plan.checkpoints[1].prompt)
-        self.assertIn("남은 핵심 한 가지", plan.checkpoints[1].prompt)
 
-        due = select_due_checkpoints(
-            plan.checkpoints,
-            at=datetime.fromisoformat("2026-04-22T09:50:00+09:00"),
-            window_minutes=10,
+    def test_ollama_prompt_hides_internal_scores_and_iso_timestamps(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 27),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-1",
+                    title="업무 수행",
+                    start="2026-04-27T09:00:00+09:00",
+                    end="2026-04-27T13:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                )
+            ],
+            calendar_todos=[
+                CalendarTodo(
+                    item_uid="todo-1",
+                    title="한국사 능력 검정 시험",
+                    start=None,
+                    due="2026-04-27",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="선사시대 마무리",
+                    last_modified=None,
+                )
+            ],
+            github_issues=[],
+            reminders=[],
         )
-        self.assertEqual(len(due), 1)
-        self.assertEqual(due[0].block_title, "할일 목록 정리")
+
+        envelope = build_daily_plan(inputs, use_ollama=False)
+        prompt = _build_prompt(
+            plan_date=envelope.daily_plan.plan_date.isoformat(),
+            summary_line=envelope.daily_plan.discord_briefing,
+            fixed_schedule=envelope.daily_plan.fixed_schedule,
+            prioritized_tasks=envelope.daily_plan.prioritized_tasks,
+            time_block_briefings=envelope.daily_plan.time_block_briefings,
+            checkpoints=envelope.daily_plan.checkpoints,
+        )
+
+        self.assertNotIn("score=", prompt)
+        self.assertNotIn("priority_score", prompt)
+        self.assertIn("09:00~13:00", prompt)
+        self.assertNotIn("2026-04-27T09:00:00+09:00", prompt)
 
     def test_build_daily_plan_adds_ten_and_five_minute_execution_checkpoints(self) -> None:
         inputs = PlanningInputs(

@@ -23,7 +23,7 @@ def format_plan_today_message(
                 f"마지막 동기화 기준 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}"
             )
         else:
-            lines.append(f"스냅샷 기준 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
+            lines.append(f"오늘의 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
         lines.append("")
     lines.append("**오늘 브리핑**")
     lines.extend(_non_empty_lines(plan.discord_briefing))

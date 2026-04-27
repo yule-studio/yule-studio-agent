@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Sequence
 from urllib import error, request
 
@@ -87,19 +88,19 @@ def _build_prompt(
     checkpoints: Sequence[PlanningCheckpoint],
 ) -> str:
     schedule_lines = [
-        f"- {block.start} -> {block.end} | {block.title}"
+        f"- {_format_time_range(block.start, block.end)} | {block.title}"
         for block in fixed_schedule[:5]
     ] or ["- 고정 일정 없음"]
     task_lines = [
-        f"- {task.title} | {task.priority_level} | score={task.priority_score} | 이유={', '.join(task.reasons)}"
+        f"- {task.title} | 우선순위={_priority_label(task.priority_level)} | 이유={_summarize_reasons(task.reasons)}"
         for task in prioritized_tasks[:5]
     ] or ["- 우선 작업 없음"]
     block_lines = [
-        f"- {briefing.start} -> {briefing.end} | {briefing.title} | {briefing.briefing}"
+        f"- {_format_time_range(briefing.start, briefing.end)} | {briefing.title} | {briefing.briefing}"
         for briefing in time_block_briefings[:5]
     ] or ["- 시간대별 브리핑 없음"]
     checkpoint_lines = [
-        f"- {checkpoint.remind_at} | {checkpoint.block_title} | {checkpoint.prompt}"
+        f"- {datetime.fromisoformat(checkpoint.remind_at).strftime('%H:%M')} | {checkpoint.block_title} | {checkpoint.prompt}"
         for checkpoint in checkpoints[:5]
     ] or ["- 체크포인트 없음"]
 
@@ -107,13 +108,16 @@ def _build_prompt(
 다음 daily-plan 입력을 보고 한국어로 자연스럽고 실용적인 아침 브리핑을 작성하세요.
 
 조건:
-- 6문장 이하
-- 너무 딱딱하지 않게
-- 가장 먼저 할 일 1개를 분명하게 추천
-- 가능하면 2순위, 3순위까지 자연스럽게 이어서 설명
-- 시간 블록이 있으면 어느 시간대에 무엇을 하면 좋을지 짚기
-- 체크포인트가 있으면 자연스럽게 한 줄 언급
-- 결과는 한 문단 또는 여러 줄 텍스트로 반환
+- 2~4개의 짧은 문단으로 쓸 것
+- 각 문단은 1~2문장으로 짧게 유지할 것
+- 너무 딱딱하거나 과장하지 말 것
+- 가장 먼저 할 일 1개를 분명하게 추천할 것
+- 가능하면 2순위, 3순위는 별도 문장이나 bullet로 숨이 쉬게 이어서 설명할 것
+- 시간 블록이 있으면 어느 시간대에 무엇을 하면 좋을지 짚을 것
+- 체크포인트가 있으면 마지막 문단에서 짧게 한 줄로 언급할 것
+- 내부 점수, 우선순위 계산 숫자, ISO datetime 원문은 절대 노출하지 말 것
+- 사용자가 입력하지 않은 수치 평가(예: 95점, 87점)를 만들어내지 말 것
+- 문단 사이에는 반드시 빈 줄 하나를 넣을 것
 
 날짜:
 {plan_date}
@@ -133,3 +137,24 @@ def _build_prompt(
 체크포인트:
 {chr(10).join(checkpoint_lines)}
 """
+
+
+def _format_time_range(start_value: str, end_value: str) -> str:
+    start_label = datetime.fromisoformat(start_value).strftime("%H:%M")
+    end_label = datetime.fromisoformat(end_value).strftime("%H:%M")
+    return f"{start_label}~{end_label}"
+
+
+def _priority_label(value: str) -> str:
+    return {
+        "high": "높음",
+        "medium": "중간",
+        "low": "낮음",
+    }.get(value, value)
+
+
+def _summarize_reasons(reasons: Sequence[str]) -> str:
+    filtered = [reason.strip() for reason in reasons if reason.strip()]
+    if not filtered:
+        return "특별한 사유 없음"
+    return ", ".join(filtered[:3])
