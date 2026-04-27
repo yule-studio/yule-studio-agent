@@ -182,7 +182,10 @@ DISCORD_GUILD_ID=
 - `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`, `DISCORD_CONVERSATION_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
 - `DISCORD_DAILY_CHANNEL_NAME`, `DISCORD_CHECKPOINT_CHANNEL_NAME`, `DISCORD_CONVERSATION_CHANNEL_NAME`을 같이 넣으면 채널 ID가 바뀌었거나 잘못 들어간 경우 이름 기반 fallback 으로 채널을 다시 찾을 수 있습니다.
 - `DISCORD_DEBUG_CHANNEL_ID` 또는 `DISCORD_DEBUG_CHANNEL_NAME`을 넣으면 자동 준비 단계(`calendar sync`, `github sync`, `planning snapshot`)의 성공/실패 결과를 Discord 메시지로도 확인할 수 있습니다.
-- `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`을 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다.
+- `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`은 대화 채널 지정용입니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=mention-only`가 기본값이며, 이때는 봇 멘션이 있을 때만 응답합니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=plain-message-or-mention`으로 바꾸면 지정한 대화 채널에서 평문 메시지에도 응답합니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=disabled`로 두면 대화형 응답을 완전히 끌 수 있습니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/lunch/evening` 브리핑을 읽어 전송합니다.
