@@ -69,19 +69,17 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
 
         self.assertEqual([checkpoint.checkpoint_id for checkpoint in unsent], ["checkpoint-2"])
 
-    @patch("yule_orchestrator.discord.planning_runtime.collect_planning_inputs")
-    @patch("yule_orchestrator.discord.planning_runtime.build_daily_plan")
+    @patch("yule_orchestrator.discord.planning_runtime.load_daily_plan_snapshot")
     def test_build_due_checkpoints_scans_across_midnight(
         self,
-        build_daily_plan_mock,
-        collect_inputs_mock,
+        load_daily_plan_snapshot_mock,
     ) -> None:
         first_day = self._checkpoint("checkpoint-1", "2026-04-22T23:59:00+09:00")
         second_day = self._checkpoint("checkpoint-2", "2026-04-23T00:01:00+09:00")
 
-        build_daily_plan_mock.side_effect = [
-            self._envelope([first_day]),
-            self._envelope([second_day]),
+        load_daily_plan_snapshot_mock.side_effect = [
+            self._snapshot([first_day]),
+            self._snapshot([second_day]),
         ]
 
         due = build_due_checkpoints(
@@ -93,7 +91,7 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
             [checkpoint.checkpoint_id for checkpoint in due],
             ["checkpoint-1", "checkpoint-2"],
         )
-        self.assertEqual(collect_inputs_mock.call_count, 2)
+        self.assertEqual(load_daily_plan_snapshot_mock.call_count, 2)
 
     @patch("yule_orchestrator.discord.bot.build_due_checkpoints")
     @patch("yule_orchestrator.discord.bot.load_prefetched_due_checkpoints")
@@ -155,13 +153,17 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
         )
 
     @staticmethod
-    def _envelope(checkpoints: list[PlanningCheckpoint]):
-        class Envelope:
-            class DailyPlan:
-                def __init__(self, due_checkpoints: list[PlanningCheckpoint]) -> None:
-                    self.checkpoints = due_checkpoints
-
+    def _snapshot(checkpoints: list[PlanningCheckpoint]):
+        class DailyPlan:
             def __init__(self, due_checkpoints: list[PlanningCheckpoint]) -> None:
-                self.daily_plan = self.DailyPlan(due_checkpoints)
+                self.checkpoints = due_checkpoints
 
-        return Envelope(checkpoints)
+        class Envelope:
+            def __init__(self, due_checkpoints: list[PlanningCheckpoint]) -> None:
+                self.daily_plan = DailyPlan(due_checkpoints)
+
+        class Snapshot:
+            def __init__(self, due_checkpoints: list[PlanningCheckpoint]) -> None:
+                self.envelope = Envelope(due_checkpoints)
+
+        return Snapshot(checkpoints)

@@ -5,9 +5,8 @@ import json
 from pathlib import Path
 from typing import Optional, Sequence
 
-from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
 from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
-from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
+from ..integrations.github.issues import GitHubIssue
 from ..storage import list_calendar_state_records
 from .models import PlanningInputs, PlanningSourceStatus, ReminderItem
 
@@ -42,14 +41,12 @@ def load_reminder_items(path_text: Optional[str]) -> Sequence[ReminderItem]:
 
 def collect_planning_inputs(
     plan_date: date,
-    github_limit: int = 20,
     include_calendar: bool = True,
     include_github: bool = True,
     reminders: Optional[Sequence[ReminderItem]] = None,
     prefetched_calendar_result: Optional[CalendarQueryResult] = None,
     prefetched_github_issues: Optional[Sequence[GitHubIssue]] = None,
 ) -> PlanningInputs:
-    timezone = datetime.now().astimezone().tzname() or "local"
     warnings: list[str] = []
     source_statuses: list[PlanningSourceStatus] = []
     calendar_events: Sequence[CalendarEvent] = []
@@ -71,9 +68,9 @@ def collect_planning_inputs(
             )
         else:
             state_events, state_todos = _load_calendar_items_from_state(plan_date)
+            calendar_events = state_events
+            calendar_todos = state_todos
             if state_events or state_todos:
-                calendar_events = state_events
-                calendar_todos = state_todos
                 source_statuses.append(
                     PlanningSourceStatus(
                         source_id="calendar-state",
@@ -83,30 +80,19 @@ def collect_planning_inputs(
                     )
                 )
             else:
-                try:
-                    result = list_naver_calendar_items(plan_date, plan_date)
-                    calendar_events = result.events
-                    calendar_todos = result.todos
-                    source_statuses.append(
-                        PlanningSourceStatus(
-                            source_id="calendar",
-                            source_type="calendar",
-                            ok=True,
-                            item_count=len(calendar_events) + len(calendar_todos),
-                        )
+                warning = (
+                    "no calendar state for the requested date; run `yule daily-warmup` to populate."
+                )
+                warnings.append(f"calendar: {warning}")
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="calendar-state",
+                        source_type="calendar",
+                        ok=False,
+                        item_count=0,
+                        warning=warning,
                     )
-                except CalendarIntegrationError as exc:
-                    warning = exc.details.message
-                    warnings.append(f"calendar: {warning}")
-                    source_statuses.append(
-                        PlanningSourceStatus(
-                            source_id="calendar",
-                            source_type="calendar",
-                            ok=False,
-                            item_count=0,
-                            warning=warning,
-                        )
-                    )
+                )
 
     if include_github:
         if prefetched_github_issues is not None:
@@ -120,28 +106,19 @@ def collect_planning_inputs(
                 )
             )
         else:
-            try:
-                github_issues = list_open_issues(limit=github_limit)
-                source_statuses.append(
-                    PlanningSourceStatus(
-                        source_id="github-issues",
-                        source_type="github",
-                        ok=True,
-                        item_count=len(github_issues),
-                    )
+            warning = (
+                "github issues are only available via warmup; supply `prefetched_github_issues`."
+            )
+            warnings.append(f"github: {warning}")
+            source_statuses.append(
+                PlanningSourceStatus(
+                    source_id="github-issues",
+                    source_type="github",
+                    ok=False,
+                    item_count=0,
+                    warning=warning,
                 )
-            except GitHubIssueError as exc:
-                warning = str(exc)
-                warnings.append(f"github: {warning}")
-                source_statuses.append(
-                    PlanningSourceStatus(
-                        source_id="github-issues",
-                        source_type="github",
-                        ok=False,
-                        item_count=0,
-                        warning=warning,
-                    )
-                )
+            )
 
     source_statuses.append(
         PlanningSourceStatus(
@@ -154,7 +131,6 @@ def collect_planning_inputs(
 
     return build_planning_inputs(
         plan_date=plan_date,
-        timezone=timezone,
         source_statuses=source_statuses,
         warnings=warnings,
         calendar_events=calendar_events,

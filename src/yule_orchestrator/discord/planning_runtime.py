@@ -2,23 +2,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from ..planning import build_daily_plan, collect_planning_inputs
-from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
+from ..planning.models import PlanningCheckpoint
 from ..planning.snapshots import DailyPlanSnapshot, load_daily_plan_snapshot
 from ..storage import load_json_cache, save_json_cache
 
 CHECKPOINT_SNAPSHOT_NAMESPACE = "planning-checkpoint-snapshots"
 CHECKPOINT_SNAPSHOT_PROVIDER = "discord-bot"
 CHECKPOINT_SNAPSHOT_TTL_SECONDS = 2 * 60 * 60
-
-
-def build_plan_today_envelope(
-    plan_date: date,
-    *,
-    use_ollama: bool = False,
-) -> DailyPlanEnvelope:
-    inputs = collect_planning_inputs(plan_date=plan_date)
-    return build_daily_plan(inputs, use_ollama=use_ollama)
 
 
 def load_plan_today_snapshot(plan_date: date) -> DailyPlanSnapshot | None:

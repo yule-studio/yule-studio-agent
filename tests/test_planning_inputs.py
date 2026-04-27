@@ -16,12 +16,10 @@ from yule_orchestrator.planning.inputs import collect_planning_inputs
 
 
 class PlanningInputsTestCase(unittest.TestCase):
-    @patch("yule_orchestrator.planning.inputs.list_naver_calendar_items")
     @patch("yule_orchestrator.planning.inputs.list_calendar_state_records")
     def test_collect_planning_inputs_prefers_local_calendar_state(
         self,
         list_calendar_state_records_mock,
-        list_naver_calendar_items_mock,
     ) -> None:
         list_calendar_state_records_mock.return_value = [
             SimpleNamespace(
@@ -54,20 +52,17 @@ class PlanningInputsTestCase(unittest.TestCase):
             reminders=[],
         )
 
-        list_naver_calendar_items_mock.assert_not_called()
         self.assertEqual(len(inputs.calendar_todos), 1)
         self.assertEqual(inputs.calendar_todos[0].category_color, "27")
         self.assertEqual(inputs.source_statuses[0].source_id, "calendar-state")
+        self.assertTrue(inputs.source_statuses[0].ok)
 
-    @patch("yule_orchestrator.planning.inputs.list_naver_calendar_items")
     @patch("yule_orchestrator.planning.inputs.list_calendar_state_records")
-    def test_collect_planning_inputs_fetches_calendar_when_state_is_empty(
+    def test_collect_planning_inputs_emits_warning_when_state_is_empty(
         self,
         list_calendar_state_records_mock,
-        list_naver_calendar_items_mock,
     ) -> None:
         list_calendar_state_records_mock.return_value = []
-        list_naver_calendar_items_mock.return_value = SimpleNamespace(events=[], todos=[])
 
         inputs = collect_planning_inputs(
             plan_date=date(2026, 4, 23),
@@ -76,17 +71,32 @@ class PlanningInputsTestCase(unittest.TestCase):
             reminders=[],
         )
 
-        list_naver_calendar_items_mock.assert_called_once_with(date(2026, 4, 23), date(2026, 4, 23))
-        self.assertEqual(inputs.source_statuses[0].source_id, "calendar")
+        calendar_status = inputs.source_statuses[0]
+        self.assertEqual(calendar_status.source_id, "calendar-state")
+        self.assertFalse(calendar_status.ok)
+        self.assertEqual(inputs.calendar_todos, [])
+        self.assertEqual(inputs.calendar_events, [])
+        self.assertTrue(any("calendar" in warning for warning in inputs.warnings))
 
-    @patch("yule_orchestrator.planning.inputs.list_open_issues")
-    @patch("yule_orchestrator.planning.inputs.list_naver_calendar_items")
+    def test_collect_planning_inputs_emits_warning_when_github_not_prefetched(self) -> None:
+        inputs = collect_planning_inputs(
+            plan_date=date(2026, 4, 23),
+            include_calendar=False,
+            include_github=True,
+            reminders=[],
+        )
+
+        github_status = next(
+            status for status in inputs.source_statuses if status.source_type == "github"
+        )
+        self.assertFalse(github_status.ok)
+        self.assertEqual(inputs.github_issues, [])
+        self.assertTrue(any("github" in warning for warning in inputs.warnings))
+
     @patch("yule_orchestrator.planning.inputs.list_calendar_state_records")
-    def test_collect_planning_inputs_uses_prefetched_sources_without_refetch(
+    def test_collect_planning_inputs_uses_prefetched_sources(
         self,
         list_calendar_state_records_mock,
-        list_naver_calendar_items_mock,
-        list_open_issues_mock,
     ) -> None:
         list_calendar_state_records_mock.return_value = []
         prefetched_calendar_result = CalendarQueryResult(
@@ -117,8 +127,8 @@ class PlanningInputsTestCase(unittest.TestCase):
             prefetched_github_issues=prefetched_github_issues,
         )
 
-        list_naver_calendar_items_mock.assert_not_called()
-        list_open_issues_mock.assert_not_called()
+        list_calendar_state_records_mock.assert_not_called()
         self.assertEqual(inputs.source_statuses[0].source_id, "calendar-prefetched")
         self.assertEqual(inputs.source_statuses[1].source_id, "github-issues-prefetched")
         self.assertEqual(len(inputs.github_issues), 1)
+        self.assertEqual(inputs.warnings, [])
