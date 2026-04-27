@@ -11,7 +11,9 @@ from typing import Any, Mapping, Optional, Sequence
 
 DEFAULT_STALE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 30_000
+_CLEANUP_INTERVAL_SECONDS = 5 * 60
 _LOCAL_CACHE_LOCK = RLock()
+_last_cleanup_monotonic = 0.0
 
 
 @dataclass(frozen=True)
@@ -184,13 +186,15 @@ def save_json_cache(
                 now,
             ),
         )
-        cleanup_before = now
-        if stale_retention_seconds is not None and stale_retention_seconds > 0:
-            cleanup_before = now - stale_retention_seconds
-        connection.execute(
-            "DELETE FROM local_cache_entries WHERE expires_at <= ?",
-            (cleanup_before,),
-        )
+        if _should_run_cleanup():
+            cleanup_before = now
+            if stale_retention_seconds is not None and stale_retention_seconds > 0:
+                cleanup_before = now - stale_retention_seconds
+            connection.execute(
+                "DELETE FROM local_cache_entries WHERE expires_at <= ?",
+                (cleanup_before,),
+            )
+            _mark_cleanup_ran()
 
 
 def list_json_cache_entries(
@@ -293,11 +297,30 @@ def cleanup_json_cache(
             f"DELETE FROM local_cache_entries WHERE {' AND '.join(clauses)}",
             params,
         )
-        return int(cursor.rowcount or 0)
+        deleted_count = int(cursor.rowcount or 0)
+    _mark_cleanup_ran()
+    return deleted_count
 
 
 def local_cache_database_path() -> Path:
     return _database_path()
+
+
+def _should_run_cleanup() -> bool:
+    now = time.monotonic()
+    if _last_cleanup_monotonic == 0.0:
+        return True
+    return now - _last_cleanup_monotonic >= _CLEANUP_INTERVAL_SECONDS
+
+
+def _mark_cleanup_ran() -> None:
+    global _last_cleanup_monotonic
+    _last_cleanup_monotonic = time.monotonic()
+
+
+def _reset_cleanup_schedule_for_tests() -> None:
+    global _last_cleanup_monotonic
+    _last_cleanup_monotonic = 0.0
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
