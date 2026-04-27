@@ -453,7 +453,7 @@ class PlanningPlannerTestCase(unittest.TestCase):
 
     def test_normalize_paragraph_spacing_inserts_blank_between_prose_paragraphs(self) -> None:
         text = (
-            "안녕하세요. 오늘 하루 계획 브리핑입니다.\n"
+            "안녕하세요.\n"
             "오전 9시부터 13시까지는 업무 수행 일정이 있습니다.\n"
             "오후 14시부터는 다시 업무를 진행합니다."
         )
@@ -462,16 +462,31 @@ class PlanningPlannerTestCase(unittest.TestCase):
 
         self.assertEqual(
             normalized,
-            "안녕하세요. 오늘 하루 계획 브리핑입니다.\n"
+            "안녕하세요.\n"
             "\n"
             "오전 9시부터 13시까지는 업무 수행 일정이 있습니다.\n"
             "\n"
             "오후 14시부터는 다시 업무를 진행합니다.",
         )
 
+    def test_normalize_paragraph_spacing_splits_sentences_within_paragraph(self) -> None:
+        text = (
+            "오전 9시부터 13시까지는 '업무 수행' 일정이 있습니다. "
+            "08:50에 첫 알림이 있으니 바로 준비하시면 됩니다. "
+            "오후 14시부터 18시까지 다시 업무를 진행합니다."
+        )
+
+        normalized = normalize_paragraph_spacing(text)
+
+        self.assertEqual(
+            normalized,
+            "오전 9시부터 13시까지는 '업무 수행' 일정이 있습니다.\n"
+            "08:50에 첫 알림이 있으니 바로 준비하시면 됩니다.\n"
+            "오후 14시부터 18시까지 다시 업무를 진행합니다.",
+        )
+
     def test_normalize_paragraph_spacing_keeps_bullet_blocks_compact(self) -> None:
         text = (
-            "추천 작업\n"
             "- 첫 번째 업무\n"
             "- 두 번째 업무\n"
             "- 세 번째 업무"

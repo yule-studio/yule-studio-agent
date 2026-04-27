@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Optional, Sequence
 
@@ -20,28 +21,41 @@ from .models import (
 def normalize_paragraph_spacing(text: str) -> str:
     if not text:
         return text
-    lines = [line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")]
-    spaced: list[str] = []
-    for line in lines:
-        if (
-            line.strip()
-            and spaced
-            and spaced[-1].strip()
-            and not _is_list_or_heading(spaced[-1])
-            and not _is_list_or_heading(line)
-        ):
-            spaced.append("")
-        spaced.append(line)
+    raw = text.replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
 
-    collapsed: list[str] = []
-    previous_blank = False
-    for line in spaced:
-        is_blank = not line.strip()
-        if is_blank and previous_blank:
+    blocks: list[str] = []
+    bullet_buffer: list[str] = []
+
+    def flush_bullets() -> None:
+        if bullet_buffer:
+            blocks.append("\n".join(bullet_buffer))
+            bullet_buffer.clear()
+
+    for raw_line in raw.split("\n"):
+        line = raw_line.rstrip()
+        if not line.strip():
+            flush_bullets()
             continue
-        collapsed.append(line)
-        previous_blank = is_blank
-    return "\n".join(collapsed).strip()
+        if _is_list_or_heading(line):
+            bullet_buffer.append(line)
+            continue
+        flush_bullets()
+        sentences = _split_sentences(line)
+        if sentences:
+            blocks.append("\n".join(sentences))
+
+    flush_bullets()
+    return "\n\n".join(blocks)
+
+
+def _split_sentences(line: str) -> list[str]:
+    if not line.strip():
+        return []
+    parts = re.split(r"(?<=[.!?。！？])\s+", line.strip())
+    sentences = [part.strip() for part in parts if part.strip()]
+    return sentences or [line.strip()]
 
 
 def _is_list_or_heading(line: str) -> bool:
