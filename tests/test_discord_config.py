@@ -26,6 +26,7 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_DEBUG_CHANNEL_NAME": "planning-debug",
                 "DISCORD_CONVERSATION_CHANNEL_ID": "666",
                 "DISCORD_CONVERSATION_CHANNEL_NAME": "chat-bot",
+                "DISCORD_CONVERSATION_REPLY_MODE": "plain-message-or-mention",
                 "DISCORD_NOTIFY_USER_ID": "777",
                 "DISCORD_DAILY_BRIEFING_TIME": "16:15",
                 "DISCORD_PREPARATION_RETRY_COUNT": "3",
@@ -44,6 +45,7 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertEqual(config.debug_channel_name, "planning-debug")
         self.assertEqual(config.conversation_channel_id, 666)
         self.assertEqual(config.conversation_channel_name, "chat-bot")
+        self.assertEqual(config.conversation_reply_mode, "plain-message-or-mention")
         self.assertEqual(config.effective_conversation_channel_id, 666)
         self.assertEqual(config.effective_conversation_channel_name, "chat-bot")
         self.assertIsNone(config.checkpoint_channel_id)
@@ -126,6 +128,19 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_PREPARATION_RETRY_COUNT": "-1",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(ValueError):
+                DiscordBotConfig.from_env()
+
+    def test_from_env_rejects_invalid_conversation_reply_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_BOT_TOKEN": "token-value",
+                "DISCORD_GUILD_ID": "987654321",
+                "DISCORD_CONVERSATION_REPLY_MODE": "auto",
             },
             clear=False,
         ):

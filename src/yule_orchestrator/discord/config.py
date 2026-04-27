@@ -19,6 +19,7 @@ class DiscordBotConfig:
     checkpoint_channel_name: Optional[str] = None
     conversation_channel_id: Optional[int] = None
     conversation_channel_name: Optional[str] = None
+    conversation_reply_mode: str = "mention-only"
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
     checkpoint_prefetch_minutes: int = 5
@@ -63,6 +64,7 @@ class DiscordBotConfig:
             checkpoint_channel_name=_optional_string_env("DISCORD_CHECKPOINT_CHANNEL_NAME"),
             conversation_channel_id=_optional_int_env("DISCORD_CONVERSATION_CHANNEL_ID"),
             conversation_channel_name=_optional_string_env("DISCORD_CONVERSATION_CHANNEL_NAME"),
+            conversation_reply_mode=_conversation_reply_mode_env("DISCORD_CONVERSATION_REPLY_MODE"),
             notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
             daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
             checkpoint_prefetch_minutes=_optional_positive_int_env(
@@ -171,3 +173,16 @@ def _optional_time_env(name: str) -> Optional[time]:
         raise ValueError(f"{name} must use a valid 24-hour time, got: {value!r}")
 
     return time(hour=hour, minute=minute)
+
+
+def _conversation_reply_mode_env(name: str) -> str:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return "mention-only"
+
+    allowed = {"mention-only", "plain-message-or-mention", "disabled"}
+    if raw not in allowed:
+        raise ValueError(
+            f"{name} must be one of {sorted(allowed)}, got: {raw!r}"
+        )
+    return raw

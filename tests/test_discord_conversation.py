@@ -24,6 +24,7 @@ class DiscordConversationTestCase(unittest.TestCase):
             bot_user=bot_user,
             conversation_channel_id=123,
             conversation_channel_name=None,
+            conversation_reply_mode="plain-message-or-mention",
         )
 
         self.assertTrue(handled)
@@ -37,6 +38,7 @@ class DiscordConversationTestCase(unittest.TestCase):
             bot_user=bot_user,
             conversation_channel_id=None,
             conversation_channel_name="planning-chat",
+            conversation_reply_mode="plain-message-or-mention",
         )
 
         self.assertTrue(handled)
@@ -55,6 +57,7 @@ class DiscordConversationTestCase(unittest.TestCase):
             bot_user=bot_user,
             conversation_channel_id=None,
             conversation_channel_name=None,
+            conversation_reply_mode="mention-only",
         )
 
         self.assertTrue(handled)
@@ -164,6 +167,39 @@ class DiscordConversationTestCase(unittest.TestCase):
 
         self.assertIn("09:55", content)
         self.assertIn("업무 수행 마무리 확인", content)
+
+    @patch("yule_orchestrator.discord.conversation.save_json_cache")
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
+    @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
+    def test_checkpoint_lookup_without_due_items_asks_for_yes_no_confirmation(
+        self,
+        load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
+        save_json_cache_mock,
+    ) -> None:
+        load_plan_today_snapshot_mock.return_value = _snapshot(
+            generated_at="2026-04-24T09:00:00+09:00",
+            prioritized_titles=["mail-mail 동작 원리 정리"],
+            checkpoint_times=[],
+            suggested_blocks=[],
+        )
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=False,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
+        )
+
+        content = build_conversation_response(
+            "다음 체크포인트 알려줘",
+            author_user_id=777,
+            conversation_scope="guild:1:channel:2",
+            reference_time=datetime.fromisoformat("2026-04-24T11:45:00+09:00"),
+        )
+
+        self.assertIn("yes", content.lower())
+        self.assertIn("no", content.lower())
+        save_json_cache_mock.assert_called()
 
 
 def _user(user_id: int, name: str):

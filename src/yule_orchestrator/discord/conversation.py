@@ -7,11 +7,15 @@ from typing import Sequence
 from ..planning.ollama import generate_ollama_text
 from ..planning.ollama_config import load_ollama_conversation_config
 from ..planning.snapshots import DailyPlanSnapshot
+from ..storage import load_json_cache, save_json_cache
 from .formatter import (
     format_missing_plan_snapshot_message,
     format_plan_today_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
+
+PENDING_CONFIRMATION_NAMESPACE = "discord-conversation-pending-confirmations"
+PENDING_CONFIRMATION_TTL_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -26,12 +30,23 @@ def build_conversation_response(
     message_text: str,
     *,
     author_user_id: int | None,
+    conversation_scope: str | None = None,
     mention_user: bool = False,
     reference_time: datetime | None = None,
     checkpoint_window_minutes: int = 60,
 ) -> str:
     now = reference_time or datetime.now().astimezone()
     mention_user_id = author_user_id if mention_user else None
+    pending_resolution = _resolve_pending_confirmation(
+        message_text=message_text,
+        author_user_id=author_user_id,
+        conversation_scope=conversation_scope,
+        reference_time=now,
+        mention_user_id=mention_user_id,
+    )
+    if pending_resolution is not None:
+        return pending_resolution
+
     intent = detect_conversation_intent(message_text)
     snapshot = load_plan_today_snapshot(now.date())
     due_checkpoints = _load_due_checkpoints_for_intent(
@@ -43,7 +58,7 @@ def build_conversation_response(
     if snapshot is None and intent.requires_snapshot:
         return format_missing_plan_snapshot_message(mention_user_id=mention_user_id)
 
-    if snapshot is not None:
+    if snapshot is not None and intent.intent_id != "checkpoint_lookup":
         content = _build_ollama_conversation_response(
             message_text=message_text,
             intent=intent,
@@ -60,6 +75,8 @@ def build_conversation_response(
             snapshot=snapshot,
             due_checkpoints=due_checkpoints,
             reference_time=now,
+            author_user_id=author_user_id,
+            conversation_scope=conversation_scope,
         ),
         mention_user_id=mention_user_id,
     )
@@ -254,11 +271,16 @@ def _build_fallback_conversation_response(
     snapshot: DailyPlanSnapshot | None,
     due_checkpoints: Sequence[object],
     reference_time: datetime,
+    author_user_id: int | None,
+    conversation_scope: str | None,
 ) -> str:
     if intent.intent_id == "checkpoint_lookup":
         return _format_checkpoint_response(
             due_checkpoints=due_checkpoints,
             reference_time=reference_time,
+            snapshot=snapshot,
+            author_user_id=author_user_id,
+            conversation_scope=conversation_scope,
         )
 
     if snapshot is None:
@@ -311,11 +333,22 @@ def _format_checkpoint_response(
     *,
     due_checkpoints: Sequence[object],
     reference_time: datetime,
+    snapshot: DailyPlanSnapshot | None,
+    author_user_id: int | None,
+    conversation_scope: str | None,
 ) -> str:
     if not due_checkpoints:
+        if snapshot is not None and author_user_id is not None and conversation_scope is not None:
+            _save_pending_confirmation(
+                author_user_id=author_user_id,
+                conversation_scope=conversation_scope,
+                action="briefing_refresh",
+                reference_time=reference_time,
+            )
         return (
             f"{reference_time.strftime('%H:%M')} 기준으로 바로 다가오는 체크포인트는 없습니다.\n\n"
-            "필요하면 오늘 우선순위나 브리핑을 다시 같이 정리해 드릴게요."
+            "원하시면 오늘 브리핑을 다시 정리해 드릴 수 있어요.\n"
+            "계속하려면 `yes`, 원치 않으면 `no`로 답해 주세요."
         )
 
     rendered = []
@@ -372,6 +405,123 @@ def _prepend_mention(content: str, *, mention_user_id: int | None) -> str:
     if mention_user_id is None:
         return content
     return f"<@{mention_user_id}>\n\n{content}".strip()
+
+
+def _pending_confirmation_cache_key(*, author_user_id: int, conversation_scope: str) -> str:
+    return f"{author_user_id}:{conversation_scope}"
+
+
+def _save_pending_confirmation(
+    *,
+    author_user_id: int,
+    conversation_scope: str,
+    action: str,
+    reference_time: datetime,
+) -> None:
+    save_json_cache(
+        namespace=PENDING_CONFIRMATION_NAMESPACE,
+        cache_key=_pending_confirmation_cache_key(
+            author_user_id=author_user_id,
+            conversation_scope=conversation_scope,
+        ),
+        provider="discord-conversation",
+        range_start=reference_time.isoformat(),
+        range_end=reference_time.isoformat(),
+        scope_hash=conversation_scope,
+        ttl_seconds=PENDING_CONFIRMATION_TTL_SECONDS,
+        payload={
+            "action": action,
+            "created_at": reference_time.isoformat(),
+        },
+        metadata={
+            "author_user_id": author_user_id,
+            "conversation_scope": conversation_scope,
+        },
+    )
+
+
+def _resolve_pending_confirmation(
+    *,
+    message_text: str,
+    author_user_id: int | None,
+    conversation_scope: str | None,
+    reference_time: datetime,
+    mention_user_id: int | None,
+) -> str | None:
+    if author_user_id is None or conversation_scope is None:
+        return None
+
+    normalized = _normalize_message(message_text)
+    if normalized not in {"yes", "y", "네", "예", "응", "아니", "아니오", "no", "n"}:
+        return None
+
+    entry = load_json_cache(
+        namespace=PENDING_CONFIRMATION_NAMESPACE,
+        cache_key=_pending_confirmation_cache_key(
+            author_user_id=author_user_id,
+            conversation_scope=conversation_scope,
+        ),
+        allow_stale=False,
+        touch=False,
+    )
+    if entry is None:
+        return None
+
+    action = str(entry.payload.get("action") or "")
+    _clear_pending_confirmation(
+        author_user_id=author_user_id,
+        conversation_scope=conversation_scope,
+        reference_time=reference_time,
+    )
+    if normalized in {"no", "n", "아니", "아니오"}:
+        return _prepend_mention("좋아요. 여기서는 더 이어서 브리핑하지 않을게요.", mention_user_id=mention_user_id)
+
+    snapshot = load_plan_today_snapshot(reference_time.date())
+    if snapshot is None:
+        return _prepend_mention(
+            "지금은 오늘 snapshot이 없어서 브리핑을 바로 다시 만들 수 없어요. snapshot이 준비되면 다시 도와드릴게요.",
+            mention_user_id=mention_user_id,
+        )
+
+    if action == "briefing_refresh":
+        return _prepend_mention(
+            format_plan_today_message(
+                snapshot.envelope,
+                mention_user_id=None,
+                snapshot=snapshot,
+            ),
+            mention_user_id=mention_user_id,
+        )
+    return None
+
+
+def _clear_pending_confirmation(
+    *,
+    author_user_id: int,
+    conversation_scope: str,
+    reference_time: datetime,
+) -> None:
+    save_json_cache(
+        namespace=PENDING_CONFIRMATION_NAMESPACE,
+        cache_key=_pending_confirmation_cache_key(
+            author_user_id=author_user_id,
+            conversation_scope=conversation_scope,
+        ),
+        provider="discord-conversation",
+        range_start=reference_time.isoformat(),
+        range_end=reference_time.isoformat(),
+        scope_hash=conversation_scope,
+        ttl_seconds=1,
+        payload={
+            "action": "resolved",
+            "created_at": reference_time.isoformat(),
+        },
+        metadata={
+            "author_user_id": author_user_id,
+            "conversation_scope": conversation_scope,
+            "resolved": True,
+        },
+    )
 
 
 def _normalize_message(message_text: str) -> str:

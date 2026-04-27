@@ -113,6 +113,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 bot_user=self.user,
                 conversation_channel_id=config.effective_conversation_channel_id,
                 conversation_channel_name=config.effective_conversation_channel_name,
+                conversation_reply_mode=config.conversation_reply_mode,
             ):
                 return
 
@@ -125,6 +126,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     build_conversation_response,
                     prompt,
                     author_user_id=message.author.id,
+                    conversation_scope=f"guild:{config.guild_id}:channel:{getattr(message.channel, 'id', 'unknown')}",
                     mention_user=_message_mentions_bot(message=message, bot_user=self.user),
                 )
 
@@ -754,8 +756,10 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
         messages.append(
             "info: conversation replies enabled "
             f"({_channel_target_text(config.effective_conversation_channel_id, config.effective_conversation_channel_name)}, "
-            "mode=plain-message-or-mention)"
+            f"mode={config.conversation_reply_mode})"
         )
+    elif config.conversation_reply_mode == "disabled":
+        messages.append("info: conversation replies disabled")
     else:
         messages.append("info: conversation replies enabled in mention-only mode")
 
@@ -1044,7 +1048,11 @@ def _should_handle_message(
     bot_user: object,
     conversation_channel_id: int | None,
     conversation_channel_name: str | None,
+    conversation_reply_mode: str,
 ) -> bool:
+    if conversation_reply_mode == "disabled":
+        return False
+
     content = str(getattr(message, "content", "") or "").strip()
     if content.startswith("/"):
         return False
@@ -1056,11 +1064,13 @@ def _should_handle_message(
     channel_name = getattr(channel, "name", None)
     parent_name = getattr(parent, "name", None)
 
-    if conversation_channel_id is not None and channel_id == conversation_channel_id:
+    plain_message_allowed = conversation_reply_mode == "plain-message-or-mention"
+
+    if plain_message_allowed and conversation_channel_id is not None and channel_id == conversation_channel_id:
         return True
-    if conversation_channel_id is not None and parent_id == conversation_channel_id:
+    if plain_message_allowed and conversation_channel_id is not None and parent_id == conversation_channel_id:
         return True
-    if _normalize_channel_name(conversation_channel_name) and (
+    if plain_message_allowed and _normalize_channel_name(conversation_channel_name) and (
         _normalize_channel_name(channel_name) == _normalize_channel_name(conversation_channel_name)
         or _normalize_channel_name(parent_name) == _normalize_channel_name(conversation_channel_name)
     ):
