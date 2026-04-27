@@ -6,7 +6,10 @@ import time as time_module
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
+from ..integrations.calendar import list_naver_calendar_items
+from ..integrations.github.issues import list_open_issues
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
+from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_items, save_daily_plan_snapshot
 from ..planning.models import PlanningCheckpoint
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
@@ -23,6 +26,10 @@ from .planning_runtime import load_prefetched_due_checkpoints, prefetch_checkpoi
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
 CHECKPOINT_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
+DAILY_PREPARATION_GITHUB_LIMIT = 30
+DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES = 10
+DAILY_PREPARATION_GITHUB_OFFSET_MINUTES = 5
+DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES = 2
 
 
 def run_discord_bot(repo_root: Path) -> None:
@@ -37,9 +44,11 @@ def run_discord_bot(repo_root: Path) -> None:
             intents.message_content = True
             intents.messages = True
             self._daily_briefing_task: asyncio.Task[None] | None = None
+            self._daily_preparation_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
             self._checkpoint_storage_lock: asyncio.Lock | None = None
+            self._completed_preparation_steps: set[tuple[str, str]] = set()
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -65,6 +74,8 @@ def run_discord_bot(repo_root: Path) -> None:
             guild = discord.Object(id=config.guild_id)
             await self.tree.sync(guild=guild)
             self._checkpoint_storage_lock = asyncio.Lock()
+            if config.daily_briefing_time is not None:
+                self._daily_preparation_task = asyncio.create_task(self._run_daily_preparation_loop())
             if config.daily_briefing_time is not None and (
                 config.daily_channel_id is not None or config.daily_channel_name is not None
             ):
@@ -118,10 +129,86 @@ def run_discord_bot(repo_root: Path) -> None:
             )
 
         async def close(self) -> None:
+            await _cancel_task(self._daily_preparation_task)
             await _cancel_task(self._daily_briefing_task)
             await _cancel_task(self._checkpoint_prefetch_task)
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
+
+        async def _run_daily_preparation_loop(self) -> None:
+            await self.wait_until_ready()
+            last_scan = datetime.now().astimezone()
+            while not self.is_closed():
+                next_run = _next_checkpoint_scan()
+                wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
+                await asyncio.sleep(wait_seconds)
+                scan_time = datetime.now().astimezone()
+                due_steps = _collect_due_daily_preparation_steps(
+                    last_scan=last_scan,
+                    scan_time=scan_time,
+                    briefing_time=config.daily_briefing_time,
+                    completed_steps=self._completed_preparation_steps,
+                )
+                for step_name, plan_date, scheduled_at in due_steps:
+                    try:
+                        await self._run_daily_preparation_step(
+                            step_name=step_name,
+                            plan_date=plan_date,
+                        )
+                        self._completed_preparation_steps.add((plan_date.isoformat(), step_name))
+                        print(
+                            "info: daily preparation step completed "
+                            f"(step={step_name}, plan_date={plan_date.isoformat()}, scheduled_at={scheduled_at.isoformat()})"
+                        )
+                    except Exception as exc:
+                        print(
+                            "warning: daily preparation step failed "
+                            f"(step={step_name}, plan_date={plan_date.isoformat()}): {exc}"
+                        )
+                _cleanup_completed_preparation_steps(
+                    self._completed_preparation_steps,
+                    today=scan_time.date(),
+                )
+                last_scan = scan_time
+
+        async def _run_daily_preparation_step(
+            self,
+            *,
+            step_name: str,
+            plan_date,
+        ) -> None:
+            if step_name == "calendar_sync":
+                await asyncio.to_thread(
+                    list_naver_calendar_items,
+                    plan_date,
+                    plan_date,
+                )
+                return
+
+            if step_name == "github_sync":
+                await asyncio.to_thread(
+                    list_open_issues,
+                    DAILY_PREPARATION_GITHUB_LIMIT,
+                )
+                return
+
+            if step_name == "planning_snapshot":
+                reminders = await asyncio.to_thread(load_reminder_items, None)
+                inputs = await asyncio.to_thread(
+                    collect_planning_inputs,
+                    plan_date,
+                    github_limit=DAILY_PREPARATION_GITHUB_LIMIT,
+                    include_calendar=True,
+                    include_github=True,
+                    reminders=reminders,
+                    allow_live_calendar_fetch=False,
+                    allow_live_github_fetch=False,
+                )
+                envelope = await asyncio.to_thread(build_daily_plan, inputs)
+                await asyncio.to_thread(save_daily_plan_snapshot, envelope)
+                return
+
+            raise ValueError(f"Unsupported daily preparation step: {step_name}")
 
         async def _run_daily_briefing_loop(self) -> None:
             await self.wait_until_ready()
@@ -317,6 +404,69 @@ def _next_daily_run(target_time: time | None) -> datetime:
     return next_run
 
 
+def _collect_due_daily_preparation_steps(
+    *,
+    last_scan: datetime,
+    scan_time: datetime,
+    briefing_time: time | None,
+    completed_steps: set[tuple[str, str]],
+) -> list[tuple[str, object, datetime]]:
+    if briefing_time is None or scan_time <= last_scan:
+        return []
+
+    due_steps: list[tuple[str, object, datetime]] = []
+    current_date = last_scan.date()
+    end_date = scan_time.date()
+    while current_date <= end_date:
+        for step_name, scheduled_at in _daily_preparation_schedule_for(current_date, briefing_time):
+            step_key = (current_date.isoformat(), step_name)
+            if step_key in completed_steps:
+                continue
+            if last_scan < scheduled_at <= scan_time:
+                due_steps.append((step_name, current_date, scheduled_at))
+        current_date = current_date + timedelta(days=1)
+
+    due_steps.sort(key=lambda item: item[2])
+    return due_steps
+
+
+def _daily_preparation_schedule_for(plan_date, briefing_time: time) -> list[tuple[str, datetime]]:
+    timezone = datetime.now().astimezone().tzinfo
+    briefing_at = datetime.combine(plan_date, briefing_time).replace(tzinfo=timezone)
+    return [
+        ("calendar_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES)),
+        ("github_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_GITHUB_OFFSET_MINUTES)),
+        ("planning_snapshot", briefing_at - timedelta(minutes=DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES)),
+    ]
+
+
+def _cleanup_completed_preparation_steps(
+    completed_steps: set[tuple[str, str]],
+    *,
+    today,
+) -> None:
+    stale_keys = [item for item in completed_steps if item[0] < today.isoformat()]
+    for item in stale_keys:
+        completed_steps.discard(item)
+
+
+def _next_daily_preparation_runs(*, now: datetime, briefing_time: time) -> tuple[datetime, datetime, datetime]:
+    next_briefing = now.replace(
+        hour=briefing_time.hour,
+        minute=briefing_time.minute,
+        second=0,
+        microsecond=0,
+    )
+    if next_briefing <= now:
+        next_briefing = next_briefing + timedelta(days=1)
+
+    return (
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES),
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_GITHUB_OFFSET_MINUTES),
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES),
+    )
+
+
 def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     messages: list[str] = []
     daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
@@ -357,6 +507,18 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
         messages.append(f"info: Discord notifications will mention user {config.notify_user_id}")
     else:
         messages.append("info: Discord notifications will be sent without a user mention")
+
+    if config.daily_briefing_time is not None:
+        next_calendar_sync, next_github_sync, next_snapshot = _next_daily_preparation_runs(
+            now=now,
+            briefing_time=config.daily_briefing_time,
+        )
+        messages.append(
+            "info: daily preparation enabled "
+            f"(calendar_sync={next_calendar_sync.isoformat()}, "
+            f"github_sync={next_github_sync.isoformat()}, "
+            f"snapshot={next_snapshot.isoformat()})"
+        )
 
     if config.effective_conversation_channel_id is not None or config.effective_conversation_channel_name is not None:
         messages.append(

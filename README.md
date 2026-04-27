@@ -181,6 +181,7 @@ DISCORD_GUILD_ID=
 - `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`을 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
+- 같은 기준 시각을 따라 봇이 자동으로 `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 준비 작업도 순서대로 수행합니다.
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.

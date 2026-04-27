@@ -9,7 +9,13 @@ from datetime import datetime, time, timedelta
 import unittest
 from unittest.mock import patch
 
-from yule_orchestrator.discord.bot import _next_daily_run, _startup_messages
+from yule_orchestrator.discord.bot import (
+    _collect_due_daily_preparation_steps,
+    _daily_preparation_schedule_for,
+    _next_daily_preparation_runs,
+    _next_daily_run,
+    _startup_messages,
+)
 from yule_orchestrator.discord.config import DiscordBotConfig
 
 
@@ -40,6 +46,38 @@ class DiscordScheduleTestCase(unittest.TestCase):
 
         expected = fake_now.replace(hour=16, minute=15, second=0, microsecond=0) + timedelta(days=1)
         self.assertEqual(next_run, expected)
+
+    def test_next_daily_preparation_runs_are_offset_from_briefing(self) -> None:
+        now = datetime.fromisoformat("2026-04-22T05:40:00+09:00")
+
+        calendar_sync, github_sync, snapshot = _next_daily_preparation_runs(
+            now=now,
+            briefing_time=time(6, 0),
+        )
+
+        self.assertEqual(calendar_sync, datetime.fromisoformat("2026-04-22T05:50:00+09:00"))
+        self.assertEqual(github_sync, datetime.fromisoformat("2026-04-22T05:55:00+09:00"))
+        self.assertEqual(snapshot, datetime.fromisoformat("2026-04-22T05:58:00+09:00"))
+
+    def test_collect_due_daily_preparation_steps_returns_steps_in_order(self) -> None:
+        last_scan = datetime.fromisoformat("2026-04-22T05:49:30+09:00")
+        scan_time = datetime.fromisoformat("2026-04-22T05:58:30+09:00")
+
+        due_steps = _collect_due_daily_preparation_steps(
+            last_scan=last_scan,
+            scan_time=scan_time,
+            briefing_time=time(6, 0),
+            completed_steps=set(),
+        )
+
+        self.assertEqual(
+            [(step_name, plan_date.isoformat(), scheduled_at.isoformat()) for step_name, plan_date, scheduled_at in due_steps],
+            [
+                ("calendar_sync", "2026-04-22", "2026-04-22T05:50:00+09:00"),
+                ("github_sync", "2026-04-22", "2026-04-22T05:55:00+09:00"),
+                ("planning_snapshot", "2026-04-22", "2026-04-22T05:58:00+09:00"),
+            ],
+        )
 
     def test_startup_messages_warn_when_daily_channel_is_missing(self) -> None:
         fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
@@ -93,6 +131,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
         self.assertTrue(any("checkpoint notifications enabled" in message for message in messages))
         self.assertTrue(any("channel_id=789" in message for message in messages))
         self.assertIn("info: Discord notifications will mention user 999", messages)
+        self.assertTrue(any("daily preparation enabled" in message for message in messages))
         self.assertIn(
             "info: conversation replies enabled (channel_id=654, channel_name=planning-chat, mode=plain-message-or-mention)",
             messages,
