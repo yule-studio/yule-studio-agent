@@ -15,17 +15,18 @@ from ..planning.day_profile import DayProfile, load_day_profile
 from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
-from .conversation import build_conversation_response
+from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
 from .formatter import (
     format_checkpoints_message,
-    format_missing_plan_snapshot_message,
     format_plan_today_message,
     format_scheduled_briefing_message,
+    format_snapshot_regeneration_failed_message,
     split_discord_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
 from .planning_runtime import build_due_briefings, load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
+from .snapshot_refresh import regenerate_today_snapshot
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
 BRIEFING_NOTIFICATION_NAMESPACE = "discord-scheduled-briefings"
@@ -56,6 +57,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self._checkpoint_storage_lock: asyncio.Lock | None = None
             self._completed_preparation_steps: set[tuple[str, str]] = set()
             self._daily_preparation_context: dict[str, dict[str, object]] = {}
+            self._snapshot_refresh_locks: dict[str, asyncio.Lock] = {}
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -121,20 +123,38 @@ def run_discord_bot(repo_root: Path) -> None:
             if not prompt:
                 prompt = "오늘 뭐부터 해야 해?"
 
+            mention_user = _message_mentions_bot(message=message, bot_user=self.user)
+            conversation_scope = (
+                f"guild:{config.guild_id}:channel:{getattr(message.channel, 'id', 'unknown')}"
+            )
+
             async with message.channel.typing():
-                content = await asyncio.to_thread(
-                    build_conversation_response,
+                envelope = await asyncio.to_thread(
+                    build_conversation_response_envelope,
                     prompt,
                     author_user_id=message.author.id,
-                    conversation_scope=f"guild:{config.guild_id}:channel:{getattr(message.channel, 'id', 'unknown')}",
-                    mention_user=_message_mentions_bot(message=message, bot_user=self.user),
+                    conversation_scope=conversation_scope,
+                    mention_user=mention_user,
                 )
 
             await _send_channel_message_chunks(
                 message.channel,
-                content,
+                envelope.content,
                 allowed_mentions=_build_allowed_mentions(discord),
             )
+
+            if envelope.regenerate_snapshot:
+                asyncio.create_task(
+                    self._regenerate_snapshot_and_followup(
+                        channel=message.channel,
+                        prompt=prompt,
+                        author_user_id=message.author.id,
+                        conversation_scope=conversation_scope,
+                        mention_user=mention_user,
+                        mention_user_id=envelope.mention_user_id,
+                        discord_module=discord,
+                    )
+                )
 
         async def close(self) -> None:
             await _cancel_task(self._daily_preparation_task)
@@ -142,6 +162,59 @@ def run_discord_bot(repo_root: Path) -> None:
             await _cancel_task(self._checkpoint_prefetch_task)
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
+
+        async def _regenerate_snapshot_and_followup(
+            self,
+            *,
+            channel: "discord.abc.Messageable",
+            prompt: str,
+            author_user_id: int,
+            conversation_scope: str,
+            mention_user: bool,
+            mention_user_id: int | None,
+            discord_module: "discord",
+        ) -> None:
+            plan_date = datetime.now().astimezone().date()
+            lock = self._snapshot_refresh_locks.setdefault(plan_date.isoformat(), asyncio.Lock())
+            async with lock:
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is None:
+                    result = await asyncio.to_thread(regenerate_today_snapshot, plan_date)
+                    if not result.ok:
+                        await _send_channel_message_chunks(
+                            channel,
+                            format_snapshot_regeneration_failed_message(
+                                mention_user_id=mention_user_id,
+                                error=result.error,
+                            ),
+                            allowed_mentions=_build_allowed_mentions(discord_module),
+                        )
+                        return
+
+                followup = await asyncio.to_thread(
+                    build_conversation_response_envelope,
+                    prompt,
+                    author_user_id=author_user_id,
+                    conversation_scope=conversation_scope,
+                    mention_user=mention_user,
+                )
+
+            if followup.regenerate_snapshot:
+                await _send_channel_message_chunks(
+                    channel,
+                    format_snapshot_regeneration_failed_message(
+                        mention_user_id=mention_user_id,
+                        error="snapshot 재생성 직후에도 snapshot을 다시 읽지 못했습니다.",
+                    ),
+                    allowed_mentions=_build_allowed_mentions(discord_module),
+                )
+                return
+
+            await _send_channel_message_chunks(
+                channel,
+                followup.content,
+                allowed_mentions=_build_allowed_mentions(discord_module),
+            )
 
         async def _run_daily_preparation_loop(self) -> None:
             await self.wait_until_ready()

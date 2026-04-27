@@ -74,6 +74,37 @@ def format_missing_plan_snapshot_message(
     return "\n".join(lines)
 
 
+def format_snapshot_regenerating_message(
+    *,
+    mention_user_id: Optional[int] = None,
+) -> str:
+    lines: list[str] = []
+    _append_mention(lines, mention_user_id)
+    lines.append("오늘 snapshot이 아직 없어서 지금 다시 만들고 있어요.")
+    lines.append("캘린더와 GitHub 이슈를 모은 뒤 곧 브리핑을 이어서 보내드릴게요.")
+    return "\n".join(lines)
+
+
+def format_snapshot_regeneration_failed_message(
+    *,
+    mention_user_id: Optional[int] = None,
+    error: Optional[str] = None,
+) -> str:
+    lines: list[str] = []
+    _append_mention(lines, mention_user_id)
+    lines.append("snapshot을 다시 만들지 못했습니다.")
+    if error:
+        lines.append(f"원인: {error}")
+    lines.append("아래 순서로 직접 동기화를 시도한 뒤 다시 요청해 주세요.")
+    lines.append("")
+    lines.append("```bash")
+    lines.append("yule calendar sync --json")
+    lines.append("yule github issues --limit 30")
+    lines.append("yule planning snapshot --json")
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def format_checkpoints_message(
     checkpoints: Sequence[PlanningCheckpoint],
     *,

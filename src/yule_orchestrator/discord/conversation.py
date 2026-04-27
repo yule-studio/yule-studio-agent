@@ -9,8 +9,8 @@ from ..planning.ollama_config import load_ollama_conversation_config
 from ..planning.snapshots import DailyPlanSnapshot
 from ..storage import load_json_cache, save_json_cache
 from .formatter import (
-    format_missing_plan_snapshot_message,
     format_plan_today_message,
+    format_snapshot_regenerating_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
 
@@ -26,6 +26,14 @@ class ConversationIntentMatch:
     proposal_only: bool = False
 
 
+@dataclass(frozen=True)
+class ConversationResponse:
+    content: str
+    intent_id: str
+    regenerate_snapshot: bool = False
+    mention_user_id: int | None = None
+
+
 def build_conversation_response(
     message_text: str,
     *,
@@ -35,6 +43,25 @@ def build_conversation_response(
     reference_time: datetime | None = None,
     checkpoint_window_minutes: int = 60,
 ) -> str:
+    return build_conversation_response_envelope(
+        message_text,
+        author_user_id=author_user_id,
+        conversation_scope=conversation_scope,
+        mention_user=mention_user,
+        reference_time=reference_time,
+        checkpoint_window_minutes=checkpoint_window_minutes,
+    ).content
+
+
+def build_conversation_response_envelope(
+    message_text: str,
+    *,
+    author_user_id: int | None,
+    conversation_scope: str | None = None,
+    mention_user: bool = False,
+    reference_time: datetime | None = None,
+    checkpoint_window_minutes: int = 60,
+) -> ConversationResponse:
     now = reference_time or datetime.now().astimezone()
     mention_user_id = author_user_id if mention_user else None
     pending_resolution = _resolve_pending_confirmation(
@@ -45,7 +72,11 @@ def build_conversation_response(
         mention_user_id=mention_user_id,
     )
     if pending_resolution is not None:
-        return pending_resolution
+        return ConversationResponse(
+            content=pending_resolution,
+            intent_id="pending_confirmation",
+            mention_user_id=mention_user_id,
+        )
 
     intent = detect_conversation_intent(message_text)
     snapshot = load_plan_today_snapshot(now.date())
@@ -56,7 +87,12 @@ def build_conversation_response(
     )
 
     if snapshot is None and intent.requires_snapshot:
-        return format_missing_plan_snapshot_message(mention_user_id=mention_user_id)
+        return ConversationResponse(
+            content=format_snapshot_regenerating_message(mention_user_id=mention_user_id),
+            intent_id=intent.intent_id,
+            regenerate_snapshot=True,
+            mention_user_id=mention_user_id,
+        )
 
     if snapshot is not None and intent.intent_id != "checkpoint_lookup":
         content = _build_ollama_conversation_response(
@@ -66,18 +102,26 @@ def build_conversation_response(
             due_checkpoints=due_checkpoints,
         )
         if content is not None:
-            return _prepend_mention(content, mention_user_id=mention_user_id)
+            return ConversationResponse(
+                content=_prepend_mention(content, mention_user_id=mention_user_id),
+                intent_id=intent.intent_id,
+                mention_user_id=mention_user_id,
+            )
 
-    return _prepend_mention(
-        _build_fallback_conversation_response(
-            message_text=message_text,
-            intent=intent,
-            snapshot=snapshot,
-            due_checkpoints=due_checkpoints,
-            reference_time=now,
-            author_user_id=author_user_id,
-            conversation_scope=conversation_scope,
+    return ConversationResponse(
+        content=_prepend_mention(
+            _build_fallback_conversation_response(
+                message_text=message_text,
+                intent=intent,
+                snapshot=snapshot,
+                due_checkpoints=due_checkpoints,
+                reference_time=now,
+                author_user_id=author_user_id,
+                conversation_scope=conversation_scope,
+            ),
+            mention_user_id=mention_user_id,
         ),
+        intent_id=intent.intent_id,
         mention_user_id=mention_user_id,
     )
 

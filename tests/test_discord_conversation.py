@@ -10,7 +10,11 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.bot import _extract_conversation_prompt, _should_handle_message
-from yule_orchestrator.discord.conversation import build_conversation_response, detect_conversation_intent
+from yule_orchestrator.discord.conversation import (
+    build_conversation_response,
+    build_conversation_response_envelope,
+    detect_conversation_intent,
+)
 from yule_orchestrator.planning.ollama_config import OllamaConversationConfig
 
 
@@ -167,6 +171,31 @@ class DiscordConversationTestCase(unittest.TestCase):
 
         self.assertIn("09:55", content)
         self.assertIn("업무 수행 마무리 확인", content)
+
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
+    @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
+    def test_envelope_signals_regeneration_when_snapshot_missing_for_briefing_intent(
+        self,
+        load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
+    ) -> None:
+        load_plan_today_snapshot_mock.return_value = None
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=False,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
+        )
+
+        envelope = build_conversation_response_envelope(
+            "오늘 브리핑 다시 정리해줘",
+            author_user_id=777,
+            reference_time=datetime.fromisoformat("2026-04-24T09:10:00+09:00"),
+        )
+
+        self.assertTrue(envelope.regenerate_snapshot)
+        self.assertEqual(envelope.intent_id, "briefing_refresh")
+        self.assertIn("지금 다시 만들고 있어요", envelope.content)
 
     @patch("yule_orchestrator.discord.conversation.save_json_cache")
     @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
