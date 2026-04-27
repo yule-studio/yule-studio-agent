@@ -4,9 +4,6 @@ import json
 from datetime import date, datetime
 from typing import Optional, Sequence
 
-from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
-from ..integrations.calendar.models import CalendarQueryResult
-from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
 from ..planning import (
     build_daily_plan,
     collect_planning_inputs,
@@ -32,15 +29,14 @@ def run_planning_daily_command(
 ) -> int:
     plan_date = _parse_plan_date(date_text)
     reminders = load_reminder_items(reminders_file)
-    calendar_result = _fetch_calendar_if_needed(plan_date, skip_calendar)
-    github_issues = _fetch_github_if_needed(github_limit, skip_github)
     inputs = collect_planning_inputs(
         plan_date=plan_date,
+        github_limit=github_limit,
         include_calendar=not skip_calendar,
         include_github=not skip_github,
         reminders=reminders,
-        prefetched_calendar_result=calendar_result,
-        prefetched_github_issues=github_issues,
+        allow_live_calendar_fetch=not skip_calendar,
+        allow_live_github_fetch=not skip_github,
     )
     envelope = build_daily_plan(
         inputs,
@@ -68,13 +64,12 @@ def run_planning_checkpoints_command(
 ) -> int:
     at = _parse_datetime(at_text)
     plan_date = _parse_plan_date(date_text) if date_text is not None else at.date()
-    calendar_result = _fetch_calendar_if_needed(plan_date, skip_calendar=False)
     inputs = collect_planning_inputs(
         plan_date=plan_date,
         include_calendar=True,
         include_github=False,
         reminders=[],
-        prefetched_calendar_result=calendar_result,
+        allow_live_calendar_fetch=True,
     )
     envelope = build_daily_plan(
         inputs,
@@ -126,15 +121,14 @@ def run_planning_snapshot_command(
 ) -> int:
     plan_date = _parse_plan_date(date_text)
     reminders = load_reminder_items(reminders_file)
-    calendar_result = _fetch_calendar_if_needed(plan_date, skip_calendar)
-    github_issues = _fetch_github_if_needed(github_limit, skip_github)
     inputs = collect_planning_inputs(
         plan_date=plan_date,
+        github_limit=github_limit,
         include_calendar=not skip_calendar,
         include_github=not skip_github,
         reminders=reminders,
-        prefetched_calendar_result=calendar_result,
-        prefetched_github_issues=github_issues,
+        allow_live_calendar_fetch=not skip_calendar,
+        allow_live_github_fetch=not skip_github,
     )
     envelope = build_daily_plan(
         inputs,
@@ -163,29 +157,6 @@ def run_planning_snapshot_command(
     print(f"cache_key: {snapshot.cache_key}")
     print(f"recommended tasks: {envelope.daily_plan.summary.recommended_task_count}")
     return 0
-
-
-def _fetch_calendar_if_needed(
-    plan_date: date, skip_calendar: bool
-) -> Optional[CalendarQueryResult]:
-    if skip_calendar:
-        return None
-    try:
-        return list_naver_calendar_items(plan_date, plan_date)
-    except CalendarIntegrationError:
-        return None
-
-
-def _fetch_github_if_needed(
-    github_limit: int, skip_github: bool
-) -> Optional[Sequence[GitHubIssue]]:
-    if skip_github:
-        return None
-    try:
-        return list_open_issues(limit=github_limit)
-    except GitHubIssueError:
-        return None
-
 
 def _parse_plan_date(value: Optional[str]) -> date:
     if value is None:

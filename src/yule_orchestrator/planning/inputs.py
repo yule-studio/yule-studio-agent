@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 from typing import Optional, Sequence
 
+from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
 from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
-from ..integrations.github.issues import GitHubIssue
+from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
 from ..storage import list_calendar_state_records
 from .models import PlanningInputs, PlanningSourceStatus, ReminderItem
 
@@ -41,11 +42,14 @@ def load_reminder_items(path_text: Optional[str]) -> Sequence[ReminderItem]:
 
 def collect_planning_inputs(
     plan_date: date,
+    github_limit: int = 20,
     include_calendar: bool = True,
     include_github: bool = True,
     reminders: Optional[Sequence[ReminderItem]] = None,
     prefetched_calendar_result: Optional[CalendarQueryResult] = None,
     prefetched_github_issues: Optional[Sequence[GitHubIssue]] = None,
+    allow_live_calendar_fetch: bool = False,
+    allow_live_github_fetch: bool = False,
 ) -> PlanningInputs:
     warnings: list[str] = []
     source_statuses: list[PlanningSourceStatus] = []
@@ -80,19 +84,45 @@ def collect_planning_inputs(
                     )
                 )
             else:
-                warning = (
-                    "no calendar state for the requested date; run `yule daily-warmup` to populate."
-                )
-                warnings.append(f"calendar: {warning}")
-                source_statuses.append(
-                    PlanningSourceStatus(
-                        source_id="calendar-state",
-                        source_type="calendar",
-                        ok=False,
-                        item_count=0,
-                        warning=warning,
+                if allow_live_calendar_fetch:
+                    try:
+                        result = list_naver_calendar_items(plan_date, plan_date)
+                        calendar_events = result.events
+                        calendar_todos = result.todos
+                        source_statuses.append(
+                            PlanningSourceStatus(
+                                source_id="calendar-live",
+                                source_type="calendar",
+                                ok=True,
+                                item_count=len(calendar_events) + len(calendar_todos),
+                            )
+                        )
+                    except CalendarIntegrationError as exc:
+                        warning = exc.details.message
+                        warnings.append(f"calendar: {warning}")
+                        source_statuses.append(
+                            PlanningSourceStatus(
+                                source_id="calendar-live",
+                                source_type="calendar",
+                                ok=False,
+                                item_count=0,
+                                warning=warning,
+                            )
+                        )
+                else:
+                    warning = (
+                        "no calendar state for the requested date; run `yule daily-warmup` to populate."
                     )
-                )
+                    warnings.append(f"calendar: {warning}")
+                    source_statuses.append(
+                        PlanningSourceStatus(
+                            source_id="calendar-state",
+                            source_type="calendar",
+                            ok=False,
+                            item_count=0,
+                            warning=warning,
+                        )
+                    )
 
     if include_github:
         if prefetched_github_issues is not None:
@@ -106,19 +136,43 @@ def collect_planning_inputs(
                 )
             )
         else:
-            warning = (
-                "github issues are only available via warmup; supply `prefetched_github_issues`."
-            )
-            warnings.append(f"github: {warning}")
-            source_statuses.append(
-                PlanningSourceStatus(
-                    source_id="github-issues",
-                    source_type="github",
-                    ok=False,
-                    item_count=0,
-                    warning=warning,
+            if allow_live_github_fetch:
+                try:
+                    github_issues = list_open_issues(limit=github_limit)
+                    source_statuses.append(
+                        PlanningSourceStatus(
+                            source_id="github-issues-live",
+                            source_type="github",
+                            ok=True,
+                            item_count=len(github_issues),
+                        )
+                    )
+                except GitHubIssueError as exc:
+                    warning = str(exc)
+                    warnings.append(f"github: {warning}")
+                    source_statuses.append(
+                        PlanningSourceStatus(
+                            source_id="github-issues-live",
+                            source_type="github",
+                            ok=False,
+                            item_count=0,
+                            warning=warning,
+                        )
+                    )
+            else:
+                warning = (
+                    "github issues are only available via warmup; supply `prefetched_github_issues`."
                 )
-            )
+                warnings.append(f"github: {warning}")
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="github-issues",
+                        source_type="github",
+                        ok=False,
+                        item_count=0,
+                        warning=warning,
+                    )
+                )
 
     source_statuses.append(
         PlanningSourceStatus(
