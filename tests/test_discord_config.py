@@ -22,10 +22,14 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_DAILY_CHANNEL_ID": "555",
                 "DISCORD_DAILY_CHANNEL_NAME": "planning",
+                "DISCORD_DEBUG_CHANNEL_ID": "556",
+                "DISCORD_DEBUG_CHANNEL_NAME": "planning-debug",
                 "DISCORD_CONVERSATION_CHANNEL_ID": "666",
                 "DISCORD_CONVERSATION_CHANNEL_NAME": "chat-bot",
                 "DISCORD_NOTIFY_USER_ID": "777",
                 "DISCORD_DAILY_BRIEFING_TIME": "16:15",
+                "DISCORD_PREPARATION_RETRY_COUNT": "3",
+                "DISCORD_PREPARATION_RETRY_DELAY_SECONDS": "20",
             },
             clear=False,
         ):
@@ -36,6 +40,8 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertEqual(config.guild_id, 987654321)
         self.assertEqual(config.daily_channel_id, 555)
         self.assertEqual(config.daily_channel_name, "planning")
+        self.assertEqual(config.debug_channel_id, 556)
+        self.assertEqual(config.debug_channel_name, "planning-debug")
         self.assertEqual(config.conversation_channel_id, 666)
         self.assertEqual(config.conversation_channel_name, "chat-bot")
         self.assertEqual(config.effective_conversation_channel_id, 666)
@@ -46,6 +52,8 @@ class DiscordConfigTestCase(unittest.TestCase):
         self.assertEqual(config.notify_user_id, 777)
         self.assertEqual(config.daily_briefing_time, time(16, 15))
         self.assertEqual(config.checkpoint_prefetch_minutes, 5)
+        self.assertEqual(config.preparation_retry_count, 3)
+        self.assertEqual(config.preparation_retry_delay_seconds, 20)
 
     def test_from_env_reads_optional_application_id(self) -> None:
         with patch.dict(
@@ -105,6 +113,19 @@ class DiscordConfigTestCase(unittest.TestCase):
                 "DISCORD_BOT_TOKEN": "token-value",
                 "DISCORD_GUILD_ID": "987654321",
                 "DISCORD_CHECKPOINT_PREFETCH_MINUTES": "0",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(ValueError):
+                DiscordBotConfig.from_env()
+
+    def test_from_env_rejects_negative_preparation_retry_count(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_BOT_TOKEN": "token-value",
+                "DISCORD_GUILD_ID": "987654321",
+                "DISCORD_PREPARATION_RETRY_COUNT": "-1",
             },
             clear=False,
         ):

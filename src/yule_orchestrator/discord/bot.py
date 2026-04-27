@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time as time_module
 from datetime import datetime, time, timedelta
@@ -151,19 +152,21 @@ def run_discord_bot(repo_root: Path) -> None:
                 )
                 for step_name, plan_date, scheduled_at in due_steps:
                     try:
-                        await self._run_daily_preparation_step(
+                        await self._run_daily_preparation_step_with_retry(
                             step_name=step_name,
                             plan_date=plan_date,
+                            scheduled_at=scheduled_at,
                         )
                         self._completed_preparation_steps.add((plan_date.isoformat(), step_name))
-                        print(
-                            "info: daily preparation step completed "
-                            f"(step={step_name}, plan_date={plan_date.isoformat()}, scheduled_at={scheduled_at.isoformat()})"
-                        )
                     except Exception as exc:
-                        print(
-                            "warning: daily preparation step failed "
-                            f"(step={step_name}, plan_date={plan_date.isoformat()}): {exc}"
+                        _log_preparation_event(
+                            level="warning",
+                            event="step_failed",
+                            step_name=step_name,
+                            plan_date=plan_date.isoformat(),
+                            scheduled_at=scheduled_at.isoformat(),
+                            ok=False,
+                            error=str(exc),
                         )
                 _cleanup_completed_preparation_steps(
                     self._completed_preparation_steps,
@@ -171,26 +174,146 @@ def run_discord_bot(repo_root: Path) -> None:
                 )
                 last_scan = scan_time
 
+        async def _run_daily_preparation_step_with_retry(
+            self,
+            *,
+            step_name: str,
+            plan_date,
+            scheduled_at: datetime,
+        ) -> None:
+            attempt_limit = max(1, config.preparation_retry_count + 1)
+            last_error: Exception | None = None
+            for attempt in range(1, attempt_limit + 1):
+                attempt_started_at = datetime.now().astimezone()
+                attempt_started_perf = time_module.perf_counter()
+                _log_preparation_event(
+                    level="info",
+                    event="step_started",
+                    step_name=step_name,
+                    plan_date=plan_date.isoformat(),
+                    scheduled_at=scheduled_at.isoformat(),
+                    attempt=attempt,
+                    attempt_limit=attempt_limit,
+                )
+                try:
+                    result_metadata = await self._run_daily_preparation_step(
+                        step_name=step_name,
+                        plan_date=plan_date,
+                    )
+                    duration_seconds = time_module.perf_counter() - attempt_started_perf
+                    _save_preparation_metric(
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        started_at=attempt_started_at,
+                        duration_seconds=duration_seconds,
+                        ok=True,
+                        metadata={
+                            "scheduled_at": scheduled_at.isoformat(),
+                            "attempt": attempt,
+                            "attempt_limit": attempt_limit,
+                            **result_metadata,
+                        },
+                    )
+                    _log_preparation_event(
+                        level="info",
+                        event="step_completed",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=True,
+                        duration_seconds=round(duration_seconds, 3),
+                        metadata=result_metadata,
+                    )
+                    await self._send_preparation_debug_message(
+                        level="info",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=True,
+                        duration_seconds=round(duration_seconds, 3),
+                        metadata=result_metadata,
+                    )
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    duration_seconds = time_module.perf_counter() - attempt_started_perf
+                    _save_preparation_metric(
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        started_at=attempt_started_at,
+                        duration_seconds=duration_seconds,
+                        ok=False,
+                        metadata={
+                            "scheduled_at": scheduled_at.isoformat(),
+                            "attempt": attempt,
+                            "attempt_limit": attempt_limit,
+                        },
+                        error=str(exc),
+                    )
+                    retry_delay_seconds = config.preparation_retry_delay_seconds
+                    retry_scheduled = attempt < attempt_limit
+                    _log_preparation_event(
+                        level="warning",
+                        event="step_attempt_failed",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=False,
+                        duration_seconds=round(duration_seconds, 3),
+                        retry_scheduled=retry_scheduled,
+                        retry_delay_seconds=retry_delay_seconds if retry_scheduled else 0,
+                        error=str(exc),
+                    )
+                    await self._send_preparation_debug_message(
+                        level="warning",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=False,
+                        duration_seconds=round(duration_seconds, 3),
+                        retry_scheduled=retry_scheduled,
+                        retry_delay_seconds=retry_delay_seconds if retry_scheduled else 0,
+                        error=str(exc),
+                    )
+                    if retry_scheduled:
+                        await asyncio.sleep(retry_delay_seconds)
+                        continue
+                    break
+
+            if last_error is not None:
+                raise last_error
+
         async def _run_daily_preparation_step(
             self,
             *,
             step_name: str,
             plan_date,
-        ) -> None:
+        ) -> dict[str, object]:
             if step_name == "calendar_sync":
-                await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     list_naver_calendar_items,
                     plan_date,
                     plan_date,
                 )
-                return
+                return {
+                    "event_count": len(result.events),
+                    "todo_count": len(result.todos),
+                }
 
             if step_name == "github_sync":
-                await asyncio.to_thread(
+                issues = await asyncio.to_thread(
                     list_open_issues,
                     DAILY_PREPARATION_GITHUB_LIMIT,
                 )
-                return
+                return {"issue_count": len(issues)}
 
             if step_name == "planning_snapshot":
                 reminders = await asyncio.to_thread(load_reminder_items, None)
@@ -206,9 +329,68 @@ def run_discord_bot(repo_root: Path) -> None:
                 )
                 envelope = await asyncio.to_thread(build_daily_plan, inputs)
                 await asyncio.to_thread(save_daily_plan_snapshot, envelope)
-                return
+                return {
+                    "recommended_task_count": len(envelope.daily_plan.recommended_tasks),
+                    "checkpoint_count": len(envelope.daily_plan.checkpoints),
+                    "warning_count": len(inputs.warnings),
+                }
 
             raise ValueError(f"Unsupported daily preparation step: {step_name}")
+
+        async def _send_preparation_debug_message(
+            self,
+            *,
+            level: str,
+            step_name: str,
+            plan_date: str,
+            scheduled_at: str,
+            attempt: int,
+            attempt_limit: int,
+            ok: bool,
+            duration_seconds: float,
+            metadata: dict[str, object] | None = None,
+            retry_scheduled: bool = False,
+            retry_delay_seconds: int = 0,
+            error: str | None = None,
+        ) -> None:
+            debug_channel_id = config.effective_debug_channel_id
+            debug_channel_name = config.effective_debug_channel_name
+            if debug_channel_id is None and debug_channel_name is None:
+                return
+
+            try:
+                channel = await _resolve_messageable_channel(
+                    self,
+                    guild_id=config.guild_id,
+                    channel_id=debug_channel_id,
+                    channel_name=debug_channel_name,
+                    discord_module=discord,
+                    error_label="DISCORD_DEBUG_CHANNEL_ID",
+                )
+            except Exception as exc:
+                print(f"warning: failed to resolve Discord debug channel: {exc}")
+                return
+
+            lines = [
+                f"[daily-preparation] {step_name}",
+                f"- level: {level}",
+                f"- plan_date: {plan_date}",
+                f"- scheduled_at: {scheduled_at}",
+                f"- attempt: {attempt}/{attempt_limit}",
+                f"- ok: {'true' if ok else 'false'}",
+                f"- duration_seconds: {duration_seconds:.3f}",
+            ]
+            if retry_scheduled:
+                lines.append(f"- retry_in_seconds: {retry_delay_seconds}")
+            if metadata:
+                lines.append(f"- metadata: {json.dumps(metadata, ensure_ascii=False, sort_keys=True)}")
+            if error:
+                lines.append(f"- error: {error}")
+            await _send_channel_message_chunks(
+                channel,
+                "\n".join(lines),
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
 
         async def _run_daily_briefing_loop(self) -> None:
             await self.wait_until_ready()
@@ -519,6 +701,18 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
             f"github_sync={next_github_sync.isoformat()}, "
             f"snapshot={next_snapshot.isoformat()})"
         )
+        messages.append(
+            "info: daily preparation retry policy "
+            f"(retry_count={config.preparation_retry_count}, retry_delay_seconds={config.preparation_retry_delay_seconds})"
+        )
+
+    if config.effective_debug_channel_id is not None or config.effective_debug_channel_name is not None:
+        messages.append(
+            "info: Discord debug messages enabled "
+            f"({_channel_target_text(config.effective_debug_channel_id, config.effective_debug_channel_name)})"
+        )
+    else:
+        messages.append("info: Discord debug messages disabled")
 
     if config.effective_conversation_channel_id is not None or config.effective_conversation_channel_name is not None:
         messages.append(
@@ -631,6 +825,7 @@ async def _resolve_messageable_channel(
     error_label: str,
 ) -> "discord.abc.Messageable":
     channel = None
+    fallback_used = False
     if channel_id is not None:
         channel = bot.get_channel(channel_id)
         if channel is None:
@@ -640,16 +835,28 @@ async def _resolve_messageable_channel(
                 channel = None
 
     if channel is None and channel_name:
+        if channel_id is not None:
+            print(
+                f"warning: {error_label} could not be resolved by id={channel_id}; "
+                f"falling back to channel_name={channel_name!r}."
+            )
         channel = await _find_messageable_channel_by_name(
             bot,
             guild_id=guild_id,
             channel_name=channel_name,
             discord_module=discord_module,
         )
+        fallback_used = channel is not None
 
     if not isinstance(channel, discord_module.abc.Messageable):
         target_text = _channel_target_text(channel_id, channel_name)
         raise ValueError(f"Configured {error_label} could not be resolved to a messageable channel ({target_text}).")
+
+    if fallback_used:
+        print(
+            f"info: resolved {error_label} by channel name fallback "
+            f"({_channel_target_text(getattr(channel, 'id', None), channel_name)})"
+        )
 
     return channel
 
@@ -832,3 +1039,77 @@ def _channel_target_text(channel_id: int | None, channel_name: str | None) -> st
     if channel_name:
         parts.append(f"channel_name={channel_name}")
     return ", ".join(parts) if parts else "channel=unconfigured"
+
+
+def _log_preparation_event(
+    *,
+    level: str,
+    event: str,
+    step_name: str,
+    plan_date: str,
+    scheduled_at: str,
+    ok: bool | None = None,
+    attempt: int | None = None,
+    attempt_limit: int | None = None,
+    duration_seconds: float | None = None,
+    retry_scheduled: bool | None = None,
+    retry_delay_seconds: int | None = None,
+    metadata: dict[str, object] | None = None,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "component": "discord-daily-preparation",
+        "event": event,
+        "step_name": step_name,
+        "plan_date": plan_date,
+        "scheduled_at": scheduled_at,
+    }
+    if ok is not None:
+        payload["ok"] = ok
+    if attempt is not None:
+        payload["attempt"] = attempt
+    if attempt_limit is not None:
+        payload["attempt_limit"] = attempt_limit
+    if duration_seconds is not None:
+        payload["duration_seconds"] = round(duration_seconds, 3)
+    if retry_scheduled is not None:
+        payload["retry_scheduled"] = retry_scheduled
+    if retry_delay_seconds is not None:
+        payload["retry_delay_seconds"] = retry_delay_seconds
+    if metadata:
+        payload["metadata"] = metadata
+    if error:
+        payload["error"] = error
+    print(f"{level}: {json.dumps(payload, ensure_ascii=False, sort_keys=True)}")
+
+
+def _save_preparation_metric(
+    *,
+    step_name: str,
+    plan_date: str,
+    started_at: datetime,
+    duration_seconds: float,
+    ok: bool,
+    metadata: dict[str, object],
+    error: str | None = None,
+) -> None:
+    ended_at = datetime.now().astimezone()
+    step = RuntimeStepMetric(
+        name=step_name,
+        duration_seconds=duration_seconds,
+        ok=ok,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        metadata=metadata,
+        error=error,
+    )
+    save_runtime_metric_run(
+        workflow="discord-daily-preparation",
+        started_at=started_at,
+        ended_at=ended_at,
+        steps=[step],
+        metadata={
+            "plan_date": plan_date,
+            "step_name": step_name,
+        },
+    )

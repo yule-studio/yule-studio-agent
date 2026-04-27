@@ -5,6 +5,7 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
+import asyncio
 from datetime import datetime, time, timedelta
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from yule_orchestrator.discord.bot import (
     _daily_preparation_schedule_for,
     _next_daily_preparation_runs,
     _next_daily_run,
+    _resolve_messageable_channel,
     _startup_messages,
 )
 from yule_orchestrator.discord.config import DiscordBotConfig
@@ -132,10 +134,12 @@ class DiscordScheduleTestCase(unittest.TestCase):
         self.assertTrue(any("channel_id=789" in message for message in messages))
         self.assertIn("info: Discord notifications will mention user 999", messages)
         self.assertTrue(any("daily preparation enabled" in message for message in messages))
+        self.assertTrue(any("daily preparation retry policy" in message for message in messages))
         self.assertIn(
             "info: conversation replies enabled (channel_id=654, channel_name=planning-chat, mode=plain-message-or-mention)",
             messages,
         )
+        self.assertIn("info: Discord debug messages disabled", messages)
 
     def test_startup_messages_warn_when_channel_id_looks_like_application_id(self) -> None:
         fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
@@ -182,3 +186,47 @@ class DiscordScheduleTestCase(unittest.TestCase):
         self.assertTrue(
             any("DISCORD_DAILY_CHANNEL_ID looks like DISCORD_GUILD_ID" in message for message in messages)
         )
+
+    def test_resolve_messageable_channel_falls_back_to_name(self) -> None:
+        class FakeMessageable:
+            def __init__(self, channel_id: int, name: str) -> None:
+                self.id = channel_id
+                self.name = name
+
+        class FakeGuild:
+            def __init__(self, channels) -> None:
+                self.channels = channels
+
+        class FakeBot:
+            def __init__(self, channels) -> None:
+                self._channels = channels
+                self._guild = FakeGuild(channels)
+
+            def get_channel(self, channel_id):
+                return None
+
+            async def fetch_channel(self, channel_id):
+                raise RuntimeError("missing")
+
+            def get_guild(self, guild_id):
+                return self._guild
+
+            def get_all_channels(self):
+                return self._channels
+
+        class FakeDiscordModule:
+            class abc:
+                Messageable = FakeMessageable
+
+        async def run_case():
+            return await _resolve_messageable_channel(
+                FakeBot([FakeMessageable(999, "planning-debug")]),
+                guild_id=123,
+                channel_id=456,
+                channel_name="planning-debug",
+                discord_module=FakeDiscordModule,
+                error_label="DISCORD_DEBUG_CHANNEL_ID",
+            )
+
+        resolved = asyncio.run(run_case())
+        self.assertEqual(resolved.id, 999)

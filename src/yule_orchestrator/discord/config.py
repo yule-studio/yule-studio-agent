@@ -13,6 +13,8 @@ class DiscordBotConfig:
     guild_id: int
     daily_channel_id: Optional[int] = None
     daily_channel_name: Optional[str] = None
+    debug_channel_id: Optional[int] = None
+    debug_channel_name: Optional[str] = None
     checkpoint_channel_id: Optional[int] = None
     checkpoint_channel_name: Optional[str] = None
     conversation_channel_id: Optional[int] = None
@@ -20,6 +22,8 @@ class DiscordBotConfig:
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
     checkpoint_prefetch_minutes: int = 5
+    preparation_retry_count: int = 2
+    preparation_retry_delay_seconds: int = 15
 
     @property
     def effective_checkpoint_channel_id(self) -> Optional[int]:
@@ -37,6 +41,14 @@ class DiscordBotConfig:
     def effective_conversation_channel_name(self) -> Optional[str]:
         return self.conversation_channel_name or self.daily_channel_name
 
+    @property
+    def effective_debug_channel_id(self) -> Optional[int]:
+        return self.debug_channel_id
+
+    @property
+    def effective_debug_channel_name(self) -> Optional[str]:
+        return self.debug_channel_name
+
     @classmethod
     def from_env(cls) -> "DiscordBotConfig":
         return cls(
@@ -45,6 +57,8 @@ class DiscordBotConfig:
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
             daily_channel_name=_optional_string_env("DISCORD_DAILY_CHANNEL_NAME"),
+            debug_channel_id=_optional_int_env("DISCORD_DEBUG_CHANNEL_ID"),
+            debug_channel_name=_optional_string_env("DISCORD_DEBUG_CHANNEL_NAME"),
             checkpoint_channel_id=_optional_int_env("DISCORD_CHECKPOINT_CHANNEL_ID"),
             checkpoint_channel_name=_optional_string_env("DISCORD_CHECKPOINT_CHANNEL_NAME"),
             conversation_channel_id=_optional_int_env("DISCORD_CONVERSATION_CHANNEL_ID"),
@@ -54,6 +68,14 @@ class DiscordBotConfig:
             checkpoint_prefetch_minutes=_optional_positive_int_env(
                 "DISCORD_CHECKPOINT_PREFETCH_MINUTES",
                 default=5,
+            ),
+            preparation_retry_count=_optional_non_negative_int_env(
+                "DISCORD_PREPARATION_RETRY_COUNT",
+                default=2,
+            ),
+            preparation_retry_delay_seconds=_optional_positive_int_env(
+                "DISCORD_PREPARATION_RETRY_DELAY_SECONDS",
+                default=15,
             ),
         )
 
@@ -108,6 +130,23 @@ def _optional_positive_int_env(name: str, default: int) -> int:
 
     if parsed <= 0:
         raise ValueError(f"{name} must be greater than 0, got: {value!r}")
+
+    return parsed
+
+
+def _optional_non_negative_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+
+    value = raw.strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer value, got: {value!r}") from exc
+
+    if parsed < 0:
+        raise ValueError(f"{name} must be 0 or greater, got: {value!r}")
 
     return parsed
 
