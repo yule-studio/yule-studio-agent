@@ -11,7 +11,8 @@ from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.github.issues import list_open_issues
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_items, save_daily_plan_snapshot
-from ..planning.models import PlanningCheckpoint
+from ..planning.day_profile import DayProfile, load_day_profile
+from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..storage import load_json_cache, save_json_cache
 from .commands import register_discord_commands
 from .conversation import build_conversation_response
@@ -20,13 +21,16 @@ from .formatter import (
     format_checkpoints_message,
     format_missing_plan_snapshot_message,
     format_plan_today_message,
+    format_scheduled_briefing_message,
     split_discord_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
-from .planning_runtime import load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
+from .planning_runtime import build_due_briefings, load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
+BRIEFING_NOTIFICATION_NAMESPACE = "discord-scheduled-briefings"
 CHECKPOINT_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
+BRIEFING_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
 DAILY_PREPARATION_GITHUB_LIMIT = 30
 DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES = 10
 DAILY_PREPARATION_GITHUB_OFFSET_MINUTES = 5
@@ -38,6 +42,7 @@ def run_discord_bot(repo_root: Path) -> None:
     from discord.ext import commands
 
     config = DiscordBotConfig.from_env()
+    day_profile = load_day_profile()
 
     class YuleDiscordBot(commands.Bot):
         def __init__(self) -> None:
@@ -76,11 +81,10 @@ def run_discord_bot(repo_root: Path) -> None:
             guild = discord.Object(id=config.guild_id)
             await self.tree.sync(guild=guild)
             self._checkpoint_storage_lock = asyncio.Lock()
-            if config.daily_briefing_time is not None:
+            daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
+            if daily_channel_configured:
                 self._daily_preparation_task = asyncio.create_task(self._run_daily_preparation_loop())
-            if config.daily_briefing_time is not None and (
-                config.daily_channel_id is not None or config.daily_channel_name is not None
-            ):
+            if daily_channel_configured:
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
             if (
                 config.effective_checkpoint_channel_id is not None
@@ -148,7 +152,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 due_steps = _collect_due_daily_preparation_steps(
                     last_scan=last_scan,
                     scan_time=scan_time,
-                    briefing_time=config.daily_briefing_time,
+                    day_profile=day_profile,
                     completed_steps=self._completed_preparation_steps,
                 )
                 for step_name, plan_date, scheduled_at in due_steps:
@@ -412,17 +416,27 @@ def run_discord_bot(repo_root: Path) -> None:
 
         async def _run_daily_briefing_loop(self) -> None:
             await self.wait_until_ready()
+            last_scan = datetime.now().astimezone()
             while not self.is_closed():
-                next_run = _next_daily_run(config.daily_briefing_time)
+                next_run = _next_checkpoint_scan()
                 wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
                 await asyncio.sleep(wait_seconds)
+                scan_time = datetime.now().astimezone()
                 try:
-                    await self._send_daily_briefing()
+                    await self._send_due_briefings(last_scan=last_scan, scan_time=scan_time)
                 except Exception as exc:
                     print(f"warning: failed to send scheduled daily briefing: {exc}")
+                last_scan = scan_time
 
-        async def _send_daily_briefing(self) -> None:
+        async def _send_due_briefings(
+            self,
+            *,
+            last_scan: datetime,
+            scan_time: datetime,
+        ) -> None:
             if config.daily_channel_id is None and config.daily_channel_name is None:
+                return
+            if scan_time <= last_scan:
                 return
 
             channel = await _resolve_messageable_channel(
@@ -434,48 +448,63 @@ def run_discord_bot(repo_root: Path) -> None:
                 error_label="DISCORD_DAILY_CHANNEL_ID",
             )
             resolved_channel_id = getattr(channel, "id", None) or config.daily_channel_id
-            plan_date = datetime.now().astimezone().date()
-            snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
-            if snapshot is None:
-                content = format_missing_plan_snapshot_message(
-                    mention_user_id=config.notify_user_id,
+            async with self._checkpoint_lock():
+                due_briefings = await asyncio.to_thread(
+                    _resolve_due_briefings,
+                    last_scan,
+                    scan_time,
                 )
-            else:
-                content = format_plan_today_message(
-                    snapshot.envelope,
+                unsent_briefings = await asyncio.to_thread(
+                    _filter_unsent_briefings,
+                    resolved_channel_id,
+                    due_briefings,
+                )
+            for briefing in unsent_briefings:
+                snapshot = await asyncio.to_thread(
+                    load_plan_today_snapshot,
+                    datetime.fromisoformat(briefing.send_at).date(),
+                )
+                content = format_scheduled_briefing_message(
+                    briefing,
                     mention_user_id=config.notify_user_id,
                     snapshot=snapshot,
                 )
-            send_started_at = datetime.now().astimezone()
-            send_started = time_module.perf_counter()
-            try:
-                await _send_channel_message_chunks(
-                    channel,
-                    content,
-                    allowed_mentions=_build_allowed_mentions(discord),
-                )
-            except Exception as exc:
+                send_started_at = datetime.now().astimezone()
+                send_started = time_module.perf_counter()
+                try:
+                    await _send_channel_message_chunks(
+                        channel,
+                        content,
+                        allowed_mentions=_build_allowed_mentions(discord),
+                    )
+                except Exception as exc:
+                    _save_discord_send_metric(
+                        workflow="discord-daily-briefing",
+                        started_at=send_started_at,
+                        duration_seconds=time_module.perf_counter() - send_started,
+                        ok=False,
+                        channel_id=resolved_channel_id,
+                        message_count=len(split_discord_message(content)),
+                        snapshot_state=_snapshot_state_label(snapshot),
+                        error=str(exc),
+                    )
+                    raise
+
                 _save_discord_send_metric(
                     workflow="discord-daily-briefing",
                     started_at=send_started_at,
                     duration_seconds=time_module.perf_counter() - send_started,
-                    ok=False,
+                    ok=True,
                     channel_id=resolved_channel_id,
                     message_count=len(split_discord_message(content)),
                     snapshot_state=_snapshot_state_label(snapshot),
-                    error=str(exc),
                 )
-                raise
-
-            _save_discord_send_metric(
-                workflow="discord-daily-briefing",
-                started_at=send_started_at,
-                duration_seconds=time_module.perf_counter() - send_started,
-                ok=True,
-                channel_id=resolved_channel_id,
-                message_count=len(split_discord_message(content)),
-                snapshot_state=_snapshot_state_label(snapshot),
-            )
+                async with self._checkpoint_lock():
+                    await asyncio.to_thread(
+                        _mark_briefings_sent,
+                        resolved_channel_id,
+                        [briefing],
+                    )
 
         async def _run_checkpoint_notification_loop(self) -> None:
             await self.wait_until_ready()
@@ -591,14 +620,8 @@ def run_discord_bot(repo_root: Path) -> None:
 def _next_daily_run(target_time: time | None) -> datetime:
     if target_time is None:
         raise ValueError("daily briefing time is required for scheduling.")
-
     now = datetime.now().astimezone()
-    next_run = now.replace(
-        hour=target_time.hour,
-        minute=target_time.minute,
-        second=0,
-        microsecond=0,
-    )
+    next_run = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
     if next_run <= now:
         next_run = next_run + timedelta(days=1)
     return next_run
@@ -608,17 +631,17 @@ def _collect_due_daily_preparation_steps(
     *,
     last_scan: datetime,
     scan_time: datetime,
-    briefing_time: time | None,
+    day_profile: DayProfile,
     completed_steps: set[tuple[str, str]],
 ) -> list[tuple[str, object, datetime]]:
-    if briefing_time is None or scan_time <= last_scan:
+    if scan_time <= last_scan:
         return []
 
     due_steps: list[tuple[str, object, datetime]] = []
     current_date = last_scan.date()
     end_date = scan_time.date()
     while current_date <= end_date:
-        for step_name, scheduled_at in _daily_preparation_schedule_for(current_date, briefing_time):
+        for step_name, scheduled_at in _daily_preparation_schedule_for(current_date, day_profile):
             step_key = (current_date.isoformat(), step_name)
             if step_key in completed_steps:
                 continue
@@ -630,9 +653,9 @@ def _collect_due_daily_preparation_steps(
     return due_steps
 
 
-def _daily_preparation_schedule_for(plan_date, briefing_time: time) -> list[tuple[str, datetime]]:
-    timezone = datetime.now().astimezone().tzinfo
-    briefing_at = datetime.combine(plan_date, briefing_time).replace(tzinfo=timezone)
+def _daily_preparation_schedule_for(plan_date, day_profile: DayProfile) -> list[tuple[str, datetime]]:
+    morning_slot = next(slot for slot in day_profile.briefing_schedule(plan_date) if slot.briefing_type == "morning")
+    briefing_at = morning_slot.send_at
     return [
         ("calendar_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES)),
         ("github_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_GITHUB_OFFSET_MINUTES)),
@@ -650,15 +673,8 @@ def _cleanup_completed_preparation_steps(
         completed_steps.discard(item)
 
 
-def _next_daily_preparation_runs(*, now: datetime, briefing_time: time) -> tuple[datetime, datetime, datetime]:
-    next_briefing = now.replace(
-        hour=briefing_time.hour,
-        minute=briefing_time.minute,
-        second=0,
-        microsecond=0,
-    )
-    if next_briefing <= now:
-        next_briefing = next_briefing + timedelta(days=1)
+def _next_daily_preparation_runs(*, now: datetime, day_profile: DayProfile) -> tuple[datetime, datetime, datetime]:
+    next_briefing = _next_scheduled_briefing_run(now=now, day_profile=day_profile, briefing_type="morning")
 
     return (
         next_briefing - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES),
@@ -674,21 +690,22 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     messages.extend(_channel_configuration_warnings(config))
     messages.extend(_channel_overlap_warnings(config))
 
-    if config.daily_briefing_time is not None and not daily_channel_configured:
+    if config.daily_briefing_time is not None:
         messages.append(
-            "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing. "
-            "Scheduled daily briefings will not run."
+            "warning: DISCORD_DAILY_BRIEFING_TIME is deprecated and ignored. "
+            "Planning Agent briefing schedule now follows YULE_WAKE_TIME, YULE_LUNCH_START_TIME, and YULE_WORK_END_TIME."
         )
-    elif config.daily_briefing_time is None and daily_channel_configured:
-        messages.append(
-            "warning: DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is set but DISCORD_DAILY_BRIEFING_TIME is missing. "
-            "Scheduled daily briefings will not run."
-        )
-    elif config.daily_briefing_time is not None and daily_channel_configured:
-        next_run = _next_daily_run(config.daily_briefing_time)
+
+    if daily_channel_configured:
+        next_run = _next_scheduled_briefing_run(now=now, day_profile=load_day_profile(), briefing_type=None)
         messages.append(
             "info: daily briefing enabled "
             f"({_channel_target_text(config.daily_channel_id, config.daily_channel_name)}, next_run={next_run.isoformat()})"
+        )
+    else:
+        messages.append(
+            "warning: DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing. "
+            "Scheduled daily briefings will not run."
         )
 
     checkpoint_channel_id = config.effective_checkpoint_channel_id
@@ -709,10 +726,10 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     else:
         messages.append("info: Discord notifications will be sent without a user mention")
 
-    if config.daily_briefing_time is not None:
+    if daily_channel_configured:
         next_calendar_sync, next_github_sync, next_snapshot = _next_daily_preparation_runs(
             now=now,
-            briefing_time=config.daily_briefing_time,
+            day_profile=load_day_profile(),
         )
         messages.append(
             "info: daily preparation enabled "
@@ -795,6 +812,84 @@ def _checkpoint_channel_error_label(config: DiscordBotConfig) -> str:
     if config.checkpoint_channel_id is not None:
         return "DISCORD_CHECKPOINT_CHANNEL_ID"
     return "DISCORD_DAILY_CHANNEL_ID"
+
+
+def _next_scheduled_briefing_run(
+    *,
+    now: datetime,
+    day_profile: DayProfile,
+    briefing_type: str | None,
+) -> datetime:
+    upcoming: list[datetime] = []
+    for offset in range(0, 3):
+        plan_date = now.date() + timedelta(days=offset)
+        for slot in day_profile.briefing_schedule(plan_date):
+            if briefing_type is not None and slot.briefing_type != briefing_type:
+                continue
+            if slot.send_at > now:
+                upcoming.append(slot.send_at)
+    if not upcoming:
+        raise ValueError("no upcoming briefing schedule could be computed")
+    return min(upcoming)
+
+
+def _resolve_due_briefings(
+    window_start: datetime,
+    window_end: datetime,
+) -> list[PlanningScheduledBriefing]:
+    window_minutes = max(1, math.ceil((window_end - window_start).total_seconds() / 60))
+    return build_due_briefings(window_start, window_minutes=window_minutes)
+
+
+def _briefing_notification_cache_key(channel_id: int, briefing_id: str) -> str:
+    return f"{channel_id}:{briefing_id}"
+
+
+def _filter_unsent_briefings(
+    channel_id: int | None,
+    briefings: list[PlanningScheduledBriefing],
+) -> list[PlanningScheduledBriefing]:
+    if channel_id is None:
+        return briefings
+    unsent: list[PlanningScheduledBriefing] = []
+    for briefing in briefings:
+        entry = load_json_cache(
+            namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+            cache_key=_briefing_notification_cache_key(channel_id, briefing.briefing_id),
+            allow_stale=False,
+            touch=False,
+        )
+        if entry is None:
+            unsent.append(briefing)
+    return unsent
+
+
+def _mark_briefings_sent(
+    channel_id: int | None,
+    briefings: list[PlanningScheduledBriefing],
+) -> None:
+    if channel_id is None:
+        return
+    for briefing in briefings:
+        save_json_cache(
+            namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+            cache_key=_briefing_notification_cache_key(channel_id, briefing.briefing_id),
+            provider="discord-bot",
+            range_start=briefing.send_at,
+            range_end=briefing.send_at,
+            scope_hash=str(channel_id),
+            ttl_seconds=BRIEFING_NOTIFICATION_TTL_SECONDS,
+            payload={
+                "channel_id": channel_id,
+                "briefing_id": briefing.briefing_id,
+                "briefing_type": briefing.briefing_type,
+                "send_at": briefing.send_at,
+            },
+            metadata={
+                "channel_id": channel_id,
+                "briefing_type": briefing.briefing_type,
+            },
+        )
 
 
 def _save_discord_send_metric(

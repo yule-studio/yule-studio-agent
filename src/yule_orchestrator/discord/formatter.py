@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Sequence
 
-from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
+from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint, PlanningScheduledBriefing
 from ..planning.snapshots import DailyPlanSnapshot
 
 DISCORD_MESSAGE_LIMIT = 1900
@@ -92,6 +92,23 @@ def format_checkpoints_message(
     for checkpoint in checkpoints:
         lines.append(f"- {checkpoint.prompt}")
     return "\n".join(lines)
+
+
+def format_scheduled_briefing_message(
+    briefing: PlanningScheduledBriefing,
+    *,
+    snapshot: Optional[DailyPlanSnapshot] = None,
+    mention_user_id: Optional[int] = None,
+) -> str:
+    lines: list[str] = []
+    _append_mention(lines, mention_user_id)
+    if snapshot is not None:
+        label = "마지막 동기화 기준 브리핑입니다." if snapshot.is_stale else "오늘의 브리핑입니다."
+        lines.append(f"{label} 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append("")
+    lines.append(f"**{briefing.title}**")
+    lines.extend(_non_empty_lines(briefing.content))
+    return "\n".join(lines).strip()
 
 
 def split_discord_message(message: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:

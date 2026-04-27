@@ -4,9 +4,12 @@ from datetime import date
 from typing import Sequence
 
 from .briefings import (
+    build_scheduled_briefings,
     build_time_block_briefings,
     render_daily_plan,
     render_discord_briefing,
+    render_evening_briefing,
+    render_lunch_briefing,
     render_morning_briefing,
 )
 from .day_profile import load_day_profile
@@ -120,6 +123,32 @@ def build_daily_plan(
         except ValueError as exc:
             warnings.append(f"ollama: {exc}")
 
+    lunch_briefing = render_lunch_briefing(
+        plan_date=inputs.plan_date,
+        summary=summary,
+        fixed_schedule=fixed_schedule,
+        prioritized_tasks=tasks,
+        checkpoints=checkpoints,
+        day_profile=day_profile,
+    )
+    evening_briefing = render_evening_briefing(
+        plan_date=inputs.plan_date,
+        summary=summary,
+        prioritized_tasks=tasks,
+        coding_agent_handoff=coding_agent_handoff,
+        warnings=warnings,
+        day_profile=day_profile,
+    )
+    briefings = build_scheduled_briefings(
+        plan_date=inputs.plan_date,
+        day_profile=day_profile,
+        discord_briefing=discord_briefing,
+        morning_briefing=morning_briefing,
+        lunch_briefing=lunch_briefing,
+        evening_briefing=evening_briefing,
+        morning_source=morning_briefing_source,
+    )
+
     daily_plan = DailyPlan(
         plan_date=inputs.plan_date,
         timezone=inputs.timezone,
@@ -133,6 +162,7 @@ def build_daily_plan(
         morning_briefing=morning_briefing,
         time_block_briefings=time_block_briefings,
         checkpoints=checkpoints,
+        briefings=briefings,
         coding_agent_handoff=coding_agent_handoff,
         discord_briefing=discord_briefing,
         morning_briefing_source=morning_briefing_source,

@@ -15,6 +15,7 @@ from yule_orchestrator.planning.models import (
     DailyPlanEnvelope,
     DailyPlanSummary,
     PlanningInputs,
+    PlanningScheduledBriefing,
     PlanningTaskCandidate,
 )
 from yule_orchestrator.planning.snapshots import load_daily_plan_snapshot, save_daily_plan_snapshot
@@ -93,6 +94,15 @@ def _envelope() -> DailyPlanEnvelope:
             morning_briefing="아침 브리핑",
             time_block_briefings=[],
             checkpoints=[],
+            briefings=[
+                PlanningScheduledBriefing(
+                    briefing_id="morning-1",
+                    briefing_type="morning",
+                    title="아침 브리핑",
+                    send_at="2026-04-23T06:00:00+09:00",
+                    content="오늘 브리핑\n아침 브리핑",
+                )
+            ],
             coding_agent_handoff=[],
             discord_briefing="오늘 브리핑",
             morning_briefing_source="rules",

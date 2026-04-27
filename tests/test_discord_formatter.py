@@ -19,6 +19,7 @@ from yule_orchestrator.planning.models import (
     DailyPlanSummary,
     PlanningBlockBriefing,
     PlanningInputs,
+    PlanningScheduledBriefing,
     PlanningSourceStatus,
     PlanningTaskCandidate,
 )
@@ -88,6 +89,15 @@ class DiscordFormatterTestCase(unittest.TestCase):
                     )
                 ],
                 checkpoints=[],
+                briefings=[
+                    PlanningScheduledBriefing(
+                        briefing_id="morning-1",
+                        briefing_type="morning",
+                        title="아침 브리핑",
+                        send_at="2026-04-22T06:00:00+09:00",
+                        content="오늘 브리핑\n오늘은 고정 일정 1건입니다.",
+                    )
+                ],
                 coding_agent_handoff=[],
                 discord_briefing="오늘은 고정 일정 1건, 우선 작업 1건이 있습니다.",
                 morning_briefing_source="rules",

@@ -95,6 +95,7 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("초반 흐름", plan.morning_briefing)
         self.assertTrue(plan.time_block_briefings)
         self.assertTrue(any(briefing.block_type == "focus_block" for briefing in plan.time_block_briefings))
+        self.assertEqual([briefing.briefing_type for briefing in plan.briefings], ["morning", "lunch", "evening"])
         self.assertEqual(plan.morning_briefing_source, "rules")
         self.assertEqual(plan.discord_briefing_source, "rules")
 
@@ -197,6 +198,7 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("신정동에서 마곡까지", envelope.daily_plan.morning_briefing)
         self.assertIn("08:05 전후 출발", envelope.daily_plan.morning_briefing)
         self.assertIn("09:00에는 업무를 바로 시작", envelope.daily_plan.morning_briefing)
+        self.assertEqual(envelope.daily_plan.briefings[0].send_at, "2026-04-22T06:00:00+09:00")
 
     def test_build_daily_plan_parses_execution_blocks_and_checkpoints(self) -> None:
         inputs = PlanningInputs(

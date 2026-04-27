@@ -14,39 +14,26 @@ from yule_orchestrator.discord.bot import (
     _collect_due_daily_preparation_steps,
     _daily_preparation_schedule_for,
     _next_daily_preparation_runs,
-    _next_daily_run,
+    _next_scheduled_briefing_run,
     _resolve_messageable_channel,
     _startup_messages,
 )
 from yule_orchestrator.discord.config import DiscordBotConfig
+from yule_orchestrator.planning.day_profile import DayProfile
 
 
 class DiscordScheduleTestCase(unittest.TestCase):
-    def test_next_daily_run_returns_same_day_when_future_time(self) -> None:
+    def test_next_scheduled_briefing_run_returns_same_day_when_future_time(self) -> None:
         fake_now = datetime.fromisoformat("2026-04-22T15:10:00+09:00")
+        day_profile = _day_profile()
+        next_run = _next_scheduled_briefing_run(now=fake_now, day_profile=day_profile, briefing_type="evening")
+        self.assertEqual(next_run, fake_now.replace(hour=18, minute=0, second=0, microsecond=0))
 
-        class FakeDateTime:
-            @staticmethod
-            def now():
-                return fake_now
-
-        with patch("yule_orchestrator.discord.bot.datetime", FakeDateTime):
-            next_run = _next_daily_run(time(16, 15))
-
-        self.assertEqual(next_run, fake_now.replace(hour=16, minute=15, second=0, microsecond=0))
-
-    def test_next_daily_run_rolls_to_next_day_when_time_passed(self) -> None:
-        fake_now = datetime.fromisoformat("2026-04-22T16:20:00+09:00")
-
-        class FakeDateTime:
-            @staticmethod
-            def now():
-                return fake_now
-
-        with patch("yule_orchestrator.discord.bot.datetime", FakeDateTime):
-            next_run = _next_daily_run(time(16, 15))
-
-        expected = fake_now.replace(hour=16, minute=15, second=0, microsecond=0) + timedelta(days=1)
+    def test_next_scheduled_briefing_run_rolls_to_next_day_when_time_passed(self) -> None:
+        fake_now = datetime.fromisoformat("2026-04-22T18:20:00+09:00")
+        day_profile = _day_profile()
+        next_run = _next_scheduled_briefing_run(now=fake_now, day_profile=day_profile, briefing_type="evening")
+        expected = fake_now.replace(hour=18, minute=0, second=0, microsecond=0) + timedelta(days=1)
         self.assertEqual(next_run, expected)
 
     def test_next_daily_preparation_runs_are_offset_from_briefing(self) -> None:
@@ -54,7 +41,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
 
         calendar_sync, github_sync, snapshot = _next_daily_preparation_runs(
             now=now,
-            briefing_time=time(6, 0),
+            day_profile=_day_profile(),
         )
 
         self.assertEqual(calendar_sync, datetime.fromisoformat("2026-04-22T05:50:00+09:00"))
@@ -68,7 +55,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
         due_steps = _collect_due_daily_preparation_steps(
             last_scan=last_scan,
             scan_time=scan_time,
-            briefing_time=time(6, 0),
+            day_profile=_day_profile(),
             completed_steps=set(),
         )
 
@@ -94,7 +81,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             conversation_channel_id=None,
             conversation_channel_name=None,
             notify_user_id=None,
-            daily_briefing_time=time(17, 30),
+            daily_briefing_time=None,
             checkpoint_prefetch_minutes=5,
         )
 
@@ -102,7 +89,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing"
+                "DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing"
                 in message
                 for message in messages
             )
@@ -122,7 +109,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             conversation_channel_id=654,
             conversation_channel_name="planning-chat",
             notify_user_id=999,
-            daily_briefing_time=time(17, 30),
+            daily_briefing_time=None,
             checkpoint_prefetch_minutes=7,
         )
 
@@ -154,7 +141,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             conversation_channel_id=456,
             conversation_channel_name="planning",
             notify_user_id=None,
-            daily_briefing_time=time(17, 30),
+            daily_briefing_time=None,
             checkpoint_prefetch_minutes=5,
         )
 
@@ -177,7 +164,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             conversation_channel_id=None,
             conversation_channel_name=None,
             notify_user_id=None,
-            daily_briefing_time=time(17, 30),
+            daily_briefing_time=None,
             checkpoint_prefetch_minutes=5,
         )
 
@@ -200,7 +187,7 @@ class DiscordScheduleTestCase(unittest.TestCase):
             conversation_channel_id=None,
             conversation_channel_name=None,
             notify_user_id=None,
-            daily_briefing_time=time(17, 30),
+            daily_briefing_time=None,
             checkpoint_prefetch_minutes=5,
         )
 
@@ -253,3 +240,16 @@ class DiscordScheduleTestCase(unittest.TestCase):
 
         resolved = asyncio.run(run_case())
         self.assertEqual(resolved.id, 999)
+
+
+def _day_profile() -> DayProfile:
+    return DayProfile(
+        wake_time=time(6, 0),
+        work_start_time=time(9, 0),
+        lunch_start_time=time(13, 0),
+        work_end_time=time(18, 0),
+        commute_minutes=45,
+        departure_buffer_minutes=10,
+        home_area="신정동",
+        work_area="마곡",
+    )
