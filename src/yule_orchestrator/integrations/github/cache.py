@@ -118,6 +118,7 @@ def _load_cached_payload(
             cache_key=cache_key,
             ttl_seconds=ttl_seconds,
             allow_stale=allow_stale,
+            touch=False,
         )
     except Exception:
         return None

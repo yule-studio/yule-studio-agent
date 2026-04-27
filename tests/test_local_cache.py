@@ -24,7 +24,10 @@ class LocalCacheTestCase(unittest.TestCase):
         self.temp_dir = Path("tests/.tmp/local-cache-tests")
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+        except (FileNotFoundError, PermissionError) as exc:
+            self.skipTest(f"temporary directory is not writable in this environment: {exc}")
         self.db_path = self.temp_dir / "cache.sqlite3"
         self.previous_db_path = os.environ.get("YULE_CACHE_DB_PATH")
         os.environ["YULE_CACHE_DB_PATH"] = str(self.db_path)
