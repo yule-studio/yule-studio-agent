@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
+from ..planning.briefings import normalize_paragraph_spacing
 from ..planning.ollama import generate_ollama_text
 from ..planning.ollama_config import load_ollama_conversation_config
 from ..planning.snapshots import DailyPlanSnapshot
@@ -296,16 +297,7 @@ def _intent_guide(intent: ConversationIntentMatch) -> str:
 
 
 def _normalize_model_response(content: str) -> str:
-    lines = [line.rstrip() for line in content.replace("\r\n", "\n").strip().splitlines()]
-    normalized_lines: list[str] = []
-    previous_blank = False
-    for line in lines:
-        is_blank = not line.strip()
-        if is_blank and previous_blank:
-            continue
-        normalized_lines.append(line.strip() if not is_blank else "")
-        previous_blank = is_blank
-    return "\n".join(normalized_lines).strip()
+    return normalize_paragraph_spacing(content)
 
 
 def _build_fallback_conversation_response(

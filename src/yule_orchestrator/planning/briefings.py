@@ -17,6 +17,47 @@ from .models import (
 )
 
 
+def normalize_paragraph_spacing(text: str) -> str:
+    if not text:
+        return text
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")]
+    spaced: list[str] = []
+    for line in lines:
+        if (
+            line.strip()
+            and spaced
+            and spaced[-1].strip()
+            and not _is_list_or_heading(spaced[-1])
+            and not _is_list_or_heading(line)
+        ):
+            spaced.append("")
+        spaced.append(line)
+
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in spaced:
+        is_blank = not line.strip()
+        if is_blank and previous_blank:
+            continue
+        collapsed.append(line)
+        previous_blank = is_blank
+    return "\n".join(collapsed).strip()
+
+
+def _is_list_or_heading(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped[0] in "-*•":
+        return True
+    head = stripped.split(maxsplit=1)[0]
+    if len(head) >= 2 and head[:-1].isdigit() and head[-1] in ".)":
+        return True
+    if stripped.endswith(":"):
+        return True
+    return False
+
+
 def render_daily_plan(envelope: DailyPlanEnvelope) -> str:
     plan = envelope.daily_plan
     lines: list[str] = []

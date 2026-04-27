@@ -6,6 +6,7 @@ from typing import Sequence
 from .briefings import (
     build_scheduled_briefings,
     build_time_block_briefings,
+    normalize_paragraph_spacing,
     render_daily_plan,
     render_discord_briefing,
     render_evening_briefing,
@@ -119,6 +120,7 @@ def build_daily_plan(
                 endpoint=resolved_ollama_endpoint,
                 timeout_seconds=resolved_ollama_timeout_seconds,
             )
+            morning_briefing = normalize_paragraph_spacing(morning_briefing)
             morning_briefing_source = "ollama"
         except ValueError as exc:
             warnings.append(f"ollama: {exc}")
