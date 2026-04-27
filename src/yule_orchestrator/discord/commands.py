@@ -31,7 +31,8 @@ def register_discord_commands(
 
     @bot.tree.command(name="plan_today", description="저장된 오늘 daily-plan snapshot을 보여줍니다.", guild=guild)
     async def plan_today(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
         plan_date = date.today()
         snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
         if snapshot is None:
@@ -48,6 +49,7 @@ def register_discord_commands(
             interaction,
             content,
             allowed_mentions=allowed_mentions,
+            discord_module=discord,
         )
 
     @bot.tree.command(name="checkpoints_now", description="지금 기준으로 다가오는 체크포인트를 보여줍니다.", guild=guild)
@@ -56,7 +58,8 @@ def register_discord_commands(
         interaction: discord.Interaction,
         window_minutes: app_commands.Range[int, 1, 60] = 10,
     ) -> None:
-        await interaction.response.defer(thinking=True)
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
         now = datetime.now().astimezone()
         due_checkpoints = await asyncio.to_thread(
             build_due_checkpoints,
@@ -72,6 +75,7 @@ def register_discord_commands(
             interaction,
             content,
             allowed_mentions=allowed_mentions,
+            discord_module=discord,
         )
 
 
@@ -89,14 +93,39 @@ def _build_allowed_mentions(discord_module: Any) -> Any:
     )
 
 
+async def _safe_defer(
+    interaction: "discord.Interaction",
+    *,
+    discord_module: Any,
+) -> bool:
+    try:
+        await interaction.response.defer(thinking=True)
+    except discord_module.NotFound:
+        print(
+            "warning: discord interaction expired before defer could complete "
+            f"(command={getattr(interaction.command, 'name', 'unknown')}, "
+            f"user_id={getattr(interaction.user, 'id', 'unknown')})"
+        )
+        return False
+    return True
+
+
 async def _send_message_chunks(
     interaction: "discord.Interaction",
     message: str,
     *,
     allowed_mentions: Any,
+    discord_module: Any,
 ) -> None:
     chunks = split_discord_message(message)
     first_chunk, *remaining = chunks
-    await interaction.followup.send(first_chunk, allowed_mentions=allowed_mentions)
-    for chunk in remaining:
-        await interaction.followup.send(chunk, allowed_mentions=allowed_mentions)
+    try:
+        await interaction.followup.send(first_chunk, allowed_mentions=allowed_mentions)
+        for chunk in remaining:
+            await interaction.followup.send(chunk, allowed_mentions=allowed_mentions)
+    except discord_module.NotFound:
+        print(
+            "warning: discord interaction webhook expired before followup could be delivered "
+            f"(command={getattr(interaction.command, 'name', 'unknown')}, "
+            f"user_id={getattr(interaction.user, 'id', 'unknown')})"
+        )
