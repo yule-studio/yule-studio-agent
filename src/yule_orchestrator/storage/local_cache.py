@@ -5,14 +5,14 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from threading import RLock
 import time
 from typing import Any, Mapping, Optional, Sequence
+
+from ._sqlite import SQLITE_WRITE_LOCK
 
 DEFAULT_STALE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 30_000
 _CLEANUP_INTERVAL_SECONDS = 5 * 60
-_LOCAL_CACHE_LOCK = RLock()
 _last_cleanup_monotonic = 0.0
 
 
@@ -58,7 +58,7 @@ def load_json_cache(
     if not db_path.exists():
         return None
 
-    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         row = connection.execute(
             """
@@ -144,7 +144,7 @@ def save_json_cache(
     now = time.time()
     expires_at = now + ttl_seconds
 
-    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         connection.execute(
             """
@@ -224,7 +224,7 @@ def list_json_cache_entries(
     if clauses:
         where_clause = "WHERE " + " AND ".join(clauses)
 
-    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         rows = connection.execute(
             f"""
@@ -291,7 +291,7 @@ def cleanup_json_cache(
         clauses.append("namespace = ?")
         params.append(namespace)
 
-    with _LOCAL_CACHE_LOCK, _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         cursor = connection.execute(
             f"DELETE FROM local_cache_entries WHERE {' AND '.join(clauses)}",

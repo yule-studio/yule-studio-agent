@@ -10,6 +10,8 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
+from ._sqlite import SQLITE_WRITE_LOCK
+
 if TYPE_CHECKING:
     from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
 
@@ -105,7 +107,7 @@ def sync_calendar_query_result(
     unchanged_count = 0
     completed_transition_count = 0
 
-    with _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
 
         for item in items:
@@ -313,7 +315,7 @@ def list_calendar_state_records(
         ORDER BY item_type, COALESCE(due_at, start_at, end_at), title
     """
 
-    with _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         rows = connection.execute(query, params).fetchall()
 
@@ -358,7 +360,7 @@ def cleanup_calendar_state_records(
         return 0
 
     threshold = time.time() - max(0, retention_seconds)
-    with _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         cursor = connection.execute(
             "DELETE FROM calendar_item_states WHERE last_seen_at <= ?",
