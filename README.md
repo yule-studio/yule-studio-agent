@@ -13,6 +13,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - Planning Agent 기반 daily plan 생성
 - 시간 블록 브리핑과 체크포인트 생성
 - Discord 슬래시 명령 기반 최소 봇 실행
+- Discord 대화형 Planning 응답과 Ollama 기반 자연어 응답
 
 ## 디렉토리 구조
 
@@ -119,6 +120,10 @@ YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-cat
 # OLLAMA_ENDPOINT=http://localhost:11434
 # OLLAMA_MODEL=gemma3:latest
 # OLLAMA_TIMEOUT_SECONDS=20
+# OLLAMA_DISCORD_ENABLED=false
+# OLLAMA_DISCORD_ENDPOINT=http://localhost:11434
+# OLLAMA_DISCORD_MODEL=gemma3:latest
+# OLLAMA_DISCORD_TIMEOUT_SECONDS=20
 # YULE_WAKE_TIME=06:00
 # YULE_WORK_START_TIME=09:00
 # YULE_COMMUTE_MINUTES=45
@@ -130,8 +135,11 @@ DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
+# DISCORD_DAILY_CHANNEL_NAME=
 # DISCORD_CHECKPOINT_CHANNEL_ID=
+# DISCORD_CHECKPOINT_CHANNEL_NAME=
 # DISCORD_CONVERSATION_CHANNEL_ID=
+# DISCORD_CONVERSATION_CHANNEL_NAME=
 # DISCORD_NOTIFY_USER_ID=
 # DISCORD_DAILY_BRIEFING_TIME=06:00
 # DISCORD_CHECKPOINT_PREFETCH_MINUTES=5
@@ -154,6 +162,8 @@ DISCORD_GUILD_ID=
 - `PLANNING_DAILY_SNAPSHOT_SECONDS`로 daily-plan snapshot 유효 시간을 조정할 수 있습니다. 기본값은 6시간입니다.
 - `OLLAMA_PLANNING_ENABLED=true`를 설정하면 `planning daily`, `planning snapshot`, `daily warmup`에서 Ollama가 아침 브리핑 문장을 다듬습니다.
 - `OLLAMA_ENDPOINT`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`로 로컬 또는 서버 Ollama 연결 정보를 조정할 수 있습니다.
+- `OLLAMA_DISCORD_ENABLED=true`를 설정하면 Discord 대화형 응답도 snapshot 기반으로 Ollama를 사용합니다.
+- `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트로 분리할 수 있습니다.
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
@@ -166,10 +176,15 @@ DISCORD_GUILD_ID=
 - 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
 - Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`가 필요합니다.
 - `DISCORD_APPLICATION_ID`는 선택값입니다. 비워두면 토큰 기준으로 실제 Discord 애플리케이션 ID를 자동 사용합니다.
-- `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
-- `DISCORD_CONVERSATION_CHANNEL_ID`를 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다. 비워두면 멘션 기반 대화만 허용합니다.
+- `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`, `DISCORD_CONVERSATION_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
+- `DISCORD_DAILY_CHANNEL_NAME`, `DISCORD_CHECKPOINT_CHANNEL_NAME`, `DISCORD_CONVERSATION_CHANNEL_NAME`을 같이 넣으면 채널 ID가 바뀌었거나 잘못 들어간 경우 이름 기반 fallback 으로 채널을 다시 찾을 수 있습니다.
+- `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`을 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다.
+- 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
+- `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
+- Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
+- 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
 - `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
 
