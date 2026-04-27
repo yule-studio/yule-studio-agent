@@ -26,13 +26,34 @@ def generate_human_briefing(
         time_block_briefings=time_block_briefings,
         checkpoints=checkpoints,
     )
+    return generate_ollama_text(
+        prompt,
+        model=model,
+        endpoint=endpoint,
+        timeout_seconds=timeout_seconds,
+        temperature=0.4,
+        empty_error_message="Ollama briefing response was empty.",
+        request_label="briefing",
+    )
+
+
+def generate_ollama_text(
+    prompt: str,
+    *,
+    model: str = "gemma3:latest",
+    endpoint: str = "http://localhost:11434",
+    timeout_seconds: int = 20,
+    temperature: float = 0.4,
+    empty_error_message: str = "Ollama response was empty.",
+    request_label: str = "request",
+) -> str:
     payload = json.dumps(
         {
             "model": model,
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.4
+                "temperature": temperature
             },
         },
         ensure_ascii=False,
@@ -49,11 +70,11 @@ def generate_human_briefing(
         with request.urlopen(req, timeout=timeout_seconds) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Ollama briefing request failed: {exc}") from exc
+        raise ValueError(f"Ollama {request_label} request failed: {exc}") from exc
 
     result = data.get("response")
     if not isinstance(result, str) or not result.strip():
-        raise ValueError("Ollama briefing response was empty.")
+        raise ValueError(empty_error_message)
     return result.strip()
 
 

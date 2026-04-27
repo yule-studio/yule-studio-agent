@@ -65,9 +65,14 @@ def run_discord_bot(repo_root: Path) -> None:
             guild = discord.Object(id=config.guild_id)
             await self.tree.sync(guild=guild)
             self._checkpoint_storage_lock = asyncio.Lock()
-            if config.daily_channel_id is not None and config.daily_briefing_time is not None:
+            if config.daily_briefing_time is not None and (
+                config.daily_channel_id is not None or config.daily_channel_name is not None
+            ):
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
-            if config.effective_checkpoint_channel_id is not None:
+            if (
+                config.effective_checkpoint_channel_id is not None
+                or config.effective_checkpoint_channel_name is not None
+            ):
                 self._checkpoint_prefetch_task = asyncio.create_task(self._run_checkpoint_prefetch_loop())
                 self._checkpoint_notification_task = asyncio.create_task(
                     self._run_checkpoint_notification_loop()
@@ -89,7 +94,8 @@ def run_discord_bot(repo_root: Path) -> None:
             if not _should_handle_message(
                 message=message,
                 bot_user=self.user,
-                conversation_channel_id=config.conversation_channel_id,
+                conversation_channel_id=config.effective_conversation_channel_id,
+                conversation_channel_name=config.effective_conversation_channel_name,
             ):
                 return
 
@@ -102,6 +108,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     build_conversation_response,
                     prompt,
                     author_user_id=message.author.id,
+                    mention_user=_message_mentions_bot(message=message, bot_user=self.user),
                 )
 
             await _send_channel_message_chunks(
@@ -128,15 +135,18 @@ def run_discord_bot(repo_root: Path) -> None:
                     print(f"warning: failed to send scheduled daily briefing: {exc}")
 
         async def _send_daily_briefing(self) -> None:
-            if config.daily_channel_id is None:
+            if config.daily_channel_id is None and config.daily_channel_name is None:
                 return
 
             channel = await _resolve_messageable_channel(
                 self,
+                guild_id=config.guild_id,
                 channel_id=config.daily_channel_id,
+                channel_name=config.daily_channel_name,
                 discord_module=discord,
                 error_label="DISCORD_DAILY_CHANNEL_ID",
             )
+            resolved_channel_id = getattr(channel, "id", None) or config.daily_channel_id
             plan_date = datetime.now().astimezone().date()
             snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
             if snapshot is None:
@@ -163,7 +173,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     started_at=send_started_at,
                     duration_seconds=time_module.perf_counter() - send_started,
                     ok=False,
-                    channel_id=config.daily_channel_id,
+                    channel_id=resolved_channel_id,
                     message_count=len(split_discord_message(content)),
                     snapshot_state=_snapshot_state_label(snapshot),
                     error=str(exc),
@@ -175,7 +185,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 started_at=send_started_at,
                 duration_seconds=time_module.perf_counter() - send_started,
                 ok=True,
-                channel_id=config.daily_channel_id,
+                channel_id=resolved_channel_id,
                 message_count=len(split_discord_message(content)),
                 snapshot_state=_snapshot_state_label(snapshot),
             )
@@ -219,17 +229,21 @@ def run_discord_bot(repo_root: Path) -> None:
             scan_time: datetime,
         ) -> None:
             channel_id = config.effective_checkpoint_channel_id
-            if channel_id is None:
+            channel_name = config.effective_checkpoint_channel_name
+            if channel_id is None and channel_name is None:
                 return
             if scan_time <= last_scan:
                 return
 
             channel = await _resolve_messageable_channel(
                 self,
+                guild_id=config.guild_id,
                 channel_id=channel_id,
+                channel_name=channel_name,
                 discord_module=discord,
                 error_label=_checkpoint_channel_error_label(config),
             )
+            resolved_channel_id = getattr(channel, "id", None) or channel_id or 0
             async with self._checkpoint_lock():
                 due_checkpoints = await asyncio.to_thread(
                     _resolve_due_checkpoints,
@@ -238,7 +252,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 )
                 unsent_checkpoints = await asyncio.to_thread(
                     _filter_unsent_checkpoints,
-                    channel_id,
+                    resolved_channel_id,
                     due_checkpoints,
                 )
             if not unsent_checkpoints:
@@ -257,7 +271,7 @@ def run_discord_bot(repo_root: Path) -> None:
             async with self._checkpoint_lock():
                 await asyncio.to_thread(
                     _mark_checkpoints_sent,
-                    channel_id,
+                    resolved_channel_id,
                     unsent_checkpoints,
                 )
 
@@ -305,32 +319,35 @@ def _next_daily_run(target_time: time | None) -> datetime:
 
 def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     messages: list[str] = []
+    daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
 
     messages.extend(_channel_configuration_warnings(config))
 
-    if config.daily_briefing_time is not None and config.daily_channel_id is None:
+    if config.daily_briefing_time is not None and not daily_channel_configured:
         messages.append(
-            "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID is missing. "
+            "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing. "
             "Scheduled daily briefings will not run."
         )
-    elif config.daily_briefing_time is None and config.daily_channel_id is not None:
+    elif config.daily_briefing_time is None and daily_channel_configured:
         messages.append(
-            "warning: DISCORD_DAILY_CHANNEL_ID is set but DISCORD_DAILY_BRIEFING_TIME is missing. "
+            "warning: DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is set but DISCORD_DAILY_BRIEFING_TIME is missing. "
             "Scheduled daily briefings will not run."
         )
-    elif config.daily_briefing_time is not None and config.daily_channel_id is not None:
+    elif config.daily_briefing_time is not None and daily_channel_configured:
         next_run = _next_daily_run(config.daily_briefing_time)
         messages.append(
             "info: daily briefing enabled "
-            f"(channel={config.daily_channel_id}, next_run={next_run.isoformat()})"
+            f"({_channel_target_text(config.daily_channel_id, config.daily_channel_name)}, next_run={next_run.isoformat()})"
         )
 
     checkpoint_channel_id = config.effective_checkpoint_channel_id
-    if checkpoint_channel_id is not None:
+    checkpoint_channel_name = config.effective_checkpoint_channel_name
+    if checkpoint_channel_id is not None or checkpoint_channel_name is not None:
         next_run = _next_checkpoint_scan(after=now)
         messages.append(
             "info: checkpoint notifications enabled "
-            f"(channel={checkpoint_channel_id}, prefetch_minutes={config.checkpoint_prefetch_minutes}, "
+            f"({_channel_target_text(checkpoint_channel_id, checkpoint_channel_name)}, "
+            f"prefetch_minutes={config.checkpoint_prefetch_minutes}, "
             f"next_scan={next_run.isoformat()})"
         )
     else:
@@ -341,9 +358,11 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     else:
         messages.append("info: Discord notifications will be sent without a user mention")
 
-    if config.conversation_channel_id is not None:
+    if config.effective_conversation_channel_id is not None or config.effective_conversation_channel_name is not None:
         messages.append(
-            f"info: conversation replies enabled (channel={config.conversation_channel_id}, mode=plain-message-or-mention)"
+            "info: conversation replies enabled "
+            f"({_channel_target_text(config.effective_conversation_channel_id, config.effective_conversation_channel_name)}, "
+            "mode=plain-message-or-mention)"
         )
     else:
         messages.append("info: conversation replies enabled in mention-only mode")
@@ -352,9 +371,6 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
 
 
 def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
-    if config.application_id is None:
-        return []
-
     warnings = []
     configured_channels = [
         ("DISCORD_DAILY_CHANNEL_ID", config.daily_channel_id),
@@ -362,9 +378,14 @@ def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
         ("DISCORD_CONVERSATION_CHANNEL_ID", config.conversation_channel_id),
     ]
     for label, channel_id in configured_channels:
-        if channel_id is not None and channel_id == config.application_id:
+        if config.application_id is not None and channel_id is not None and channel_id == config.application_id:
             warnings.append(
                 f"warning: {label} looks like DISCORD_APPLICATION_ID. "
+                "Use the target Discord text channel id instead."
+            )
+        if channel_id is not None and channel_id == config.guild_id:
+            warnings.append(
+                f"warning: {label} looks like DISCORD_GUILD_ID. "
                 "Use the target Discord text channel id instead."
             )
     return warnings
@@ -390,7 +411,7 @@ def _save_discord_send_metric(
     started_at: datetime,
     duration_seconds: float,
     ok: bool,
-    channel_id: int,
+    channel_id: int | None,
     message_count: int,
     snapshot_state: str,
     error: str | None = None,
@@ -441,18 +462,70 @@ async def _cancel_task(task: asyncio.Task[None] | None) -> None:
 async def _resolve_messageable_channel(
     bot: "commands.Bot",
     *,
-    channel_id: int,
+    guild_id: int,
+    channel_id: int | None,
+    channel_name: str | None,
     discord_module: "discord",
     error_label: str,
 ) -> "discord.abc.Messageable":
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        channel = await bot.fetch_channel(channel_id)
+    channel = None
+    if channel_id is not None:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+
+    if channel is None and channel_name:
+        channel = await _find_messageable_channel_by_name(
+            bot,
+            guild_id=guild_id,
+            channel_name=channel_name,
+            discord_module=discord_module,
+        )
 
     if not isinstance(channel, discord_module.abc.Messageable):
-        raise ValueError(f"Configured {error_label} is not a messageable channel.")
+        target_text = _channel_target_text(channel_id, channel_name)
+        raise ValueError(f"Configured {error_label} could not be resolved to a messageable channel ({target_text}).")
 
     return channel
+
+
+async def _find_messageable_channel_by_name(
+    bot: "commands.Bot",
+    *,
+    guild_id: int,
+    channel_name: str,
+    discord_module: "discord",
+) -> "discord.abc.Messageable | None":
+    normalized_target = _normalize_channel_name(channel_name)
+    guild = bot.get_guild(guild_id)
+
+    channels = []
+    if guild is not None:
+        channels.extend(getattr(guild, "channels", []) or [])
+        fetch_channels = getattr(guild, "fetch_channels", None)
+        if not channels and callable(fetch_channels):
+            try:
+                channels.extend(await fetch_channels())
+            except Exception:
+                pass
+
+    if not channels:
+        channels.extend(
+            channel
+            for channel in bot.get_all_channels()
+            if getattr(getattr(channel, "guild", None), "id", None) == guild_id
+        )
+
+    for channel in channels:
+        if _normalize_channel_name(getattr(channel, "name", None)) != normalized_target:
+            continue
+        if isinstance(channel, discord_module.abc.Messageable):
+            return channel
+
+    return None
 
 
 async def _send_channel_message_chunks(
@@ -470,15 +543,30 @@ def _should_handle_message(
     message: object,
     bot_user: object,
     conversation_channel_id: int | None,
+    conversation_channel_name: str | None,
 ) -> bool:
+    content = str(getattr(message, "content", "") or "").strip()
+    if content.startswith("/"):
+        return False
+
     channel = getattr(message, "channel", None)
     channel_id = getattr(channel, "id", None)
+    parent = getattr(channel, "parent", None)
+    parent_id = getattr(parent, "id", None) or getattr(channel, "parent_id", None)
+    channel_name = getattr(channel, "name", None)
+    parent_name = getattr(parent, "name", None)
+
     if conversation_channel_id is not None and channel_id == conversation_channel_id:
         return True
+    if conversation_channel_id is not None and parent_id == conversation_channel_id:
+        return True
+    if _normalize_channel_name(conversation_channel_name) and (
+        _normalize_channel_name(channel_name) == _normalize_channel_name(conversation_channel_name)
+        or _normalize_channel_name(parent_name) == _normalize_channel_name(conversation_channel_name)
+    ):
+        return True
 
-    mentions = getattr(message, "mentions", None) or []
-    bot_id = getattr(bot_user, "id", None)
-    return any(getattr(user, "id", None) == bot_id for user in mentions)
+    return _message_mentions_bot(message=message, bot_user=bot_user)
 
 
 def _extract_conversation_prompt(*, message: object, bot_user: object) -> str:
@@ -493,6 +581,12 @@ def _extract_conversation_prompt(*, message: object, bot_user: object) -> str:
         content = content.replace(f"@{bot_name}", " ")
 
     return " ".join(content.split())
+
+
+def _message_mentions_bot(*, message: object, bot_user: object) -> bool:
+    mentions = getattr(message, "mentions", None) or []
+    bot_id = getattr(bot_user, "id", None)
+    return any(getattr(user, "id", None) == bot_id for user in mentions)
 
 
 def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentions":
@@ -561,3 +655,18 @@ def _has_checkpoint_been_sent(channel_id: int, checkpoint_id: str) -> bool:
 
 def _checkpoint_cache_key(channel_id: int, checkpoint_id: str) -> str:
     return f"{channel_id}:{checkpoint_id}"
+
+
+def _normalize_channel_name(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lstrip("#").lower()
+
+
+def _channel_target_text(channel_id: int | None, channel_name: str | None) -> str:
+    parts = []
+    if channel_id is not None:
+        parts.append(f"channel_id={channel_id}")
+    if channel_name:
+        parts.append(f"channel_name={channel_name}")
+    return ", ".join(parts) if parts else "channel=unconfigured"

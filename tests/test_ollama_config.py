@@ -8,7 +8,10 @@ except ModuleNotFoundError:
 import unittest
 from unittest.mock import patch
 
-from yule_orchestrator.planning.ollama_config import load_ollama_planning_config
+from yule_orchestrator.planning.ollama_config import (
+    load_ollama_conversation_config,
+    load_ollama_planning_config,
+)
 
 
 class OllamaConfigTestCase(unittest.TestCase):
@@ -38,6 +41,43 @@ class OllamaConfigTestCase(unittest.TestCase):
         self.assertEqual(config.endpoint, "http://ollama.local:11434")
         self.assertEqual(config.model, "qwen2.5:3b")
         self.assertEqual(config.timeout_seconds, 45)
+
+    def test_load_ollama_conversation_config_falls_back_to_shared_ollama_values(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_PLANNING_ENABLED": "true",
+                "OLLAMA_ENDPOINT": "http://ollama.local:11434",
+                "OLLAMA_MODEL": "qwen2.5:3b",
+                "OLLAMA_TIMEOUT_SECONDS": "45",
+            },
+            clear=True,
+        ):
+            config = load_ollama_conversation_config()
+
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.endpoint, "http://ollama.local:11434")
+        self.assertEqual(config.model, "qwen2.5:3b")
+        self.assertEqual(config.timeout_seconds, 45)
+
+    def test_load_ollama_conversation_config_reads_discord_specific_environment(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_PLANNING_ENABLED": "false",
+                "OLLAMA_DISCORD_ENABLED": "true",
+                "OLLAMA_DISCORD_ENDPOINT": "http://discord-ollama.local:11434",
+                "OLLAMA_DISCORD_MODEL": "llama3.1:8b",
+                "OLLAMA_DISCORD_TIMEOUT_SECONDS": "30",
+            },
+            clear=True,
+        ):
+            config = load_ollama_conversation_config()
+
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.endpoint, "http://discord-ollama.local:11434")
+        self.assertEqual(config.model, "llama3.1:8b")
+        self.assertEqual(config.timeout_seconds, 30)
 
 
 if __name__ == "__main__":

@@ -10,18 +10,33 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.bot import _extract_conversation_prompt, _should_handle_message
-from yule_orchestrator.discord.conversation import build_conversation_response
+from yule_orchestrator.discord.conversation import build_conversation_response, detect_conversation_intent
+from yule_orchestrator.planning.ollama_config import OllamaConversationConfig
 
 
 class DiscordConversationTestCase(unittest.TestCase):
     def test_should_handle_message_in_conversation_channel(self) -> None:
-        message = _message(content="오늘 일정 브리핑 다시 해줘", channel_id=123, mentions=[])
+        message = _message(content="오늘 일정 브리핑 다시 해줘", channel_id=123, channel_name="planning", mentions=[])
         bot_user = _user(999, "yule-planning-bot")
 
         handled = _should_handle_message(
             message=message,
             bot_user=bot_user,
             conversation_channel_id=123,
+            conversation_channel_name=None,
+        )
+
+        self.assertTrue(handled)
+
+    def test_should_handle_message_when_channel_name_matches(self) -> None:
+        message = _message(content="오늘 일정 브리핑 다시 해줘", channel_id=321, channel_name="planning-chat", mentions=[])
+        bot_user = _user(999, "yule-planning-bot")
+
+        handled = _should_handle_message(
+            message=message,
+            bot_user=bot_user,
+            conversation_channel_id=None,
+            conversation_channel_name="planning-chat",
         )
 
         self.assertTrue(handled)
@@ -30,6 +45,7 @@ class DiscordConversationTestCase(unittest.TestCase):
         message = _message(
             content="<@999> 오늘 뭐부터 해야 해?",
             channel_id=555,
+            channel_name="random",
             mentions=[_user(999, "yule-planning-bot")],
         )
         bot_user = _user(999, "yule-planning-bot")
@@ -38,22 +54,33 @@ class DiscordConversationTestCase(unittest.TestCase):
             message=message,
             bot_user=bot_user,
             conversation_channel_id=None,
+            conversation_channel_name=None,
         )
 
         self.assertTrue(handled)
 
     def test_extract_conversation_prompt_removes_bot_mentions(self) -> None:
-        message = _message(content="<@999> 오늘 뭐부터 해야 해?", channel_id=555, mentions=[])
+        message = _message(content="<@999> 오늘 뭐부터 해야 해?", channel_id=555, channel_name="chat", mentions=[])
         bot_user = _user(999, "yule-planning-bot")
 
         prompt = _extract_conversation_prompt(message=message, bot_user=bot_user)
 
         self.assertEqual(prompt, "오늘 뭐부터 해야 해?")
 
+    def test_detect_conversation_intent_returns_schedule_change_proposal(self) -> None:
+        intent = detect_conversation_intent("오후 일정 좀 뒤로 미루는 안 제안해줘")
+
+        self.assertEqual(intent.intent_id, "schedule_change_proposal")
+        self.assertTrue(intent.proposal_only)
+
+    @patch("yule_orchestrator.discord.conversation.generate_ollama_text")
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
     @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
-    def test_build_conversation_response_returns_priority_summary(
+    def test_build_conversation_response_uses_ollama_for_priority_response(
         self,
         load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
+        generate_ollama_text_mock,
     ) -> None:
         load_plan_today_snapshot_mock.return_value = _snapshot(
             generated_at="2026-04-24T09:00:00+09:00",
@@ -61,6 +88,13 @@ class DiscordConversationTestCase(unittest.TestCase):
             checkpoint_times=["2026-04-24T09:55:00+09:00"],
             suggested_blocks=[("2026-04-24T10:00:00+09:00", "2026-04-24T11:00:00+09:00", "Discord bot 대화형 응답 붙이기")],
         )
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=True,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
+        )
+        generate_ollama_text_mock.return_value = "지금은 Discord bot 대화형 응답 붙이기부터 정리하면 좋겠습니다.\n\n그 다음 체크포인트는 09:55입니다."
 
         content = build_conversation_response(
             "오늘 뭐부터 해야 해?",
@@ -68,30 +102,68 @@ class DiscordConversationTestCase(unittest.TestCase):
             reference_time=datetime.fromisoformat("2026-04-24T09:10:00+09:00"),
         )
 
-        self.assertIn("가장 먼저 볼 일", content)
         self.assertIn("Discord bot 대화형 응답 붙이기", content)
-        self.assertIn("다음 체크포인트", content)
+        self.assertNotIn("<@777>", content)
+        generate_ollama_text_mock.assert_called_once()
 
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
     @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
-    def test_build_conversation_response_returns_full_briefing_when_requested(
+    def test_build_conversation_response_returns_schedule_change_proposal_without_execution(
         self,
         load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
     ) -> None:
         load_plan_today_snapshot_mock.return_value = _snapshot(
             generated_at="2026-04-24T09:00:00+09:00",
             prioritized_titles=["mail-mail 동작 원리 정리"],
-            checkpoint_times=[],
+            checkpoint_times=["2026-04-24T09:55:00+09:00"],
             suggested_blocks=[],
+        )
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=False,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
         )
 
         content = build_conversation_response(
-            "오늘 브리핑 다시 해줘",
+            "오후 일정 좀 뒤로 미루는 안 제안해줘",
             author_user_id=777,
             reference_time=datetime.fromisoformat("2026-04-24T09:10:00+09:00"),
         )
 
-        self.assertIn("오늘 브리핑", content)
-        self.assertIn("아침 브리핑", content)
+        self.assertIn("제안:", content)
+        self.assertIn("승인 전 메모:", content)
+        self.assertIn("아직 실제 일정이나 상태는 변경하지 않았습니다.", content)
+
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
+    @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
+    @patch("yule_orchestrator.discord.conversation.build_due_checkpoints")
+    def test_build_conversation_response_returns_checkpoint_summary(
+        self,
+        build_due_checkpoints_mock,
+        load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
+    ) -> None:
+        load_plan_today_snapshot_mock.return_value = None
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=False,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
+        )
+        build_due_checkpoints_mock.return_value = [
+            _checkpoint("2026-04-24T09:55:00+09:00", "업무 수행 마무리 확인")
+        ]
+
+        content = build_conversation_response(
+            "다음 체크포인트 알려줘",
+            author_user_id=777,
+            reference_time=datetime.fromisoformat("2026-04-24T09:10:00+09:00"),
+        )
+
+        self.assertIn("09:55", content)
+        self.assertIn("업무 수행 마무리 확인", content)
 
 
 def _user(user_id: int, name: str):
@@ -103,15 +175,18 @@ def _user(user_id: int, name: str):
     return User(user_id, name)
 
 
-def _message(*, content: str, channel_id: int, mentions: list[object]):
+def _message(*, content: str, channel_id: int, channel_name: str, mentions: list[object]):
     class Channel:
-        def __init__(self, value: int) -> None:
+        def __init__(self, value: int, name: str) -> None:
             self.id = value
+            self.name = name
+            self.parent = None
+            self.parent_id = None
 
     class Message:
         def __init__(self) -> None:
             self.content = content
-            self.channel = Channel(channel_id)
+            self.channel = Channel(channel_id, channel_name)
             self.mentions = mentions
 
     return Message()
@@ -133,6 +208,7 @@ def _snapshot(
     class Checkpoint:
         def __init__(self, remind_at: str) -> None:
             self.remind_at = remind_at
+            self.prompt = "체크포인트"
 
     class Block:
         def __init__(self, start: str, end: str, title: str) -> None:
@@ -140,19 +216,15 @@ def _snapshot(
             self.end = end
             self.title = title
 
-    class Summary:
-        fixed_event_count = 1
-        recommended_task_count = len(prioritized_titles)
-
     class DailyPlan:
         def __init__(self) -> None:
+            self.plan_date = datetime.fromisoformat("2026-04-24T00:00:00+09:00").date()
             self.discord_briefing = "테스트용 오늘 브리핑"
             self.morning_briefing = "테스트용 아침 브리핑"
             self.prioritized_tasks = [Task(title) for title in prioritized_titles]
             self.checkpoints = [Checkpoint(value) for value in checkpoint_times]
             self.suggested_time_blocks = [Block(start, end, title) for start, end, title in suggested_blocks]
             self.time_block_briefings = []
-            self.summary = Summary()
 
     class Envelope:
         def __init__(self) -> None:
@@ -165,3 +237,12 @@ def _snapshot(
             self.is_stale = False
 
     return Snapshot()
+
+
+def _checkpoint(remind_at: str, prompt: str):
+    class Checkpoint:
+        def __init__(self) -> None:
+            self.remind_at = remind_at
+            self.prompt = prompt
+
+    return Checkpoint()

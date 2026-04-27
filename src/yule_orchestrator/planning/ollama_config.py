@@ -16,12 +16,34 @@ class OllamaPlanningConfig:
     timeout_seconds: int
 
 
+@dataclass(frozen=True)
+class OllamaConversationConfig:
+    enabled: bool
+    endpoint: str
+    model: str
+    timeout_seconds: int
+
+
 def load_ollama_planning_config() -> OllamaPlanningConfig:
     return OllamaPlanningConfig(
         enabled=_bool_env("OLLAMA_PLANNING_ENABLED", default=False),
         endpoint=_string_env("OLLAMA_ENDPOINT", DEFAULT_OLLAMA_ENDPOINT),
         model=_string_env("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
         timeout_seconds=_positive_int_env("OLLAMA_TIMEOUT_SECONDS", DEFAULT_OLLAMA_TIMEOUT_SECONDS),
+    )
+
+
+def load_ollama_conversation_config() -> OllamaConversationConfig:
+    planning_enabled = _bool_env("OLLAMA_PLANNING_ENABLED", default=False)
+    endpoint = _string_env("OLLAMA_ENDPOINT", DEFAULT_OLLAMA_ENDPOINT)
+    model = _string_env("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    timeout_seconds = _positive_int_env("OLLAMA_TIMEOUT_SECONDS", DEFAULT_OLLAMA_TIMEOUT_SECONDS)
+
+    return OllamaConversationConfig(
+        enabled=_bool_env("OLLAMA_DISCORD_ENABLED", default=planning_enabled),
+        endpoint=_string_env("OLLAMA_DISCORD_ENDPOINT", endpoint),
+        model=_string_env("OLLAMA_DISCORD_MODEL", model),
+        timeout_seconds=_positive_int_env("OLLAMA_DISCORD_TIMEOUT_SECONDS", timeout_seconds),
     )
 
 

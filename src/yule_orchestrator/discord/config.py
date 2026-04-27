@@ -12,8 +12,11 @@ class DiscordBotConfig:
     application_id: Optional[int]
     guild_id: int
     daily_channel_id: Optional[int] = None
+    daily_channel_name: Optional[str] = None
     checkpoint_channel_id: Optional[int] = None
+    checkpoint_channel_name: Optional[str] = None
     conversation_channel_id: Optional[int] = None
+    conversation_channel_name: Optional[str] = None
     notify_user_id: Optional[int] = None
     daily_briefing_time: Optional[time] = None
     checkpoint_prefetch_minutes: int = 5
@@ -22,6 +25,18 @@ class DiscordBotConfig:
     def effective_checkpoint_channel_id(self) -> Optional[int]:
         return self.checkpoint_channel_id or self.daily_channel_id
 
+    @property
+    def effective_checkpoint_channel_name(self) -> Optional[str]:
+        return self.checkpoint_channel_name or self.daily_channel_name
+
+    @property
+    def effective_conversation_channel_id(self) -> Optional[int]:
+        return self.conversation_channel_id or self.daily_channel_id
+
+    @property
+    def effective_conversation_channel_name(self) -> Optional[str]:
+        return self.conversation_channel_name or self.daily_channel_name
+
     @classmethod
     def from_env(cls) -> "DiscordBotConfig":
         return cls(
@@ -29,8 +44,11 @@ class DiscordBotConfig:
             application_id=_optional_int_env("DISCORD_APPLICATION_ID"),
             guild_id=_required_int_env("DISCORD_GUILD_ID"),
             daily_channel_id=_optional_int_env("DISCORD_DAILY_CHANNEL_ID"),
+            daily_channel_name=_optional_string_env("DISCORD_DAILY_CHANNEL_NAME"),
             checkpoint_channel_id=_optional_int_env("DISCORD_CHECKPOINT_CHANNEL_ID"),
+            checkpoint_channel_name=_optional_string_env("DISCORD_CHECKPOINT_CHANNEL_NAME"),
             conversation_channel_id=_optional_int_env("DISCORD_CONVERSATION_CHANNEL_ID"),
+            conversation_channel_name=_optional_string_env("DISCORD_CONVERSATION_CHANNEL_NAME"),
             notify_user_id=_optional_int_env("DISCORD_NOTIFY_USER_ID"),
             daily_briefing_time=_optional_time_env("DISCORD_DAILY_BRIEFING_TIME"),
             checkpoint_prefetch_minutes=_optional_positive_int_env(
@@ -64,6 +82,17 @@ def _optional_int_env(name: str) -> Optional[int]:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer value, got: {value!r}") from exc
+
+
+def _optional_string_env(name: str) -> Optional[str]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+
+    value = raw.strip()
+    if not value:
+        return None
+    return value
 
 
 def _optional_positive_int_env(name: str, default: int) -> int:
