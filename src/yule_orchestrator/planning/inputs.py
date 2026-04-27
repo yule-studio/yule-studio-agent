@@ -152,7 +152,7 @@ def collect_planning_inputs(
         )
     )
 
-    return PlanningInputs(
+    return build_planning_inputs(
         plan_date=plan_date,
         timezone=timezone,
         source_statuses=source_statuses,
@@ -161,6 +161,30 @@ def collect_planning_inputs(
         calendar_todos=calendar_todos,
         github_issues=github_issues,
         reminders=reminder_items,
+    )
+
+
+def build_planning_inputs(
+    *,
+    plan_date: date,
+    timezone: Optional[str] = None,
+    source_statuses: Optional[Sequence[PlanningSourceStatus]] = None,
+    warnings: Optional[Sequence[str]] = None,
+    calendar_events: Optional[Sequence[CalendarEvent]] = None,
+    calendar_todos: Optional[Sequence[CalendarTodo]] = None,
+    github_issues: Optional[Sequence[GitHubIssue]] = None,
+    reminders: Optional[Sequence[ReminderItem]] = None,
+) -> PlanningInputs:
+    resolved_timezone = timezone or datetime.now().astimezone().tzname() or "local"
+    return PlanningInputs(
+        plan_date=plan_date,
+        timezone=resolved_timezone,
+        source_statuses=list(source_statuses or []),
+        warnings=list(warnings or []),
+        calendar_events=list(calendar_events or []),
+        calendar_todos=list(calendar_todos or []),
+        github_issues=list(github_issues or []),
+        reminders=list(reminders or []),
     )
 
 
