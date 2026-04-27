@@ -143,7 +143,6 @@ DISCORD_GUILD_ID=
 # DISCORD_CONVERSATION_CHANNEL_ID=
 # DISCORD_CONVERSATION_CHANNEL_NAME=
 # DISCORD_NOTIFY_USER_ID=
-# DISCORD_DAILY_BRIEFING_TIME=06:00
 # DISCORD_CHECKPOINT_PREFETCH_MINUTES=5
 # DISCORD_PREPARATION_RETRY_COUNT=2
 # DISCORD_PREPARATION_RETRY_DELAY_SECONDS=15
@@ -169,7 +168,7 @@ DISCORD_GUILD_ID=
 - `OLLAMA_DISCORD_ENABLED=true`를 설정하면 Discord 대화형 응답도 snapshot 기반으로 Ollama를 사용합니다.
 - `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트로 분리할 수 있습니다.
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
-- `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
+- `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
@@ -185,8 +184,10 @@ DISCORD_GUILD_ID=
 - `DISCORD_DEBUG_CHANNEL_ID` 또는 `DISCORD_DEBUG_CHANNEL_NAME`을 넣으면 자동 준비 단계(`calendar sync`, `github sync`, `planning snapshot`)의 성공/실패 결과를 Discord 메시지로도 확인할 수 있습니다.
 - `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`을 넣으면 해당 채널에서는 멘션 없이도 평문 메시지에 응답합니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
-- `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
-- 같은 기준 시각을 따라 봇이 자동으로 `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 준비 작업도 순서대로 수행합니다.
+- 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
+- 봇은 `YULE_WAKE_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/lunch/evening` 브리핑을 읽어 전송합니다.
+- 아침 준비 작업은 `YULE_WAKE_TIME` 기준으로 자동 수행되며, `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 순서로 진행합니다.
+- `DISCORD_DAILY_BRIEFING_TIME`은 더 이상 사용하지 않으며, 설정되어 있어도 경고만 출력하고 무시합니다.
 - 준비 단계가 실패하면 `DISCORD_PREPARATION_RETRY_COUNT`와 `DISCORD_PREPARATION_RETRY_DELAY_SECONDS` 기준으로 자동 재시도합니다.
 - 채널 ID가 잘못되었어도 해당 이름 설정이 있으면 이름 기반 fallback 을 먼저 시도하고, 시작 로그와 런타임 경고에서 그 사실을 알려줍니다.
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
@@ -326,7 +327,9 @@ yule discord bot
 05:50 yule calendar sync --force-refresh --json
 05:55 yule github issues --limit 30 --force-refresh
 05:58 yule planning snapshot --json
-06:00 Discord bot scheduled briefing
+06:00 Discord bot scheduled morning briefing
+13:00 Discord bot scheduled lunch briefing
+18:00 Discord bot scheduled evening briefing
 ```
 
 이 구조에서는 Discord 봇이 브리핑 시점에 캘린더나 GitHub API 응답을 기다리지 않습니다.
