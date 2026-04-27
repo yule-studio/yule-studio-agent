@@ -167,6 +167,7 @@ DISCORD_GUILD_ID=
 - `OLLAMA_ENDPOINT`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`로 로컬 또는 서버 Ollama 연결 정보를 조정할 수 있습니다.
 - `OLLAMA_DISCORD_ENABLED=true`를 설정하면 Discord 대화형 응답도 snapshot 기반으로 Ollama를 사용합니다.
 - `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트로 분리할 수 있습니다.
+- Ollama 응답은 모델이 단일 줄바꿈으로 문단을 끊어도 Discord 표시용으로 문단 사이 빈 줄을 자동 보장합니다.
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
@@ -196,8 +197,11 @@ DISCORD_GUILD_ID=
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
+- 채팅 경로에서 오늘 snapshot이 없으면 즉시 "지금 다시 만들고 있어요" ack를 보낸 뒤, 백그라운드에서 캘린더 sync, GitHub 이슈, planning snapshot을 자동으로 다시 만들고 follow-up 메시지로 실제 브리핑을 이어 보냅니다.
+- 같은 날짜에 동시 요청이 들어와도 per-date 잠금 덕분에 자동 재생성 파이프라인은 한 번만 실행됩니다.
 - 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
+- 슬래시 명령(`/plan_today`, `/checkpoints_now`)은 interaction 토큰이 만료된 상황(`Unknown interaction`)을 만나면 traceback 대신 한 줄 경고만 남기고 graceful 하게 종료합니다.
 - `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
 - 자동 준비 단계는 표준 출력에 구조화된 JSON 로그를 남기고, debug 채널을 지정한 경우 Discord에서도 같은 흐름을 확인할 수 있습니다.
 
@@ -309,8 +313,8 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 - `/plan_today`는 외부 API를 직접 기다리지 않고 저장된 daily-plan snapshot을 Discord 메시지로 정리해 보여줍니다.
 - `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
-- snapshot이 없으면 `/plan_today`는 로컬 동기화와 snapshot 생성 명령을 안내합니다.
-- snapshot이 만료된 상태면 “마지막 동기화 기준 브리핑입니다” 문구를 붙입니다.
+- snapshot이 없으면 `/plan_today`는 로컬 동기화와 snapshot 생성 명령을 안내합니다(채팅 경로의 자동 재생성과는 의도적으로 분리되어 있으며, slash interaction 3초 timeout 때문에 별도 설계가 필요합니다).
+- snapshot이 만료된 상태면 "마지막 동기화 기준 브리핑입니다" 문구를 붙입니다.
 - 자동 브리핑 전송 시간은 `runtime-metrics`에 `discord_send` 단계로 저장됩니다.
 
 ```bash
