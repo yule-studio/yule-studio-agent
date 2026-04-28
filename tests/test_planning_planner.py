@@ -451,10 +451,11 @@ class PlanningPlannerTestCase(unittest.TestCase):
                 }
             )
 
-    def test_normalize_paragraph_spacing_inserts_blank_between_prose_paragraphs(self) -> None:
+    def test_normalize_paragraph_spacing_preserves_source_paragraph_breaks(self) -> None:
         text = (
             "안녕하세요.\n"
             "오전 9시부터 13시까지는 업무 수행 일정이 있습니다.\n"
+            "\n"
             "오후 14시부터는 다시 업무를 진행합니다."
         )
 
@@ -463,11 +464,21 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(
             normalized,
             "안녕하세요.\n"
-            "\n"
             "오전 9시부터 13시까지는 업무 수행 일정이 있습니다.\n"
             "\n"
             "오후 14시부터는 다시 업무를 진행합니다.",
         )
+
+    def test_normalize_paragraph_spacing_keeps_sentence_lines_within_paragraph(self) -> None:
+        text = (
+            "오늘 가장 먼저 'A 작업'을 진행합니다.\n"
+            "이 작업은 우선순위가 높습니다.\n"
+            "끝나면 'B 작업'으로 이어집니다."
+        )
+
+        normalized = normalize_paragraph_spacing(text)
+
+        self.assertEqual(normalized, text)
 
     def test_normalize_paragraph_spacing_splits_sentences_within_paragraph(self) -> None:
         text = (

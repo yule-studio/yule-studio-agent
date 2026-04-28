@@ -165,7 +165,7 @@ class DiscordFormatterTestCase(unittest.TestCase):
                 execution_blocks=[],
                 prioritized_tasks=[],
                 suggested_time_blocks=[],
-                morning_briefing="첫 문단입니다.\n둘째 문단입니다.\n셋째 문단입니다.",
+                morning_briefing="첫 문단의 첫 문장입니다.\n첫 문단의 둘째 문장입니다.\n\n둘째 문단의 첫 문장입니다.",
                 time_block_briefings=[],
                 checkpoints=[],
                 briefings=[],
@@ -178,10 +178,11 @@ class DiscordFormatterTestCase(unittest.TestCase):
 
         message = format_plan_today_message(envelope)
 
-        self.assertIn("첫 문단입니다.", message)
-        self.assertIn("둘째 문단입니다.", message)
-        self.assertIn("셋째 문단입니다.", message)
-        self.assertIn("첫 문단입니다.\n\n둘째 문단입니다.", message)
+        self.assertIn("첫 문단의 첫 문장입니다.", message)
+        self.assertIn("첫 문단의 둘째 문장입니다.", message)
+        self.assertIn("둘째 문단의 첫 문장입니다.", message)
+        self.assertIn("첫 문단의 첫 문장입니다.\n첫 문단의 둘째 문장입니다.", message)
+        self.assertIn("첫 문단의 둘째 문장입니다.\n\n둘째 문단의 첫 문장입니다.", message)
 
     def test_format_plan_today_message_with_slot_title_prepends_header(self) -> None:
         from yule_orchestrator.discord.formatter import format_plan_today_message

@@ -25,29 +25,23 @@ def normalize_paragraph_spacing(text: str) -> str:
     if not raw:
         return ""
 
-    blocks: list[str] = []
-    bullet_buffer: list[str] = []
+    paragraph_blocks = re.split(r"\n\s*\n", raw)
 
-    def flush_bullets() -> None:
-        if bullet_buffer:
-            blocks.append("\n".join(bullet_buffer))
-            bullet_buffer.clear()
+    output_paragraphs: list[str] = []
+    for block in paragraph_blocks:
+        block_lines: list[str] = []
+        for raw_line in block.split("\n"):
+            line = raw_line.rstrip()
+            if not line.strip():
+                continue
+            if _is_list_or_heading(line):
+                block_lines.append(line)
+            else:
+                block_lines.extend(_split_sentences(line))
+        if block_lines:
+            output_paragraphs.append("\n".join(block_lines))
 
-    for raw_line in raw.split("\n"):
-        line = raw_line.rstrip()
-        if not line.strip():
-            flush_bullets()
-            continue
-        if _is_list_or_heading(line):
-            bullet_buffer.append(line)
-            continue
-        flush_bullets()
-        sentences = _split_sentences(line)
-        if sentences:
-            blocks.append("\n".join(sentences))
-
-    flush_bullets()
-    return "\n\n".join(blocks)
+    return "\n\n".join(output_paragraphs)
 
 
 def _split_sentences(line: str) -> list[str]:
