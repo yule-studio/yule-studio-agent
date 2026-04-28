@@ -130,6 +130,7 @@ YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-cat
 # YULE_DEPARTURE_BUFFER_MINUTES=10
 # YULE_HOME_AREA=신정동
 # YULE_WORK_AREA=마곡
+# YULE_WORK_MODE_ENABLED=true
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
@@ -171,6 +172,7 @@ DISCORD_GUILD_ID=
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
+- `YULE_WORK_MODE_ENABLED`는 회사 업무 우선 모드 토글입니다. 기본값은 `true`이며, `true`일 때는 `업무 수행` 일정 시간이 차단되어 todo는 그 외 시간대로만 배치되고, 다른 캘린더 이벤트는 모두 퇴근 이후 일정으로 안내됩니다. `false`로 두면 자유 모드로 동작해 `업무 수행` 일정을 무시하고 todo 우선순위 기준으로 하루 전체 시간을 자유롭게 분배합니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
