@@ -18,6 +18,7 @@ def generate_human_briefing(
     model: str = "gemma3:latest",
     endpoint: str = "http://localhost:11434",
     timeout_seconds: int = 20,
+    work_mode_enabled: bool = True,
 ) -> str:
     prompt = _build_prompt(
         plan_date=plan_date,
@@ -26,6 +27,7 @@ def generate_human_briefing(
         prioritized_tasks=prioritized_tasks,
         time_block_briefings=time_block_briefings,
         checkpoints=checkpoints,
+        work_mode_enabled=work_mode_enabled,
     )
     return generate_ollama_text(
         prompt,
@@ -86,6 +88,7 @@ def _build_prompt(
     prioritized_tasks: Sequence[PlanningTaskCandidate],
     time_block_briefings: Sequence[PlanningBlockBriefing],
     checkpoints: Sequence[PlanningCheckpoint],
+    work_mode_enabled: bool = True,
 ) -> str:
     schedule_lines = [
         f"- {_format_time_range(block.start, block.end)} | {block.title}"
@@ -103,6 +106,20 @@ def _build_prompt(
         f"- {datetime.fromisoformat(checkpoint.remind_at).strftime('%H:%M')} | {checkpoint.block_title} | {checkpoint.prompt}"
         for checkpoint in checkpoints[:5]
     ] or ["- 체크포인트 없음"]
+
+    if work_mode_enabled:
+        mode_block = (
+            "현재 모드: 회사 업무 우선 모드\n"
+            "- '업무 수행' 일정은 회사 일과 시간이며 그 시간대에는 다른 todo를 끼우지 말 것\n"
+            "- '업무 수행'이 아닌 다른 이벤트들은 모두 퇴근 이후의 일정으로 간주할 것\n"
+            "- todo는 일과 시간 사이의 빈 시간이나 퇴근 후 시간에 안내할 것"
+        )
+    else:
+        mode_block = (
+            "현재 모드: 자유 모드 (회사 일정 없음)\n"
+            "- '업무 수행' 일정이 입력에 있어도 무시하고 todo 우선순위 기준으로 안내할 것\n"
+            "- todo는 하루 전체 시간을 자유롭게 사용해 안내할 것"
+        )
 
     return f"""당신은 개인 Planning Agent의 브리핑 작성자입니다.
 다음 daily-plan 입력을 보고 한국어로 자연스럽고 실용적인 아침 브리핑을 Discord 메시지 형태로 작성하세요.
@@ -132,6 +149,8 @@ def _build_prompt(
 
 오후에는 13:00부터 'C 작업'을 진행할 수 있습니다.
 14:00 체크포인트에서 진행 상태를 짧게 점검해 주세요.
+
+{mode_block}
 
 날짜:
 {plan_date}
