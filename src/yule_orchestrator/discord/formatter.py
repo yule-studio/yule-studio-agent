@@ -49,9 +49,32 @@ def format_plan_today_message(
     if plan.time_block_briefings:
         lines.append("")
         lines.append("**시간대 메모**")
-        for briefing in plan.time_block_briefings[:3]:
-            lines.append(f"- {_time_range(briefing.start, briefing.end)} {briefing.title}")
-            lines.append(f"  {briefing.briefing}")
+        work_end = _resolve_work_end_boundary(plan.fixed_schedule)
+        if work_end is None:
+            for briefing in plan.time_block_briefings:
+                lines.append(f"- {_time_range(briefing.start, briefing.end)} {briefing.title}")
+                lines.append(f"  {briefing.briefing}")
+        else:
+            work_group = [
+                briefing for briefing in plan.time_block_briefings
+                if datetime.fromisoformat(briefing.start) < work_end
+            ]
+            post_work_group = [
+                briefing for briefing in plan.time_block_briefings
+                if datetime.fromisoformat(briefing.start) >= work_end
+            ]
+            if work_group:
+                lines.append(f"_업무 시간 (~ {work_end.strftime('%H:%M')})_")
+                for briefing in work_group:
+                    lines.append(f"- {_time_range(briefing.start, briefing.end)} {briefing.title}")
+                    lines.append(f"  {briefing.briefing}")
+            if post_work_group:
+                if work_group:
+                    lines.append("")
+                lines.append(f"_퇴근 후 ({work_end.strftime('%H:%M')} 이후)_")
+                for briefing in post_work_group:
+                    lines.append(f"- {_time_range(briefing.start, briefing.end)} {briefing.title}")
+                    lines.append(f"  {briefing.briefing}")
 
     if plan.checkpoints:
         lines.append("")
@@ -183,6 +206,21 @@ def split_discord_message(message: str, limit: int = DISCORD_MESSAGE_LIMIT) -> l
 
 def _time_range(start_value: str, end_value: str) -> str:
     return f"{datetime.fromisoformat(start_value).strftime('%H:%M')}~{datetime.fromisoformat(end_value).strftime('%H:%M')}"
+
+
+def _resolve_work_end_boundary(fixed_schedule: Sequence[object]) -> Optional[datetime]:
+    work_event_ends: list[datetime] = []
+    for block in fixed_schedule:
+        title = getattr(block, "title", "")
+        if "업무 수행" not in title:
+            continue
+        try:
+            work_event_ends.append(datetime.fromisoformat(getattr(block, "end", "")))
+        except (TypeError, ValueError):
+            continue
+    if not work_event_ends:
+        return None
+    return max(work_event_ends)
 
 
 def _non_empty_lines(text: str) -> list[str]:

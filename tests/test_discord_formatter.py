@@ -22,6 +22,7 @@ from yule_orchestrator.planning.models import (
     PlanningScheduledBriefing,
     PlanningSourceStatus,
     PlanningTaskCandidate,
+    PlanningTimeBlock,
 )
 
 
@@ -229,3 +230,181 @@ class DiscordFormatterTestCase(unittest.TestCase):
         message = format_plan_today_message(envelope, slot_title="업무 시작 브리핑")
 
         self.assertTrue(message.startswith("**[업무 시작 브리핑]**"))
+
+    def test_format_plan_today_message_groups_time_blocks_by_work_boundary(self) -> None:
+        from yule_orchestrator.discord.formatter import format_plan_today_message
+
+        fixed_schedule = [
+            PlanningTimeBlock(
+                start="2026-04-28T09:00:00+09:00",
+                end="2026-04-28T13:00:00+09:00",
+                block_type="fixed_event",
+                title="업무 수행",
+                task_id="event-work-1",
+                locked=True,
+            ),
+            PlanningTimeBlock(
+                start="2026-04-28T14:00:00+09:00",
+                end="2026-04-28T18:00:00+09:00",
+                block_type="fixed_event",
+                title="업무 수행",
+                task_id="event-work-2",
+                locked=True,
+            ),
+        ]
+        time_block_briefings = [
+            PlanningBlockBriefing(
+                briefing_id="b-1",
+                start="2026-04-28T09:00:00+09:00",
+                end="2026-04-28T10:00:00+09:00",
+                title="할 일 정리",
+                block_type="execution_block",
+                source_ref="exec-1",
+                briefing="할 일 흐름 안내",
+            ),
+            PlanningBlockBriefing(
+                briefing_id="b-2",
+                start="2026-04-28T15:00:00+09:00",
+                end="2026-04-28T16:00:00+09:00",
+                title="오후 작업",
+                block_type="execution_block",
+                source_ref="exec-2",
+                briefing="오후 흐름 안내",
+            ),
+            PlanningBlockBriefing(
+                briefing_id="b-3",
+                start="2026-04-28T19:00:00+09:00",
+                end="2026-04-28T20:00:00+09:00",
+                title="공부 시간",
+                block_type="focus_block",
+                source_ref="focus-1",
+                briefing="저녁 학습 안내",
+            ),
+            PlanningBlockBriefing(
+                briefing_id="b-4",
+                start="2026-04-28T20:00:00+09:00",
+                end="2026-04-28T21:00:00+09:00",
+                title="포트폴리오 제작",
+                block_type="focus_block",
+                source_ref="focus-2",
+                briefing="포트폴리오 안내",
+            ),
+        ]
+        envelope = DailyPlanEnvelope(
+            inputs=PlanningInputs(
+                plan_date=date(2026, 4, 28),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                calendar_events=[],
+                calendar_todos=[],
+                github_issues=[],
+                reminders=[],
+            ),
+            daily_plan=DailyPlan(
+                plan_date=date(2026, 4, 28),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                summary=DailyPlanSummary(
+                    fixed_event_count=2,
+                    all_day_event_count=0,
+                    todo_count=0,
+                    github_issue_count=0,
+                    reminder_count=0,
+                    recommended_task_count=0,
+                    available_focus_minutes=0,
+                ),
+                fixed_schedule=fixed_schedule,
+                execution_blocks=[],
+                prioritized_tasks=[],
+                suggested_time_blocks=[],
+                morning_briefing="아침 본문",
+                time_block_briefings=time_block_briefings,
+                checkpoints=[],
+                briefings=[],
+                coding_agent_handoff=[],
+                discord_briefing="요약",
+                morning_briefing_source="rules",
+                discord_briefing_source="rules",
+            ),
+        )
+
+        message = format_plan_today_message(envelope, mention_user_id=12345)
+
+        self.assertTrue(message.startswith("<@12345>"))
+        self.assertIn("_업무 시간 (~ 18:00)_", message)
+        self.assertIn("_퇴근 후 (18:00 이후)_", message)
+        self.assertIn("09:00~10:00 할 일 정리", message)
+        self.assertIn("15:00~16:00 오후 작업", message)
+        self.assertIn("19:00~20:00 공부 시간", message)
+        self.assertIn("20:00~21:00 포트폴리오 제작", message)
+        work_index = message.index("_업무 시간 (~ 18:00)_")
+        post_work_index = message.index("_퇴근 후 (18:00 이후)_")
+        self.assertLess(work_index, post_work_index)
+        afternoon_index = message.index("15:00~16:00 오후 작업")
+        evening_index = message.index("19:00~20:00 공부 시간")
+        self.assertLess(afternoon_index, post_work_index)
+        self.assertLess(post_work_index, evening_index)
+
+    def test_format_plan_today_message_shows_all_blocks_when_no_work_event(self) -> None:
+        from yule_orchestrator.discord.formatter import format_plan_today_message
+
+        time_block_briefings = [
+            PlanningBlockBriefing(
+                briefing_id=f"b-{i}",
+                start=f"2026-04-28T{9 + i:02d}:00:00+09:00",
+                end=f"2026-04-28T{10 + i:02d}:00:00+09:00",
+                title=f"작업 {i}",
+                block_type="focus_block",
+                source_ref=f"focus-{i}",
+                briefing=f"안내 {i}",
+            )
+            for i in range(5)
+        ]
+        envelope = DailyPlanEnvelope(
+            inputs=PlanningInputs(
+                plan_date=date(2026, 4, 28),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                calendar_events=[],
+                calendar_todos=[],
+                github_issues=[],
+                reminders=[],
+            ),
+            daily_plan=DailyPlan(
+                plan_date=date(2026, 4, 28),
+                timezone="KST",
+                source_statuses=[],
+                warnings=[],
+                summary=DailyPlanSummary(
+                    fixed_event_count=0,
+                    all_day_event_count=0,
+                    todo_count=0,
+                    github_issue_count=0,
+                    reminder_count=0,
+                    recommended_task_count=0,
+                    available_focus_minutes=0,
+                ),
+                fixed_schedule=[],
+                execution_blocks=[],
+                prioritized_tasks=[],
+                suggested_time_blocks=[],
+                morning_briefing="아침 본문",
+                time_block_briefings=time_block_briefings,
+                checkpoints=[],
+                briefings=[],
+                coding_agent_handoff=[],
+                discord_briefing="요약",
+                morning_briefing_source="rules",
+                discord_briefing_source="rules",
+            ),
+        )
+
+        message = format_plan_today_message(envelope)
+
+        for i in range(5):
+            self.assertIn(f"작업 {i}", message)
+        self.assertNotIn("_업무 시간", message)
+        self.assertNotIn("_퇴근 후", message)
