@@ -109,3 +109,13 @@ def _positive_int_env(name: str, *, default: int) -> int:
 def _string_env(name: str, *, default: str) -> str:
     value = os.environ.get(name, "").strip()
     return value or default
+
+
+def load_work_mode_enabled() -> bool:
+    raw = os.environ.get("YULE_WORK_MODE_ENABLED")
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if not value:
+        return True
+    return value not in {"false", "0", "no", "off"}

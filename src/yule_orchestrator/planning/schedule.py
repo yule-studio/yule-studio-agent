@@ -45,8 +45,16 @@ def build_focus_blocks(
     fixed_schedule: Sequence[PlanningTimeBlock],
     tasks: Sequence[PlanningTaskCandidate],
     focus_start_time: time = PLANNING_DAY_START,
+    work_mode_enabled: bool = True,
 ) -> tuple[list[PlanningTimeBlock], int]:
-    windows = _available_windows(plan_date, fixed_schedule, day_start_time=focus_start_time)
+    if work_mode_enabled:
+        effective_schedule: Sequence[PlanningTimeBlock] = fixed_schedule
+    else:
+        effective_schedule = [
+            block for block in fixed_schedule if "업무 수행" not in block.title
+        ]
+
+    windows = _available_windows(plan_date, effective_schedule, day_start_time=focus_start_time)
     focus_blocks: list[PlanningTimeBlock] = []
     available_focus_minutes = sum(int((end - start).total_seconds() // 60) for start, end in windows)
     if not windows:

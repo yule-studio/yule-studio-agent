@@ -535,3 +535,81 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertEqual(types, ["morning", "work_start", "lunch", "evening"])
         send_times = [slot.send_at.strftime("%H:%M") for slot in slots]
         self.assertEqual(send_times, ["05:30", "09:00", "13:00", "18:00"])
+
+    def test_load_work_mode_enabled_defaults_to_true(self) -> None:
+        from yule_orchestrator.planning.day_profile import load_work_mode_enabled
+
+        with patch.dict("os.environ", {}, clear=False):
+            os_environ_pop = "YULE_WORK_MODE_ENABLED"
+            previous = None
+            import os
+
+            if os_environ_pop in os.environ:
+                previous = os.environ.pop(os_environ_pop)
+            try:
+                self.assertTrue(load_work_mode_enabled())
+            finally:
+                if previous is not None:
+                    os.environ[os_environ_pop] = previous
+
+    @patch.dict("os.environ", {"YULE_WORK_MODE_ENABLED": "false"}, clear=False)
+    def test_load_work_mode_enabled_recognizes_false_values(self) -> None:
+        from yule_orchestrator.planning.day_profile import load_work_mode_enabled
+
+        self.assertFalse(load_work_mode_enabled())
+
+    @patch.dict("os.environ", {"YULE_WORK_MODE_ENABLED": "off"}, clear=False)
+    def test_load_work_mode_enabled_treats_off_as_disabled(self) -> None:
+        from yule_orchestrator.planning.day_profile import load_work_mode_enabled
+
+        self.assertFalse(load_work_mode_enabled())
+
+    @patch.dict("os.environ", {"YULE_WORK_MODE_ENABLED": "false", "YULE_WORK_START_TIME": "09:00"}, clear=False)
+    def test_build_focus_blocks_ignores_work_execution_events_when_work_mode_disabled(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 22),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-work",
+                    title="업무 수행",
+                    start="2026-04-22T09:00:00+09:00",
+                    end="2026-04-22T13:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+            ],
+            calendar_todos=[
+                CalendarTodo(
+                    item_uid="todo-priority",
+                    title="개인 작업",
+                    start=None,
+                    due="2026-04-22",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+            ],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+
+        focus_blocks = envelope.daily_plan.suggested_time_blocks
+        self.assertTrue(focus_blocks, "free mode should still allocate focus blocks")
+        first_focus = datetime.fromisoformat(focus_blocks[0].start)
+        self.assertEqual(first_focus.strftime("%H:%M"), "09:00")

@@ -14,7 +14,7 @@ from .briefings import (
     render_morning_briefing,
     render_work_start_briefing,
 )
-from .day_profile import load_day_profile
+from .day_profile import load_day_profile, load_work_mode_enabled
 from .models import DailyPlan, DailyPlanEnvelope, DailyPlanSummary, PlanningInputs
 from .ollama import generate_human_briefing
 from .ollama_config import load_ollama_planning_config
@@ -53,11 +53,13 @@ def build_daily_plan(
     execution_blocks = build_execution_blocks(inputs.calendar_events)
     tasks = build_task_candidates(inputs)
     day_profile = load_day_profile()
+    work_mode_enabled = load_work_mode_enabled()
     suggested_blocks, available_focus_minutes = build_focus_blocks(
         inputs.plan_date,
         fixed_schedule,
         tasks,
         focus_start_time=day_profile.work_start_time,
+        work_mode_enabled=work_mode_enabled,
     )
     checkpoints = sorted(
         [
@@ -120,6 +122,7 @@ def build_daily_plan(
                 model=resolved_ollama_model,
                 endpoint=resolved_ollama_endpoint,
                 timeout_seconds=resolved_ollama_timeout_seconds,
+                work_mode_enabled=work_mode_enabled,
             )
             morning_briefing = normalize_paragraph_spacing(morning_briefing)
             morning_briefing_source = "ollama"
