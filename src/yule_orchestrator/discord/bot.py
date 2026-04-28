@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time as time_module
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from ..integrations.calendar import list_naver_calendar_items
@@ -165,7 +165,7 @@ def run_discord_bot(repo_root: Path) -> None:
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
 
-        async def ensure_snapshot(self, plan_date) -> tuple[object | None, str | None]:
+        async def ensure_snapshot(self, plan_date: date) -> tuple[object | None, str | None]:
             lock = self._snapshot_refresh_locks.setdefault(plan_date.isoformat(), asyncio.Lock())
             async with lock:
                 snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
@@ -263,7 +263,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self,
             *,
             step_name: str,
-            plan_date,
+            plan_date: date,
             scheduled_at: datetime,
         ) -> None:
             attempt_limit = max(1, config.preparation_retry_count + 1)
@@ -380,7 +380,7 @@ def run_discord_bot(repo_root: Path) -> None:
             self,
             *,
             step_name: str,
-            plan_date,
+            plan_date: date,
         ) -> dict[str, object]:
             context = self._daily_preparation_context.setdefault(plan_date.isoformat(), {})
             if step_name == "calendar_sync":
@@ -742,11 +742,11 @@ def _collect_due_daily_preparation_steps(
     scan_time: datetime,
     day_profile: DayProfile,
     completed_steps: set[tuple[str, str]],
-) -> list[tuple[str, object, datetime]]:
+) -> list[tuple[str, date, datetime]]:
     if scan_time <= last_scan:
         return []
 
-    due_steps: list[tuple[str, object, datetime]] = []
+    due_steps: list[tuple[str, date, datetime]] = []
     current_date = last_scan.date()
     end_date = scan_time.date()
     while current_date <= end_date:
@@ -762,7 +762,7 @@ def _collect_due_daily_preparation_steps(
     return due_steps
 
 
-def _daily_preparation_schedule_for(plan_date, day_profile: DayProfile) -> list[tuple[str, datetime]]:
+def _daily_preparation_schedule_for(plan_date: date, day_profile: DayProfile) -> list[tuple[str, datetime]]:
     morning_slot = next(slot for slot in day_profile.briefing_schedule(plan_date) if slot.briefing_type == "morning")
     briefing_at = morning_slot.send_at
     return [
@@ -775,7 +775,7 @@ def _daily_preparation_schedule_for(plan_date, day_profile: DayProfile) -> list[
 def _cleanup_completed_preparation_steps(
     completed_steps: set[tuple[str, str]],
     *,
-    today,
+    today: date,
 ) -> None:
     stale_keys = [item for item in completed_steps if item[0] < today.isoformat()]
     for item in stale_keys:
@@ -957,11 +957,11 @@ def _collect_due_briefing_slots(
     last_scan: datetime,
     scan_time: datetime,
     day_profile: DayProfile,
-) -> list[tuple[DayProfileBriefingSlot, object]]:
+) -> list[tuple[DayProfileBriefingSlot, date]]:
     if scan_time <= last_scan:
         return []
 
-    slots: list[tuple[DayProfileBriefingSlot, object]] = []
+    slots: list[tuple[DayProfileBriefingSlot, date]] = []
     plan_date = last_scan.date()
     end_date = scan_time.date()
     while plan_date <= end_date:
@@ -975,7 +975,7 @@ def _collect_due_briefing_slots(
 
 def _synthesize_scheduled_briefing(
     slot: DayProfileBriefingSlot,
-    plan_date,
+    plan_date: date,
 ) -> PlanningScheduledBriefing:
     return PlanningScheduledBriefing(
         briefing_id=build_fallback_item_uid(
@@ -1341,7 +1341,7 @@ def _channel_target_text(channel_id: int | None, channel_name: str | None) -> st
 def _cleanup_preparation_context(
     context_store: dict[str, dict[str, object]],
     *,
-    today,
+    today: date,
 ) -> None:
     stale_keys = [key for key in context_store if key < today.isoformat()]
     for key in stale_keys:
