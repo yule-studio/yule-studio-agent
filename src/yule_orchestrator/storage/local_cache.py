@@ -298,7 +298,7 @@ def cleanup_json_cache(
             params,
         )
         deleted_count = int(cursor.rowcount or 0)
-    _mark_cleanup_ran()
+        _mark_cleanup_ran()
     return deleted_count
 
 
