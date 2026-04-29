@@ -20,6 +20,7 @@ from .calendar import (
 from .context import run_context_command
 from .daily import run_daily_warmup_command
 from .discord import run_discord_bot_command
+from .discord_member import run_discord_member_command
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
 from .planning import (
@@ -423,6 +424,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the Discord bot process.",
     )
 
+    discord_member_parser = discord_subparsers.add_parser(
+        "member",
+        help="Run a single role/member persona Discord bot for a department.",
+    )
+    discord_member_parser.add_argument(
+        "--agent",
+        default="engineering-agent",
+        help="Department agent id. Defaults to engineering-agent.",
+    )
+    discord_member_parser.add_argument(
+        "--role",
+        required=True,
+        help="Role to launch. Use 'gateway' for the department gateway, or a member id (e.g. backend-engineer).",
+    )
+    discord_member_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate env wiring and print the activation summary without contacting Discord.",
+    )
+
     return parser
 
 
@@ -563,6 +584,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         if args.command == "discord" and args.discord_command == "bot":
             return run_discord_bot_command(repo_root)
+        if args.command == "discord" and args.discord_command == "member":
+            return run_discord_member_command(
+                repo_root,
+                args.agent,
+                args.role,
+                dry_run=args.dry_run,
+            )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

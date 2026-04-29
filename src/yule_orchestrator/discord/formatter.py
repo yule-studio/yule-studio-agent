@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from ..core.timezone import now_local
 from ..planning.briefings import normalize_paragraph_spacing
@@ -185,6 +185,55 @@ def format_scheduled_briefing_message(
     lines.append("")
     lines.extend(_paragraph_lines(normalize_paragraph_spacing(briefing.content)))
     return "\n".join(lines).strip()
+
+
+def format_references_block(
+    references: Sequence[Mapping[str, Any]],
+    *,
+    title: str = "참고 레퍼런스",
+    limit: int = 5,
+) -> str:
+    """Render a Discord-friendly block from a sequence of reference items.
+
+    Each item may include: ``title``, ``source``, ``url``, ``takeaway``.
+    Returned string is ready to append to any message body. Empty input
+    returns an empty string so callers can splice unconditionally.
+
+    Reserved for the design/marketing flow — engineering-agent currently
+    does not auto-collect references, but this slot keeps the message
+    format stable for the future fetcher (env-strategy.md §7).
+    """
+
+    if not references:
+        return ""
+
+    lines: list[str] = [f"**{title}**"]
+    for item in list(references)[:limit]:
+        lines.append(_format_reference_line(item))
+    return "\n".join(line for line in lines if line)
+
+
+def _format_reference_line(item: Mapping[str, Any]) -> str:
+    title = _coerce_text(item.get("title")) or "(제목 없음)"
+    source = _coerce_text(item.get("source"))
+    url = _coerce_text(item.get("url"))
+    takeaway = _coerce_text(item.get("takeaway"))
+
+    head = f"- **{title}**"
+    if source:
+        head += f" · {source}"
+    if url:
+        head += f" — {url}"
+    if takeaway:
+        head += f"\n  ↪ {takeaway}"
+    return head
+
+
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
 
 
 def split_discord_message(message: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
