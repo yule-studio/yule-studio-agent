@@ -16,6 +16,7 @@ class DayProfile:
     departure_buffer_minutes: int
     home_area: str
     work_area: str
+    lunch_duration_minutes: int = 60
 
     def recommended_departure_at(self, plan_date: date) -> datetime:
         work_start = datetime.combine(plan_date, self.work_start_time)
@@ -64,6 +65,7 @@ def load_day_profile() -> DayProfile:
         departure_buffer_minutes=_positive_int_env("YULE_DEPARTURE_BUFFER_MINUTES", default=10),
         home_area=_string_env("YULE_HOME_AREA", default="신정동"),
         work_area=_string_env("YULE_WORK_AREA", default="마곡"),
+        lunch_duration_minutes=_positive_int_env("YULE_LUNCH_DURATION_MINUTES", default=60),
     )
 
 

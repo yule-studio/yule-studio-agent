@@ -613,3 +613,207 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertTrue(focus_blocks, "free mode should still allocate focus blocks")
         first_focus = datetime.fromisoformat(focus_blocks[0].start)
         self.assertEqual(first_focus.strftime("%H:%M"), "09:00")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "YULE_WORK_MODE_ENABLED": "true",
+            "YULE_WORK_START_TIME": "09:00",
+            "YULE_LUNCH_START_TIME": "13:00",
+            "YULE_WORK_END_TIME": "18:00",
+            "YULE_LUNCH_DURATION_MINUTES": "60",
+        },
+        clear=False,
+    )
+    def test_build_focus_blocks_routes_company_todos_into_work_event_windows(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 29),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[
+                CalendarEvent(
+                    item_uid="event-work-am",
+                    title="업무 수행",
+                    start="2026-04-29T09:00:00+09:00",
+                    end="2026-04-29T13:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+                CalendarEvent(
+                    item_uid="event-work-pm",
+                    title="업무 수행",
+                    start="2026-04-29T14:00:00+09:00",
+                    end="2026-04-29T18:00:00+09:00",
+                    all_day=False,
+                    calendar_name="내 캘린더",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+            ],
+            calendar_todos=[
+                CalendarTodo(
+                    item_uid="todo-work",
+                    title="오늘 해야 할 업무",
+                    start=None,
+                    due="2026-04-29",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                    category_color="27",
+                ),
+                CalendarTodo(
+                    item_uid="todo-study",
+                    title="한국사 능력 검정 시험",
+                    start=None,
+                    due="2026-04-29",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+                CalendarTodo(
+                    item_uid="todo-chore",
+                    title="빨래 및 집안 청소",
+                    start=None,
+                    due="2026-04-29",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                ),
+            ],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+        focus_blocks = envelope.daily_plan.suggested_time_blocks
+
+        work_focus = [
+            block for block in focus_blocks
+            if block.title == "오늘 해야 할 업무"
+        ]
+        self.assertTrue(work_focus, "company todo should be slotted into work event window")
+        work_start = datetime.fromisoformat(work_focus[0].start)
+        self.assertGreaterEqual(work_start.strftime("%H:%M"), "09:00")
+        self.assertLess(work_start.strftime("%H:%M"), "18:00")
+
+        non_work_focus = [
+            block for block in focus_blocks
+            if block.title in {"한국사 능력 검정 시험", "빨래 및 집안 청소"}
+        ]
+        for block in non_work_focus:
+            block_start = datetime.fromisoformat(block.start)
+            self.assertGreaterEqual(
+                block_start.strftime("%H:%M"),
+                "18:00",
+                f"non-company todo {block.title!r} must land after work end, got {block.start}",
+            )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "YULE_WORK_MODE_ENABLED": "true",
+            "YULE_WORK_START_TIME": "09:00",
+            "YULE_LUNCH_START_TIME": "13:00",
+            "YULE_WORK_END_TIME": "18:00",
+            "YULE_LUNCH_DURATION_MINUTES": "60",
+        },
+        clear=False,
+    )
+    def test_build_focus_blocks_excludes_lunch_window(self) -> None:
+        inputs = PlanningInputs(
+            plan_date=date(2026, 4, 29),
+            timezone="KST",
+            source_statuses=[],
+            warnings=[],
+            calendar_events=[],
+            calendar_todos=[
+                CalendarTodo(
+                    item_uid="todo-1",
+                    title="개인 작업",
+                    start=None,
+                    due="2026-04-29",
+                    start_all_day=False,
+                    due_all_day=True,
+                    status="NEEDS-ACTION",
+                    completed=False,
+                    completed_at=None,
+                    priority=0,
+                    percent_complete=None,
+                    calendar_name="내 할 일",
+                    source="naver-caldav",
+                    description="",
+                    last_modified=None,
+                )
+            ],
+            github_issues=[],
+            reminders=[],
+        )
+
+        envelope = build_daily_plan(inputs)
+        for block in envelope.daily_plan.suggested_time_blocks:
+            block_start = datetime.fromisoformat(block.start).strftime("%H:%M")
+            block_end = datetime.fromisoformat(block.end).strftime("%H:%M")
+            self.assertFalse(
+                "13:00" <= block_start < "14:00",
+                f"focus block {block.title!r} should not overlap lunch (got start={block_start})",
+            )
+            self.assertFalse(
+                "13:00" < block_end <= "14:00",
+                f"focus block {block.title!r} should not overlap lunch (got end={block_end})",
+            )
+
+    def test_build_issue_candidate_boosts_foundation_keywords(self) -> None:
+        from yule_orchestrator.planning.tasks import _build_issue_candidate
+
+        foundation_issue = GitHubIssue(
+            number=1,
+            repository="acme/app",
+            title="[Feature] 유저 도메인 모델 정의",
+            url="https://github.com/acme/app/issues/1",
+            owner="acme",
+            scope="org:acme",
+        )
+        surface_issue = GitHubIssue(
+            number=2,
+            repository="acme/app",
+            title="[Feature] 댓글 UI 디자인 정리",
+            url="https://github.com/acme/app/issues/2",
+            owner="acme",
+            scope="org:acme",
+        )
+
+        foundation = _build_issue_candidate(foundation_issue)
+        surface = _build_issue_candidate(surface_issue)
+
+        self.assertIn("foundation layer", foundation.reasons)
+        self.assertIn("surface layer", surface.reasons)
+        self.assertGreater(foundation.priority_score, surface.priority_score)

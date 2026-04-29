@@ -60,6 +60,8 @@ def build_daily_plan(
         tasks,
         focus_start_time=day_profile.work_start_time,
         work_mode_enabled=work_mode_enabled,
+        lunch_start_time=day_profile.lunch_start_time,
+        lunch_duration_minutes=day_profile.lunch_duration_minutes,
     )
     checkpoints = sorted(
         [

@@ -85,6 +85,10 @@ def _build_issue_candidate(issue: GitHubIssue) -> PlanningTaskCandidate:
     score += keyword_score
     reasons.extend(keyword_reasons)
 
+    sequence_score, sequence_reasons = _dev_sequence_boost(issue.title)
+    score += sequence_score
+    reasons.extend(sequence_reasons)
+
     return PlanningTaskCandidate(
         task_id=f"issue:{issue.repository}#{issue.number}",
         source_type="github_issue",
@@ -157,6 +161,55 @@ def _priority_level(score: int) -> str:
     if score >= 50:
         return "medium"
     return "low"
+
+
+FOUNDATION_KEYWORDS = (
+    "도메인",
+    "엔티티",
+    "스키마",
+    "마이그레이션",
+    "schema",
+    "migration",
+    "domain",
+    "entity",
+    "model",
+    "infrastructure",
+    "infra",
+    "repository",
+    "base",
+    "core",
+    "설계",
+    "auth",
+    "인증",
+    "회원",
+)
+SURFACE_KEYWORDS = (
+    "ui",
+    "ux",
+    "design",
+    "디자인",
+    "댓글",
+    "comment",
+    "색상",
+    "color",
+    "폰트",
+    "font",
+    "스타일",
+    "style",
+)
+
+
+def _dev_sequence_boost(title: str) -> tuple[int, list[str]]:
+    haystack = title.lower()
+    score = 0
+    reasons: list[str] = []
+    if any(keyword in haystack for keyword in FOUNDATION_KEYWORDS):
+        score += 25
+        reasons.append("foundation layer")
+    if any(keyword in haystack for keyword in SURFACE_KEYWORDS):
+        score -= 10
+        reasons.append("surface layer")
+    return score, reasons
 
 
 def _keyword_boost(title: str, description: str) -> tuple[int, list[str]]:
