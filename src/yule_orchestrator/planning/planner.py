@@ -125,6 +125,8 @@ def build_daily_plan(
                 endpoint=resolved_ollama_endpoint,
                 timeout_seconds=resolved_ollama_timeout_seconds,
                 work_mode_enabled=work_mode_enabled,
+                fallback_model=ollama_config.fallback_model,
+                retry_count=ollama_config.retry_count,
             )
             morning_briefing = normalize_paragraph_spacing(morning_briefing)
             morning_briefing_source = "ollama"

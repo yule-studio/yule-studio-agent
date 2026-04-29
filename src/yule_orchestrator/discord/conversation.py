@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Sequence
 
 from ..planning.briefings import normalize_paragraph_spacing
-from ..planning.ollama import generate_ollama_text
+from ..planning.ollama import generate_ollama_text, validate_conversation_response
 from ..planning.ollama_config import load_ollama_conversation_config
 from ..planning.snapshots import DailyPlanSnapshot
 from ..storage import load_json_cache, save_json_cache
@@ -210,6 +210,9 @@ def _build_ollama_conversation_response(
             temperature=0.25,
             empty_error_message="Ollama Discord conversation response was empty.",
             request_label="discord conversation",
+            validate_response=validate_conversation_response,
+            retry_count=config.retry_count,
+            fallback_model=config.fallback_model,
         )
     except ValueError:
         return None

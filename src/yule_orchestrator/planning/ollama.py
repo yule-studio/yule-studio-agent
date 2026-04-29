@@ -1,11 +1,44 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
-from typing import Sequence
+from typing import Callable, Optional, Sequence
 from urllib import error, request
 
 from .models import PlanningBlockBriefing, PlanningCheckpoint, PlanningTaskCandidate, PlanningTimeBlock
+
+ResponseValidator = Callable[[str], Optional[str]]
+
+_ISO_DATETIME_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+_INTERNAL_SCORE_KEYWORDS = (
+    "내부 점수",
+    "priority_score",
+    "score=",
+    "점수=",
+)
+
+
+def validate_briefing_response(content: str) -> Optional[str]:
+    if _ISO_DATETIME_PATTERN.search(content):
+        return "ISO datetime leaked"
+    for keyword in _INTERNAL_SCORE_KEYWORDS:
+        if keyword in content:
+            return f"internal-score keyword '{keyword}' leaked"
+    for raw in content.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith(("#", "##", "###")):
+            return "markdown heading leaked"
+    return None
+
+
+def validate_conversation_response(content: str) -> Optional[str]:
+    if _ISO_DATETIME_PATTERN.search(content):
+        return "ISO datetime leaked"
+    for keyword in _INTERNAL_SCORE_KEYWORDS:
+        if keyword in content:
+            return f"internal-score keyword '{keyword}' leaked"
+    return None
 
 
 def generate_human_briefing(
@@ -19,6 +52,8 @@ def generate_human_briefing(
     endpoint: str = "http://localhost:11434",
     timeout_seconds: int = 20,
     work_mode_enabled: bool = True,
+    fallback_model: Optional[str] = None,
+    retry_count: int = 1,
 ) -> str:
     prompt = _build_prompt(
         plan_date=plan_date,
@@ -37,6 +72,9 @@ def generate_human_briefing(
         temperature=0.4,
         empty_error_message="Ollama briefing response was empty.",
         request_label="briefing",
+        validate_response=validate_briefing_response,
+        retry_count=retry_count,
+        fallback_model=fallback_model,
     )
 
 
@@ -49,6 +87,87 @@ def generate_ollama_text(
     temperature: float = 0.4,
     empty_error_message: str = "Ollama response was empty.",
     request_label: str = "request",
+    validate_response: Optional[ResponseValidator] = None,
+    retry_count: int = 0,
+    fallback_model: Optional[str] = None,
+) -> str:
+    last_error: Optional[str] = None
+    primary_attempts = max(1, 1 + max(0, retry_count))
+
+    for attempt in range(1, primary_attempts + 1):
+        try:
+            content = _ollama_request_once(
+                prompt=prompt,
+                model=model,
+                endpoint=endpoint,
+                timeout_seconds=timeout_seconds,
+                temperature=temperature,
+                empty_error_message=empty_error_message,
+                request_label=request_label,
+            )
+        except ValueError as exc:
+            last_error = str(exc)
+            print(
+                f"warning: ollama {request_label} attempt {attempt}/{primary_attempts} "
+                f"on model={model} failed: {exc}"
+            )
+            continue
+
+        if validate_response is None:
+            return content
+        violation = validate_response(content)
+        if violation is None:
+            return content
+        last_error = f"validation failed: {violation}"
+        print(
+            f"warning: ollama {request_label} attempt {attempt}/{primary_attempts} "
+            f"on model={model} validation failed: {violation}"
+        )
+
+    if fallback_model and fallback_model != model:
+        print(
+            f"info: ollama {request_label} falling back from model={model} "
+            f"to model={fallback_model}"
+        )
+        try:
+            content = _ollama_request_once(
+                prompt=prompt,
+                model=fallback_model,
+                endpoint=endpoint,
+                timeout_seconds=timeout_seconds,
+                temperature=temperature,
+                empty_error_message=empty_error_message,
+                request_label=request_label,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Ollama {request_label} failed (model={model} after {primary_attempts} attempts; "
+                f"fallback model={fallback_model}: {exc})"
+            ) from exc
+
+        if validate_response is not None:
+            violation = validate_response(content)
+            if violation is not None:
+                print(
+                    f"warning: ollama {request_label} fallback model={fallback_model} "
+                    f"validation still failed: {violation}; returning content anyway"
+                )
+        return content
+
+    raise ValueError(
+        f"Ollama {request_label} failed (model={model}, attempts={primary_attempts}): {last_error}"
+    )
+
+
+def _ollama_request_once(
+    *,
+    prompt: str,
+    model: str,
+    endpoint: str,
+    timeout_seconds: int,
+    temperature: float,
+    empty_error_message: str,
+    request_label: str,
 ) -> str:
     payload = json.dumps(
         {

@@ -79,6 +79,49 @@ class OllamaConfigTestCase(unittest.TestCase):
         self.assertEqual(config.model, "llama3.1:8b")
         self.assertEqual(config.timeout_seconds, 30)
 
+    def test_load_ollama_planning_config_reads_fallback_and_retry(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_FALLBACK_MODEL": "llama3.1:8b",
+                "OLLAMA_RETRY_COUNT": "2",
+            },
+            clear=True,
+        ):
+            config = load_ollama_planning_config()
+
+        self.assertEqual(config.fallback_model, "llama3.1:8b")
+        self.assertEqual(config.retry_count, 2)
+
+    def test_load_ollama_conversation_config_inherits_planning_fallback(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_FALLBACK_MODEL": "llama3.1:8b",
+                "OLLAMA_RETRY_COUNT": "2",
+            },
+            clear=True,
+        ):
+            config = load_ollama_conversation_config()
+
+        self.assertEqual(config.fallback_model, "llama3.1:8b")
+        self.assertEqual(config.retry_count, 2)
+
+    def test_load_ollama_conversation_config_overrides_with_discord_specific_fallback(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_FALLBACK_MODEL": "llama3.1:8b",
+                "OLLAMA_DISCORD_FALLBACK_MODEL": "qwen2.5:14b",
+                "OLLAMA_DISCORD_RETRY_COUNT": "0",
+            },
+            clear=True,
+        ):
+            config = load_ollama_conversation_config()
+
+        self.assertEqual(config.fallback_model, "qwen2.5:14b")
+        self.assertEqual(config.retry_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
