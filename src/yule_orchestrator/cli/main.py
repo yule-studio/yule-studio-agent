@@ -21,6 +21,16 @@ from .context import run_context_command
 from .daily import run_daily_warmup_command
 from .discord import run_discord_bot_command
 from .discord_member import run_discord_member_command
+from .engineer import (
+    adapt_workflow_error,
+    run_engineer_approve_command,
+    run_engineer_complete_command,
+    run_engineer_intake_command,
+    run_engineer_progress_command,
+    run_engineer_reject_command,
+    run_engineer_show_command,
+)
+from ..agents.workflow import WorkflowError
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
 from .planning import (
@@ -444,6 +454,73 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate env wiring and print the activation summary without contacting Discord.",
     )
 
+    engineer_parser = subparsers.add_parser(
+        "engineer",
+        help="Drive the engineering-agent Discord workflow (intake/approve/progress/complete).",
+    )
+    engineer_parser.add_argument(
+        "--agent",
+        default="engineering-agent",
+        help="Department agent id. Defaults to engineering-agent.",
+    )
+    engineer_subparsers = engineer_parser.add_subparsers(dest="engineer_command", required=True)
+
+    engineer_intake_parser = engineer_subparsers.add_parser(
+        "intake",
+        help="Accept a new task and produce the dispatcher plan + intake message.",
+    )
+    engineer_intake_parser.add_argument("--prompt", required=True, help="Natural-language task prompt.")
+    engineer_intake_parser.add_argument(
+        "--task-type",
+        help="Explicit task type override (e.g. landing-page, backend-feature).",
+    )
+    engineer_intake_parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Mark the task as write-requested. Stays blocked until `engineer approve`.",
+    )
+
+    engineer_approve_parser = engineer_subparsers.add_parser(
+        "approve",
+        help="Approve a session that is waiting for write confirmation.",
+    )
+    engineer_approve_parser.add_argument("--session", required=True, help="Session id.")
+
+    engineer_reject_parser = engineer_subparsers.add_parser(
+        "reject",
+        help="Reject a session and stop the workflow.",
+    )
+    engineer_reject_parser.add_argument("--session", required=True, help="Session id.")
+    engineer_reject_parser.add_argument("--reason", required=True, help="Rejection reason.")
+
+    engineer_progress_parser = engineer_subparsers.add_parser(
+        "progress",
+        help="Append a progress note to an approved session.",
+    )
+    engineer_progress_parser.add_argument("--session", required=True, help="Session id.")
+    engineer_progress_parser.add_argument("--note", required=True, help="Progress note.")
+
+    engineer_complete_parser = engineer_subparsers.add_parser(
+        "complete",
+        help="Finalize a session and produce the completion report.",
+    )
+    engineer_complete_parser.add_argument("--session", required=True, help="Session id.")
+    engineer_complete_parser.add_argument(
+        "--summary",
+        required=True,
+        help="Final summary text for the completion report.",
+    )
+    engineer_complete_parser.add_argument(
+        "--references-used",
+        help="Path to a JSON array of {title, source, url, rationale} reference items.",
+    )
+
+    engineer_show_parser = engineer_subparsers.add_parser(
+        "show",
+        help="Print a session's current state as JSON.",
+    )
+    engineer_show_parser.add_argument("--session", required=True, help="Session id.")
+
     return parser
 
 
@@ -591,6 +668,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.role,
                 dry_run=args.dry_run,
             )
+        if args.command == "engineer":
+            return _dispatch_engineer_command(repo_root, args)
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -603,6 +682,37 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except CalendarIntegrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except WorkflowError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     parser.error(f"unknown command: {args.command}")
     return 2
+
+
+def _dispatch_engineer_command(repo_root: Path, args) -> int:
+    if args.engineer_command == "intake":
+        return run_engineer_intake_command(
+            repo_root,
+            args.agent,
+            args.prompt,
+            task_type=args.task_type,
+            write=args.write,
+        )
+    if args.engineer_command == "approve":
+        return run_engineer_approve_command(repo_root, args.agent, args.session)
+    if args.engineer_command == "reject":
+        return run_engineer_reject_command(repo_root, args.agent, args.session, args.reason)
+    if args.engineer_command == "progress":
+        return run_engineer_progress_command(repo_root, args.agent, args.session, args.note)
+    if args.engineer_command == "complete":
+        return run_engineer_complete_command(
+            repo_root,
+            args.agent,
+            args.session,
+            args.summary,
+            args.references_used,
+        )
+    if args.engineer_command == "show":
+        return run_engineer_show_command(repo_root, args.agent, args.session)
+    raise ValueError(f"unknown engineer command: {args.engineer_command}")
