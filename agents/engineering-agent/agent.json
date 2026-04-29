@@ -19,6 +19,7 @@
     "policies/runtime/agents/engineering-agent/team-structure.md",
     "policies/runtime/agents/engineering-agent/mvp-scope.md",
     "policies/runtime/agents/engineering-agent/role-weights-v0.md",
+    "policies/runtime/agents/engineering-agent/runners.md",
     "policies/runtime/agents/engineering-agent/version-control.md",
     "policies/runtime/agents/engineering-agent/workflow.md",
     "policies/runtime/agents/engineering-agent/testing.md"
