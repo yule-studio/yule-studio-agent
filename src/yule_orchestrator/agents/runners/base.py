@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Protocol, Sequence
 
@@ -160,3 +161,37 @@ class AgentRunner(ABC):
             text=f"[dry-run] {self.runner_id} would handle role={request.role} task={request.task_id}",
             detail="dry-run: backend was not contacted",
         )
+
+    def run(self, request: AgentRequest, *, dry_run: bool = False) -> AgentResponse:
+        """Public entry point that applies hooks around :meth:`submit`.
+
+        - Calls ``reference_collector`` when the request has no references.
+        - Routes to :meth:`dry_run` when *dry_run* is True.
+        - Records elapsed time and forwards to ``performance_tracker``.
+
+        ``ranking_signal`` is intentionally not used here — it is consumed by
+        the dispatcher to pick *which* runner to call, not by the runner itself.
+        """
+
+        enriched = self._collect_references(request)
+        start = time.monotonic()
+        if dry_run:
+            response = self.dry_run(enriched)
+        else:
+            response = self.submit(enriched)
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if "elapsed_ms" not in response.metrics:
+            response = replace(response, metrics={**response.metrics, "elapsed_ms": elapsed_ms})
+        tracker = self.hooks.performance_tracker
+        if tracker is not None:
+            tracker.record(self.runner_id, enriched, response)
+        return response
+
+    def _collect_references(self, request: AgentRequest) -> AgentRequest:
+        collector = self.hooks.reference_collector
+        if collector is None or request.references:
+            return request
+        gathered = tuple(collector.collect(request))
+        if not gathered:
+            return request
+        return replace(request, references=gathered)
