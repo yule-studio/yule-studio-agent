@@ -6,6 +6,7 @@ from typing import Optional, Sequence
 
 from ..integrations.calendar.models import CalendarTodo
 from ..integrations.github.issues import GitHubIssue
+from ..integrations.github.pulls import GitHubPullRequest
 from ..storage import compute_user_pattern_signals
 from .category_policy import resolve_naver_category_policy
 from .github_label_policy import resolve_github_label_policies
@@ -28,6 +29,9 @@ def build_task_candidates(inputs: PlanningInputs) -> list[PlanningTaskCandidate]
 
     for issue in inputs.github_issues:
         tasks.append(_build_issue_candidate(issue))
+
+    for pull_request in inputs.github_pull_requests:
+        tasks.append(_build_pull_request_candidate(pull_request))
 
     for reminder in inputs.reminders:
         tasks.append(_build_reminder_candidate(inputs.plan_date, reminder))
@@ -164,6 +168,58 @@ def _build_issue_candidate(issue: GitHubIssue) -> PlanningTaskCandidate:
         priority_score=score,
         priority_level=_priority_level(score),
         estimated_minutes=90,
+        reasons=reasons,
+        coding_candidate=True,
+    )
+
+
+def _build_pull_request_candidate(pull_request: GitHubPullRequest) -> PlanningTaskCandidate:
+    score = 50
+    reasons = ["open GitHub pull request", "coding candidate"]
+
+    if pull_request.scope == "personal":
+        score += 10
+        reasons.append("personal repository")
+    elif pull_request.scope.startswith("org:"):
+        score += 5
+        reasons.append("organization repository")
+
+    if pull_request.draft:
+        score -= 10
+        reasons.append("draft PR")
+    else:
+        score += 10
+        reasons.append("ready for review")
+
+    if pull_request.assignees:
+        score += 5
+        reasons.append(f"{len(pull_request.assignees)}명 담당자 지정됨")
+
+    keyword_score, keyword_reasons = _keyword_boost(pull_request.title, pull_request.body)
+    score += keyword_score
+    reasons.extend(keyword_reasons)
+
+    sequence_score, sequence_reasons = _dev_sequence_boost(pull_request.title)
+    score += sequence_score
+    reasons.extend(sequence_reasons)
+
+    label_policies = resolve_github_label_policies(pull_request.labels)
+    for policy in label_policies:
+        score += policy.priority_boost
+        if policy.reason:
+            reasons.append(f"label `{policy.label}`: {policy.reason}")
+        else:
+            reasons.append(f"label `{policy.label}`")
+
+    return PlanningTaskCandidate(
+        task_id=f"pr:{pull_request.repository}#{pull_request.number}",
+        source_type="github_pull_request",
+        title=pull_request.title,
+        description=pull_request.url,
+        due_date=None,
+        priority_score=score,
+        priority_level=_priority_level(score),
+        estimated_minutes=60,
         reasons=reasons,
         coding_candidate=True,
     )

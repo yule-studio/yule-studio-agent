@@ -874,6 +874,63 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("surface layer", surface.reasons)
         self.assertGreater(foundation.priority_score, surface.priority_score)
 
+    def test_build_pull_request_candidate_marks_ready_higher_than_draft(self) -> None:
+        from yule_orchestrator.integrations.github.pulls import GitHubPullRequest
+        from yule_orchestrator.planning.tasks import _build_pull_request_candidate
+
+        ready_pr = GitHubPullRequest(
+            number=1,
+            repository="acme/app",
+            title="API 엔드포인트 추가",
+            url="https://github.com/acme/app/pull/1",
+            owner="acme",
+            scope="org:acme",
+            draft=False,
+        )
+        draft_pr = GitHubPullRequest(
+            number=2,
+            repository="acme/app",
+            title="API 엔드포인트 추가",
+            url="https://github.com/acme/app/pull/2",
+            owner="acme",
+            scope="org:acme",
+            draft=True,
+        )
+
+        ready_candidate = _build_pull_request_candidate(ready_pr)
+        draft_candidate = _build_pull_request_candidate(draft_pr)
+
+        self.assertEqual(ready_candidate.task_id, "pr:acme/app#1")
+        self.assertEqual(ready_candidate.source_type, "github_pull_request")
+        self.assertGreater(ready_candidate.priority_score, draft_candidate.priority_score)
+        self.assertIn("ready for review", ready_candidate.reasons)
+        self.assertIn("draft PR", draft_candidate.reasons)
+
+    def test_build_task_candidates_includes_pull_requests(self) -> None:
+        from yule_orchestrator.integrations.github.pulls import GitHubPullRequest
+        from yule_orchestrator.planning.inputs import build_planning_inputs
+        from yule_orchestrator.planning.tasks import build_task_candidates
+
+        inputs = build_planning_inputs(
+            plan_date=date(2026, 4, 29),
+            github_pull_requests=[
+                GitHubPullRequest(
+                    number=42,
+                    repository="acme/app",
+                    title="회원가입 API 구현",
+                    url="https://github.com/acme/app/pull/42",
+                    owner="acme",
+                    scope="org:acme",
+                    draft=False,
+                )
+            ],
+        )
+
+        tasks = build_task_candidates(inputs)
+        task_ids = [task.task_id for task in tasks]
+
+        self.assertIn("pr:acme/app#42", task_ids)
+
     def test_build_issue_candidate_applies_label_policy(self) -> None:
         from yule_orchestrator.planning.github_label_policy import (
             reset_github_label_policy_cache,

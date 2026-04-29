@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 from ..integrations.calendar import CalendarIntegrationError, list_naver_calendar_items
 from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
 from ..integrations.github.issues import GitHubIssue, GitHubIssueError, list_open_issues
+from ..integrations.github.pulls import GitHubPullRequest, list_open_pull_requests
 from ..storage import list_calendar_state_records
 from .models import PlanningInputs, PlanningSourceStatus, ReminderItem
 
@@ -48,6 +49,7 @@ def collect_planning_inputs(
     reminders: Optional[Sequence[ReminderItem]] = None,
     prefetched_calendar_result: Optional[CalendarQueryResult] = None,
     prefetched_github_issues: Optional[Sequence[GitHubIssue]] = None,
+    prefetched_github_pull_requests: Optional[Sequence[GitHubPullRequest]] = None,
     allow_live_calendar_fetch: bool = False,
     allow_live_github_fetch: bool = False,
 ) -> PlanningInputs:
@@ -56,6 +58,7 @@ def collect_planning_inputs(
     calendar_events: Sequence[CalendarEvent] = []
     calendar_todos: Sequence[CalendarTodo] = []
     github_issues: Sequence[GitHubIssue] = []
+    github_pull_requests: Sequence[GitHubPullRequest] = []
     reminder_items = list(reminders or [])
 
     if include_calendar:
@@ -174,6 +177,40 @@ def collect_planning_inputs(
                     )
                 )
 
+        if prefetched_github_pull_requests is not None:
+            github_pull_requests = list(prefetched_github_pull_requests)
+            source_statuses.append(
+                PlanningSourceStatus(
+                    source_id="github-pulls-prefetched",
+                    source_type="github",
+                    ok=True,
+                    item_count=len(github_pull_requests),
+                )
+            )
+        elif allow_live_github_fetch:
+            try:
+                github_pull_requests = list_open_pull_requests(limit=github_limit)
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="github-pulls-live",
+                        source_type="github",
+                        ok=True,
+                        item_count=len(github_pull_requests),
+                    )
+                )
+            except GitHubIssueError as exc:
+                warning = str(exc)
+                warnings.append(f"github pulls: {warning}")
+                source_statuses.append(
+                    PlanningSourceStatus(
+                        source_id="github-pulls-live",
+                        source_type="github",
+                        ok=False,
+                        item_count=0,
+                        warning=warning,
+                    )
+                )
+
     source_statuses.append(
         PlanningSourceStatus(
             source_id="reminders",
@@ -190,6 +227,7 @@ def collect_planning_inputs(
         calendar_events=calendar_events,
         calendar_todos=calendar_todos,
         github_issues=github_issues,
+        github_pull_requests=github_pull_requests,
         reminders=reminder_items,
     )
 
@@ -203,6 +241,7 @@ def build_planning_inputs(
     calendar_events: Optional[Sequence[CalendarEvent]] = None,
     calendar_todos: Optional[Sequence[CalendarTodo]] = None,
     github_issues: Optional[Sequence[GitHubIssue]] = None,
+    github_pull_requests: Optional[Sequence[GitHubPullRequest]] = None,
     reminders: Optional[Sequence[ReminderItem]] = None,
 ) -> PlanningInputs:
     from ..core import local_tz_name
@@ -217,6 +256,7 @@ def build_planning_inputs(
         calendar_todos=list(calendar_todos or []),
         github_issues=list(github_issues or []),
         reminders=list(reminders or []),
+        github_pull_requests=list(github_pull_requests or []),
     )
 
 

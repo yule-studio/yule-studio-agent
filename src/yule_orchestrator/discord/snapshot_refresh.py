@@ -5,6 +5,7 @@ from datetime import date
 
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.github.issues import list_open_issues
+from ..integrations.github.pulls import list_open_pull_requests
 from ..planning import (
     build_daily_plan,
     collect_planning_inputs,
@@ -28,6 +29,11 @@ def regenerate_today_snapshot(plan_date: date) -> SnapshotRefreshResult:
     try:
         calendar_result = list_naver_calendar_items(plan_date, plan_date)
         github_issues = list(list_open_issues(ON_DEMAND_GITHUB_LIMIT))
+        try:
+            github_pull_requests = list(list_open_pull_requests(ON_DEMAND_GITHUB_LIMIT))
+        except Exception as exc:
+            print(f"warning: github pulls fetch failed during snapshot regenerate: {exc}")
+            github_pull_requests = []
         reminders = load_reminder_items(None)
         inputs = collect_planning_inputs(
             plan_date=plan_date,
@@ -37,6 +43,7 @@ def regenerate_today_snapshot(plan_date: date) -> SnapshotRefreshResult:
             reminders=reminders,
             prefetched_calendar_result=calendar_result,
             prefetched_github_issues=github_issues,
+            prefetched_github_pull_requests=github_pull_requests,
             allow_live_calendar_fetch=False,
             allow_live_github_fetch=False,
         )

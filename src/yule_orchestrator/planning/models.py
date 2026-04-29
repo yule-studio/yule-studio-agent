@@ -85,6 +85,7 @@ class PlanningInputs:
     calendar_todos: Sequence[CalendarTodo]
     github_issues: Sequence[GitHubIssue]
     reminders: Sequence[ReminderItem]
+    github_pull_requests: Sequence["GitHubPullRequest"] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -96,10 +97,13 @@ class PlanningInputs:
             "calendar_todos": [todo.to_dict() for todo in self.calendar_todos],
             "github_issues": [issue.to_dict() for issue in self.github_issues],
             "reminders": [reminder.to_dict() for reminder in self.reminders],
+            "github_pull_requests": [pr.to_dict() for pr in self.github_pull_requests],
         }
 
     @classmethod
     def from_dict(cls, payload: dict) -> "PlanningInputs":
+        from ..integrations.github.pulls import GitHubPullRequest as _GitHubPullRequest
+
         return cls(
             plan_date=date.fromisoformat(str(payload["plan_date"])),
             timezone=str(payload["timezone"]),
@@ -127,6 +131,11 @@ class PlanningInputs:
             reminders=[
                 ReminderItem.from_dict(item)
                 for item in payload.get("reminders", [])
+                if isinstance(item, dict)
+            ],
+            github_pull_requests=[
+                _GitHubPullRequest.from_dict(item)
+                for item in payload.get("github_pull_requests", [])
                 if isinstance(item, dict)
             ],
         )

@@ -10,6 +10,7 @@ from pathlib import Path
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
+from ..integrations.github.pulls import list_open_pull_requests
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_items, save_daily_plan_snapshot
 from ..planning.day_profile import DayProfile, DayProfileBriefingSlot, load_day_profile
@@ -405,7 +406,20 @@ def run_discord_bot(repo_root: Path) -> None:
                     DAILY_PREPARATION_GITHUB_LIMIT,
                 )
                 context["github_issues"] = list(issues)
-                return {"issue_count": len(issues)}
+                pulls: list = []
+                try:
+                    fetched_pulls = await asyncio.to_thread(
+                        list_open_pull_requests,
+                        DAILY_PREPARATION_GITHUB_LIMIT,
+                    )
+                    pulls = list(fetched_pulls)
+                except Exception as exc:
+                    print(f"warning: github pulls fetch failed during daily preparation: {exc}")
+                context["github_pull_requests"] = pulls
+                return {
+                    "issue_count": len(issues),
+                    "pull_request_count": len(pulls),
+                }
 
             if step_name == "planning_snapshot":
                 reminders = await asyncio.to_thread(load_reminder_items, None)
@@ -415,6 +429,9 @@ def run_discord_bot(repo_root: Path) -> None:
                 prefetched_github_issues = context.get("github_issues")
                 if prefetched_github_issues is not None and not isinstance(prefetched_github_issues, list):
                     prefetched_github_issues = None
+                prefetched_github_pull_requests = context.get("github_pull_requests")
+                if prefetched_github_pull_requests is not None and not isinstance(prefetched_github_pull_requests, list):
+                    prefetched_github_pull_requests = None
                 inputs = await asyncio.to_thread(
                     collect_planning_inputs,
                     plan_date,
@@ -424,6 +441,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     reminders=reminders,
                     prefetched_calendar_result=prefetched_calendar_result,
                     prefetched_github_issues=prefetched_github_issues,
+                    prefetched_github_pull_requests=prefetched_github_pull_requests,
                     allow_live_calendar_fetch=prefetched_calendar_result is None,
                     allow_live_github_fetch=prefetched_github_issues is None,
                 )
