@@ -32,6 +32,10 @@ class GitHubIssue:
     url: str
     owner: str
     scope: str
+    labels: Tuple[str, ...] = ()
+    body: str = ""
+    assignees: Tuple[str, ...] = ()
+    updated_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -41,6 +45,10 @@ class GitHubIssue:
             "url": self.url,
             "owner": self.owner,
             "scope": self.scope,
+            "labels": list(self.labels),
+            "body": self.body,
+            "assignees": list(self.assignees),
+            "updated_at": self.updated_at,
         }
 
     @classmethod
@@ -52,6 +60,10 @@ class GitHubIssue:
             url=str(payload["url"]),
             owner=str(payload["owner"]),
             scope=str(payload["scope"]),
+            labels=_normalize_string_tuple(payload.get("labels", ())),
+            body=str(payload.get("body") or ""),
+            assignees=_normalize_string_tuple(payload.get("assignees", ())),
+            updated_at=_optional_string(payload.get("updated_at")),
         )
 
 
@@ -126,7 +138,7 @@ def list_open_issues(limit: int = 30, force_refresh: bool = False) -> Sequence[G
         "--limit",
         str(limit),
         "--json",
-        "number,title,url,repository",
+        "number,title,url,repository,labels,body,assignees,updatedAt",
     ]
     for owner in owners:
         command.extend(["--owner", owner])
@@ -178,6 +190,11 @@ def list_open_issues(limit: int = 30, force_refresh: bool = False) -> Sequence[G
         if not isinstance(url, str):
             continue
 
+        labels = _extract_labels(item.get("labels"))
+        body = item.get("body")
+        assignees = _extract_assignees(item.get("assignees"))
+        updated_at = item.get("updatedAt")
+
         issues.append(
             GitHubIssue(
                 number=number,
@@ -186,6 +203,10 @@ def list_open_issues(limit: int = 30, force_refresh: bool = False) -> Sequence[G
                 url=url,
                 owner=owner,
                 scope=scope,
+                labels=labels,
+                body=str(body) if isinstance(body, str) else "",
+                assignees=assignees,
+                updated_at=str(updated_at) if isinstance(updated_at, str) and updated_at else None,
             )
         )
 
@@ -325,6 +346,49 @@ def _extract_repository_owner(repository: str) -> str:
     if "/" not in repository:
         return "unknown-owner"
     return repository.split("/", 1)[0]
+
+
+def _extract_labels(value: Any) -> Tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+        elif isinstance(item, str) and item.strip():
+            names.append(item.strip())
+    return tuple(names)
+
+
+def _extract_assignees(value: Any) -> Tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    logins: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            login = item.get("login")
+            if isinstance(login, str) and login.strip():
+                logins.append(login.strip())
+        elif isinstance(item, str) and item.strip():
+            logins.append(item.strip())
+    return tuple(logins)
+
+
+def _normalize_string_tuple(value: Any) -> Tuple[str, ...]:
+    if isinstance(value, tuple):
+        return tuple(str(item) for item in value if isinstance(item, str) and item)
+    if isinstance(value, list):
+        return tuple(str(item) for item in value if isinstance(item, str) and item)
+    return ()
+
+
+def _optional_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _classify_owner_scope(owner: str, viewer_login: str, org_logins: Set[str]) -> str:

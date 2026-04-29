@@ -1,0 +1,44 @@
+{
+  "labels": {
+    "infrastructure": {
+      "priority_boost": 30,
+      "reason": "infrastructure layer"
+    },
+    "domain": {
+      "priority_boost": 25,
+      "reason": "domain layer"
+    },
+    "schema": {
+      "priority_boost": 25,
+      "reason": "schema/migration"
+    },
+    "auth": {
+      "priority_boost": 20,
+      "reason": "auth foundation"
+    },
+    "feature": {
+      "priority_boost": 10,
+      "reason": "feature work"
+    },
+    "bug": {
+      "priority_boost": 25,
+      "reason": "bug fix"
+    },
+    "chore": {
+      "priority_boost": -5,
+      "reason": "chore"
+    },
+    "docs": {
+      "priority_boost": -5,
+      "reason": "documentation"
+    },
+    "ui": {
+      "priority_boost": -10,
+      "reason": "ui/surface"
+    },
+    "design": {
+      "priority_boost": -10,
+      "reason": "design/surface"
+    }
+  }
+}

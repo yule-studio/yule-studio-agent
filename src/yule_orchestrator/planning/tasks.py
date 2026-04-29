@@ -6,6 +6,7 @@ from typing import Optional, Sequence
 from ..integrations.calendar.models import CalendarTodo
 from ..integrations.github.issues import GitHubIssue
 from .category_policy import resolve_naver_category_policy
+from .github_label_policy import resolve_github_label_policies
 from .models import PlanningInputs, PlanningTaskCandidate, ReminderItem
 
 
@@ -82,13 +83,21 @@ def _build_issue_candidate(issue: GitHubIssue) -> PlanningTaskCandidate:
         score += 5
         reasons.append("organization repository")
 
-    keyword_score, keyword_reasons = _keyword_boost(issue.title, "")
+    keyword_score, keyword_reasons = _keyword_boost(issue.title, issue.body)
     score += keyword_score
     reasons.extend(keyword_reasons)
 
     sequence_score, sequence_reasons = _dev_sequence_boost(issue.title)
     score += sequence_score
     reasons.extend(sequence_reasons)
+
+    label_policies = resolve_github_label_policies(issue.labels)
+    for policy in label_policies:
+        score += policy.priority_boost
+        if policy.reason:
+            reasons.append(f"label `{policy.label}`: {policy.reason}")
+        else:
+            reasons.append(f"label `{policy.label}`")
 
     return PlanningTaskCandidate(
         task_id=f"issue:{issue.repository}#{issue.number}",

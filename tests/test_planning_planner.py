@@ -873,3 +873,54 @@ class PlanningPlannerTestCase(unittest.TestCase):
         self.assertIn("foundation layer", foundation.reasons)
         self.assertIn("surface layer", surface.reasons)
         self.assertGreater(foundation.priority_score, surface.priority_score)
+
+    def test_build_issue_candidate_applies_label_policy(self) -> None:
+        from yule_orchestrator.planning.github_label_policy import (
+            reset_github_label_policy_cache,
+        )
+        from yule_orchestrator.planning.tasks import _build_issue_candidate
+
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "YULE_GITHUB_LABEL_POLICY_JSON": (
+                        '{"labels": {"infrastructure": {"priority_boost": 30, "reason": "infra"},'
+                        ' "ui": {"priority_boost": -10, "reason": "surface"}}}'
+                    )
+                },
+                clear=False,
+            ):
+                reset_github_label_policy_cache()
+                foundation = _build_issue_candidate(
+                    GitHubIssue(
+                        number=10,
+                        repository="acme/app",
+                        title="새 기능 검토",
+                        url="https://github.com/acme/app/issues/10",
+                        owner="acme",
+                        scope="org:acme",
+                        labels=("infrastructure",),
+                    )
+                )
+                surface = _build_issue_candidate(
+                    GitHubIssue(
+                        number=11,
+                        repository="acme/app",
+                        title="새 기능 검토",
+                        url="https://github.com/acme/app/issues/11",
+                        owner="acme",
+                        scope="org:acme",
+                        labels=("ui",),
+                    )
+                )
+
+                self.assertGreater(foundation.priority_score, surface.priority_score)
+                self.assertTrue(
+                    any("infrastructure" in reason for reason in foundation.reasons)
+                )
+                self.assertTrue(
+                    any("ui" in reason for reason in surface.reasons)
+                )
+        finally:
+            reset_github_label_policy_cache()
