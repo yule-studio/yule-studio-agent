@@ -205,7 +205,9 @@ def build_planning_inputs(
     github_issues: Optional[Sequence[GitHubIssue]] = None,
     reminders: Optional[Sequence[ReminderItem]] = None,
 ) -> PlanningInputs:
-    resolved_timezone = timezone or datetime.now().astimezone().tzname() or "local"
+    from ..core import local_tz_name
+
+    resolved_timezone = timezone or local_tz_name()
     return PlanningInputs(
         plan_date=plan_date,
         timezone=resolved_timezone,

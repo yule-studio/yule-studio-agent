@@ -23,7 +23,9 @@ class DayProfile:
         return work_start - timedelta(minutes=self.commute_minutes + self.departure_buffer_minutes)
 
     def briefing_schedule(self, plan_date: date) -> Sequence["DayProfileBriefingSlot"]:
-        timezone = datetime.now().astimezone().tzinfo
+        from ..core import local_tz
+
+        timezone = local_tz()
         return [
             DayProfileBriefingSlot(
                 briefing_type="morning",

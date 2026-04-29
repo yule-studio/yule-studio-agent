@@ -132,6 +132,7 @@ YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-cat
 # YULE_WORK_AREA=마곡
 # YULE_WORK_MODE_ENABLED=true
 # YULE_LUNCH_DURATION_MINUTES=60
+# YULE_TIMEZONE=Asia/Seoul
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
@@ -175,6 +176,7 @@ DISCORD_GUILD_ID=
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
 - `YULE_WORK_MODE_ENABLED`는 회사 업무 우선 모드 토글입니다. 기본값은 `true`이며, `true`일 때는 `업무 수행` 일정 시간 안에는 네이버 카테고리 `회사 업무`(기본 색상 코드 27) todo만 배치되고, 그 외 todo는 점심·퇴근 후 같은 비업무 시간으로 분배됩니다. `false`로 두면 자유 모드로 동작해 `업무 수행` 일정을 무시하고 todo 우선순위 기준으로 하루 전체 시간을 자유롭게 분배합니다.
 - `YULE_LUNCH_DURATION_MINUTES`는 점심 시간 길이(분)입니다. 기본값은 60이며, `YULE_LUNCH_START_TIME`부터 이 길이만큼은 가상의 차단 블록으로 처리되어 어떤 focus block도 배치되지 않습니다. 점심에 매번 산책처럼 고정 활동이 있어 일정 잡지 않고 비워두고 싶을 때 사용합니다.
+- `YULE_TIMEZONE`은 Planning Agent와 Discord 자동 브리핑이 사용할 IANA 타임존 이름입니다(`Asia/Seoul`, `America/New_York` 등). 비워두면 시스템 로컬 타임존을 그대로 사용합니다. 여행이나 원격 근무로 시스템 타임존이 바뀌어도 브리핑 시간을 한국 기준에 고정하고 싶을 때 사용합니다.
 - GitHub 이슈는 제목에 도메인/엔티티/스키마/마이그레이션/infrastructure 같은 기반 키워드가 있으면 우선순위가 추가로 올라가고, ui/디자인/댓글/색상 같은 표면 키워드가 있으면 낮아집니다. 실제 개발 순서(예: 도메인 모델 → 회원가입 기능 → UI)에 맞춰 자동으로 정렬되도록 돕는 휴리스틱입니다.
 - 네이버 카테고리 정책에 `"flexible": true`를 추가하면 해당 색상 코드가 붙은 todo는 시간 블록에 자동 배정되지 않고 추천 작업 목록에만 노출됩니다. mail-mail 정리 같이 정해진 시간 없이 자유롭게 처리하는 상시 작업 분류용입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
