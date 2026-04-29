@@ -11,6 +11,10 @@ from .models import PlanningBlockBriefing, PlanningCheckpoint, PlanningTaskCandi
 ResponseValidator = Callable[[str], Optional[str]]
 
 _ISO_DATETIME_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+_HALLUCINATED_NOW_PATTERNS = (
+    re.compile(r"현재\s*(?:오전|오후|새벽|아침|저녁|밤)?\s*\d{1,2}\s*시\s*\d{1,2}\s*분"),
+    re.compile(r"지금\s*(?:오전|오후|새벽|아침|저녁|밤)?\s*\d{1,2}\s*시\s*\d{1,2}\s*분"),
+)
 _INTERNAL_SCORE_KEYWORDS = (
     "내부 점수",
     "priority_score",
@@ -25,6 +29,9 @@ def validate_briefing_response(content: str) -> Optional[str]:
     for keyword in _INTERNAL_SCORE_KEYWORDS:
         if keyword in content:
             return f"internal-score keyword '{keyword}' leaked"
+    for pattern in _HALLUCINATED_NOW_PATTERNS:
+        if pattern.search(content):
+            return "hallucinated current time leaked"
     for raw in content.splitlines():
         stripped = raw.strip()
         if stripped.startswith(("#", "##", "###")):
@@ -253,6 +260,8 @@ def _build_prompt(
 - 체크포인트가 있으면 마지막 문단에서 짧게 한 줄로 언급할 것
 - 내부 점수, 우선순위 계산 숫자, ISO datetime 원문은 절대 노출하지 말 것
 - 사용자가 입력하지 않은 수치 평가(예: 95점, 87점)를 만들어내지 말 것
+- 현재 시각/지금 몇 시 몇 분 같은 분 단위 시각을 임의로 만들어내지 말 것 (입력에는 날짜만 있고 분 단위 현재 시각은 없음. 절대 "현재 11시 35분입니다" 같은 표현을 쓰지 말 것)
+- 시각 표기는 입력에 있는 시간 블록 시작/종료 시각만 사용할 것 (예: "09:00부터 10:00까지")
 
 양식 규칙(매우 중요):
 - 같은 흐름의 문장들은 줄바꿈(\\n) 한 번만 두어 같은 문단 안에 묶을 것
