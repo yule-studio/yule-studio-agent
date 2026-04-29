@@ -7,7 +7,11 @@ from typing import Optional, Sequence
 from ..integrations.calendar.models import CalendarTodo
 from ..integrations.github.issues import GitHubIssue
 from ..integrations.github.pulls import GitHubPullRequest
-from ..storage import compute_user_pattern_signals
+from ..storage import (
+    UserPatternSignals,
+    compute_user_pattern_signals,
+    compute_user_pattern_signals_batch,
+)
 from .category_policy import resolve_naver_category_policy
 from .github_label_policy import resolve_github_label_policies
 from .models import PlanningInputs, PlanningTaskCandidate, ReminderItem
@@ -36,14 +40,21 @@ def build_task_candidates(inputs: PlanningInputs) -> list[PlanningTaskCandidate]
     for reminder in inputs.reminders:
         tasks.append(_build_reminder_candidate(inputs.plan_date, reminder))
 
-    tasks = [_apply_user_pattern_signals(task) for task in tasks]
+    signal_cache = compute_user_pattern_signals_batch(
+        source_event_titles=(task.title for task in tasks),
+    )
+    tasks = [_apply_user_pattern_signals(task, signal_cache.get(task.title)) for task in tasks]
 
     tasks.sort(key=lambda task: (-task.priority_score, task.due_date or "9999-12-31", task.title.lower()))
     return tasks
 
 
-def _apply_user_pattern_signals(task: PlanningTaskCandidate) -> PlanningTaskCandidate:
-    signals = compute_user_pattern_signals(source_event_title=task.title)
+def _apply_user_pattern_signals(
+    task: PlanningTaskCandidate,
+    signals: Optional[UserPatternSignals] = None,
+) -> PlanningTaskCandidate:
+    if signals is None:
+        signals = compute_user_pattern_signals(source_event_title=task.title)
     if signals.total_count < USER_PATTERN_MIN_HISTORY:
         return task
 

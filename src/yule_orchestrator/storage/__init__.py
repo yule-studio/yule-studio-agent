@@ -18,6 +18,7 @@ from .task_history import (
     TaskCompletionStats,
     UserPatternSignals,
     compute_user_pattern_signals,
+    compute_user_pattern_signals_batch,
     query_task_completion_stats,
     record_task_completion_event,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "cleanup_calendar_state_records",
     "cleanup_json_cache",
     "compute_user_pattern_signals",
+    "compute_user_pattern_signals_batch",
     "list_json_cache_entries",
     "list_calendar_state_records",
     "load_json_cache",

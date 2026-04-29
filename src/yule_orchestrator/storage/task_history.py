@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Optional
+from typing import Iterable, Optional
 
 from ._sqlite import SQLITE_WRITE_LOCK
 
@@ -231,6 +231,110 @@ def compute_user_pattern_signals(
         skipped_count=skipped_count,
         typical_block_minutes=typical_block_minutes,
     )
+
+
+def compute_user_pattern_signals_batch(
+    *,
+    source_event_titles: Iterable[str],
+    user_id: Optional[int] = None,
+    days_back: Optional[int] = 60,
+    reference_time: Optional[datetime] = None,
+) -> dict[str, UserPatternSignals]:
+    titles = sorted({title for title in source_event_titles if title})
+    if not titles:
+        return {}
+
+    empty_signals_for = lambda title: UserPatternSignals(
+        source_event_title=title,
+        total_count=0,
+        done_count=0,
+        skipped_count=0,
+        typical_block_minutes=None,
+    )
+
+    db_path = _database_path()
+    if not db_path.exists():
+        return {title: empty_signals_for(title) for title in titles}
+
+    placeholders = ",".join("?" for _ in titles)
+    conditions: list[str] = [f"source_event_title IN ({placeholders})"]
+    params: list[object] = list(titles)
+    if user_id is not None:
+        conditions.append("user_id = ?")
+        params.append(user_id)
+    if days_back is not None and days_back > 0:
+        now = reference_time or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days_back)).date().isoformat()
+        conditions.append("plan_date >= ?")
+        params.append(cutoff)
+
+    where_clause = " WHERE " + " AND ".join(conditions)
+
+    counts_by_title: dict[str, dict[str, int]] = {
+        title: {"total_count": 0, "done_count": 0, "skipped_count": 0}
+        for title in titles
+    }
+    typical_by_title: dict[str, Optional[float]] = {title: None for title in titles}
+
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
+        _ensure_schema(connection)
+        counts_rows = connection.execute(
+            f"""
+            SELECT
+                source_event_title,
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_count
+            FROM task_completion_events
+            {where_clause}
+            GROUP BY source_event_title
+            """,
+            tuple(params),
+        ).fetchall()
+
+        duration_rows = connection.execute(
+            f"""
+            SELECT
+                source_event_title,
+                AVG(block_minutes) AS typical_minutes
+            FROM task_completion_events
+            {where_clause} AND status = 'done' AND block_minutes IS NOT NULL
+            GROUP BY source_event_title
+            """,
+            tuple(params),
+        ).fetchall()
+
+    for row in counts_rows:
+        title = row["source_event_title"]
+        if not isinstance(title, str) or title not in counts_by_title:
+            continue
+        counts_by_title[title]["total_count"] = int(row["total_count"] or 0)
+        counts_by_title[title]["done_count"] = int(row["done_count"] or 0)
+        counts_by_title[title]["skipped_count"] = int(row["skipped_count"] or 0)
+
+    for row in duration_rows:
+        title = row["source_event_title"]
+        if not isinstance(title, str) or title not in typical_by_title:
+            continue
+        typical_by_title[title] = row["typical_minutes"]
+
+    result: dict[str, UserPatternSignals] = {}
+    for title in titles:
+        counts = counts_by_title[title]
+        typical_value = typical_by_title[title]
+        typical_block_minutes: Optional[int]
+        if typical_value is None:
+            typical_block_minutes = None
+        else:
+            typical_block_minutes = max(1, int(round(float(typical_value))))
+        result[title] = UserPatternSignals(
+            source_event_title=title,
+            total_count=counts["total_count"],
+            done_count=counts["done_count"],
+            skipped_count=counts["skipped_count"],
+            typical_block_minutes=typical_block_minutes,
+        )
+    return result
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
