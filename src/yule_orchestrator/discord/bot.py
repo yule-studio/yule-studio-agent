@@ -123,6 +123,8 @@ def run_discord_bot(repo_root: Path) -> None:
                 conversation_channel_id=config.effective_conversation_channel_id,
                 conversation_channel_name=config.effective_conversation_channel_name,
                 conversation_reply_mode=config.conversation_reply_mode,
+                daily_channel_id=config.daily_channel_id,
+                daily_channel_name=config.daily_channel_name,
             ):
                 return
 
@@ -1244,6 +1246,8 @@ def _should_handle_message(
     conversation_channel_id: int | None,
     conversation_channel_name: str | None,
     conversation_reply_mode: str,
+    daily_channel_id: int | None = None,
+    daily_channel_name: str | None = None,
 ) -> bool:
     if conversation_reply_mode == "disabled":
         return False
@@ -1259,6 +1263,24 @@ def _should_handle_message(
     channel_name = getattr(channel, "name", None)
     parent_name = getattr(parent, "name", None)
 
+    daily_is_separate_channel = (
+        daily_channel_id is not None
+        and daily_channel_id != conversation_channel_id
+    ) or (
+        bool(_normalize_channel_name(daily_channel_name))
+        and _normalize_channel_name(daily_channel_name)
+        != _normalize_channel_name(conversation_channel_name)
+    )
+    if daily_is_separate_channel and _channel_matches_target(
+        channel_id=channel_id,
+        parent_id=parent_id,
+        channel_name=channel_name,
+        parent_name=parent_name,
+        target_id=daily_channel_id,
+        target_name=daily_channel_name,
+    ):
+        return False
+
     plain_message_allowed = conversation_reply_mode == "plain-message-or-mention"
 
     if plain_message_allowed and conversation_channel_id is not None and channel_id == conversation_channel_id:
@@ -1272,6 +1294,29 @@ def _should_handle_message(
         return True
 
     return _message_mentions_bot(message=message, bot_user=bot_user)
+
+
+def _channel_matches_target(
+    *,
+    channel_id: int | None,
+    parent_id: int | None,
+    channel_name: str | None,
+    parent_name: str | None,
+    target_id: int | None,
+    target_name: str | None,
+) -> bool:
+    if target_id is not None:
+        if channel_id is not None and channel_id == target_id:
+            return True
+        if parent_id is not None and parent_id == target_id:
+            return True
+    target_name_normalized = _normalize_channel_name(target_name)
+    if target_name_normalized:
+        if _normalize_channel_name(channel_name) == target_name_normalized:
+            return True
+        if _normalize_channel_name(parent_name) == target_name_normalized:
+            return True
+    return False
 
 
 def _extract_conversation_prompt(*, message: object, bot_user: object) -> str:

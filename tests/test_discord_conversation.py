@@ -71,6 +71,69 @@ class DiscordConversationTestCase(unittest.TestCase):
 
         self.assertTrue(handled)
 
+    def test_should_handle_message_blocks_daily_channel_even_with_mention(self) -> None:
+        message = _message(
+            content="<@999> 브리핑 다시 해줘",
+            channel_id=111,
+            channel_name="daily-briefing",
+            mentions=[_user(999, "yule-planning-bot")],
+        )
+        bot_user = _user(999, "yule-planning-bot")
+
+        handled = _should_handle_message(
+            message=message,
+            bot_user=bot_user,
+            conversation_channel_id=222,
+            conversation_channel_name="planning-chat",
+            conversation_reply_mode="plain-message-or-mention",
+            daily_channel_id=111,
+            daily_channel_name="daily-briefing",
+        )
+
+        self.assertFalse(handled, "DAILY 채널에서는 멘션이 있어도 응답하지 않아야 합니다.")
+
+    def test_should_handle_message_allows_daily_channel_when_it_is_also_conversation(self) -> None:
+        message = _message(
+            content="브리핑 다시 해줘",
+            channel_id=111,
+            channel_name="daily-briefing",
+            mentions=[],
+        )
+        bot_user = _user(999, "yule-planning-bot")
+
+        handled = _should_handle_message(
+            message=message,
+            bot_user=bot_user,
+            conversation_channel_id=111,
+            conversation_channel_name="daily-briefing",
+            conversation_reply_mode="plain-message-or-mention",
+            daily_channel_id=111,
+            daily_channel_name="daily-briefing",
+        )
+
+        self.assertTrue(handled, "CONVERSATION이 DAILY로 fallback된 경우엔 응답해야 합니다.")
+
+    def test_should_handle_message_allows_chat_channel_with_plain_message(self) -> None:
+        message = _message(
+            content="오늘 뭐부터 해야 해?",
+            channel_id=222,
+            channel_name="planning-chat",
+            mentions=[],
+        )
+        bot_user = _user(999, "yule-planning-bot")
+
+        handled = _should_handle_message(
+            message=message,
+            bot_user=bot_user,
+            conversation_channel_id=222,
+            conversation_channel_name="planning-chat",
+            conversation_reply_mode="plain-message-or-mention",
+            daily_channel_id=111,
+            daily_channel_name="daily-briefing",
+        )
+
+        self.assertTrue(handled, "CHAT 채널에서는 평문 메시지에도 응답해야 합니다.")
+
     def test_extract_conversation_prompt_removes_bot_mentions(self) -> None:
         message = _message(content="<@999> 오늘 뭐부터 해야 해?", channel_id=555, channel_name="chat", mentions=[])
         bot_user = _user(999, "yule-planning-bot")
