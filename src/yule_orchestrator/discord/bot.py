@@ -1022,7 +1022,7 @@ def _synthesize_scheduled_briefing(
         ),
         briefing_type=slot.briefing_type,
         title=slot.title,
-        send_at=slot.send_at.astimezone().isoformat(),
+        send_at=slot.send_at.isoformat(),
         content="",
         source="rules",
     )
