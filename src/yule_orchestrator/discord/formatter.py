@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Optional, Sequence
 
+from ..core.timezone import now_local
 from ..planning.briefings import normalize_paragraph_spacing
 from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint, PlanningScheduledBriefing
 from ..planning.snapshots import DailyPlanSnapshot
@@ -22,6 +24,8 @@ def format_plan_today_message(
     if slot_title is not None:
         lines.append(f"**[{slot_title}]**")
         lines.append("")
+    current_local = now_local()
+    lines.append(f"_지금 {current_local.strftime('%Y-%m-%d %H:%M')} 기준_")
     if snapshot is not None:
         if snapshot.is_stale:
             lines.append(
@@ -29,12 +33,12 @@ def format_plan_today_message(
             )
         else:
             lines.append(f"오늘의 브리핑입니다. 생성 시각: {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}")
-        lines.append("")
+    lines.append("")
     lines.append("**오늘 브리핑**")
     lines.extend(_non_empty_lines(plan.discord_briefing))
     lines.append("")
     lines.append("**아침 브리핑**")
-    lines.extend(_morning_summary_lines(plan.morning_briefing))
+    lines.extend(_morning_summary_lines(_strip_hallucinated_now(plan.morning_briefing)))
 
     if plan.prioritized_tasks:
         lines.append("")
@@ -206,6 +210,25 @@ def split_discord_message(message: str, limit: int = DISCORD_MESSAGE_LIMIT) -> l
         chunks.append("\n".join(current_lines))
 
     return chunks
+
+
+_HALLUCINATED_NOW_LINE_PATTERNS = (
+    re.compile(r"^\s*현재\s*\d{4}년.*?\d{1,2}\s*시\s*\d{1,2}\s*분.*?입니다\.?\s*$"),
+    re.compile(r"^\s*현재\s*(?:오전|오후|새벽|아침|저녁|밤)?\s*\d{1,2}\s*시\s*\d{1,2}\s*분.*?입니다\.?\s*$"),
+    re.compile(r"^\s*지금\s*(?:오전|오후|새벽|아침|저녁|밤)?\s*\d{1,2}\s*시\s*\d{1,2}\s*분.*?입니다\.?\s*$"),
+)
+
+
+def _strip_hallucinated_now(text: str) -> str:
+    if not text:
+        return text
+    surviving_lines: list[str] = []
+    for raw_line in text.splitlines():
+        if any(pattern.match(raw_line) for pattern in _HALLUCINATED_NOW_LINE_PATTERNS):
+            continue
+        surviving_lines.append(raw_line)
+    cleaned = "\n".join(surviving_lines)
+    return cleaned.strip("\n")
 
 
 def _time_range(start_value: str, end_value: str) -> str:
