@@ -10,6 +10,11 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.bot import _extract_conversation_prompt, _should_handle_message
+from yule_orchestrator.discord.checkpoint_state import (
+    CHECKPOINT_RESPONSE_STATUS_DONE,
+    CHECKPOINT_RESPONSE_STATUS_SKIPPED,
+    CheckpointPendingResponse,
+)
 from yule_orchestrator.discord.conversation import (
     build_conversation_response,
     build_conversation_response_envelope,
@@ -229,6 +234,101 @@ class DiscordConversationTestCase(unittest.TestCase):
         self.assertIn("yes", content.lower())
         self.assertIn("no", content.lower())
         save_json_cache_mock.assert_called()
+
+    @patch("yule_orchestrator.discord.conversation.clear_checkpoint_pending_response")
+    @patch("yule_orchestrator.discord.conversation.mark_checkpoint_responded")
+    @patch("yule_orchestrator.discord.conversation.load_checkpoint_pending_response")
+    def test_yes_reply_marks_pending_checkpoints_as_done(
+        self,
+        load_pending_mock,
+        mark_responded_mock,
+        clear_pending_mock,
+    ) -> None:
+        plan_date = datetime.fromisoformat("2026-04-24T00:00:00+09:00").date()
+        load_pending_mock.return_value = CheckpointPendingResponse(
+            user_id=777,
+            plan_date=plan_date,
+            channel_id=42,
+            checkpoint_ids=("cp-1", "cp-2"),
+            sent_at=datetime.fromisoformat("2026-04-24T09:55:00+09:00"),
+        )
+
+        envelope = build_conversation_response_envelope(
+            "완료",
+            author_user_id=777,
+            reference_time=datetime.fromisoformat("2026-04-24T10:00:00+09:00"),
+        )
+
+        self.assertEqual(envelope.intent_id, "checkpoint_response")
+        self.assertIn("완료", envelope.content)
+        self.assertEqual(mark_responded_mock.call_count, 2)
+        statuses = {call.kwargs["status"] for call in mark_responded_mock.call_args_list}
+        self.assertEqual(statuses, {CHECKPOINT_RESPONSE_STATUS_DONE})
+        ids = {call.kwargs["checkpoint_id"] for call in mark_responded_mock.call_args_list}
+        self.assertEqual(ids, {"cp-1", "cp-2"})
+        clear_pending_mock.assert_called_once_with(user_id=777)
+
+    @patch("yule_orchestrator.discord.conversation.clear_checkpoint_pending_response")
+    @patch("yule_orchestrator.discord.conversation.mark_checkpoint_responded")
+    @patch("yule_orchestrator.discord.conversation.load_checkpoint_pending_response")
+    def test_skip_reply_marks_pending_checkpoints_as_skipped(
+        self,
+        load_pending_mock,
+        mark_responded_mock,
+        clear_pending_mock,
+    ) -> None:
+        plan_date = datetime.fromisoformat("2026-04-24T00:00:00+09:00").date()
+        load_pending_mock.return_value = CheckpointPendingResponse(
+            user_id=777,
+            plan_date=plan_date,
+            channel_id=42,
+            checkpoint_ids=("cp-1",),
+            sent_at=datetime.fromisoformat("2026-04-24T09:55:00+09:00"),
+        )
+
+        envelope = build_conversation_response_envelope(
+            "건너뛰기",
+            author_user_id=777,
+            reference_time=datetime.fromisoformat("2026-04-24T10:00:00+09:00"),
+        )
+
+        self.assertEqual(envelope.intent_id, "checkpoint_response")
+        self.assertIn("건너뛰기", envelope.content)
+        mark_responded_mock.assert_called_once()
+        self.assertEqual(
+            mark_responded_mock.call_args.kwargs["status"],
+            CHECKPOINT_RESPONSE_STATUS_SKIPPED,
+        )
+        clear_pending_mock.assert_called_once_with(user_id=777)
+
+    @patch("yule_orchestrator.discord.conversation.load_ollama_conversation_config")
+    @patch("yule_orchestrator.discord.conversation.load_plan_today_snapshot")
+    @patch("yule_orchestrator.discord.conversation.mark_checkpoint_responded")
+    @patch("yule_orchestrator.discord.conversation.load_checkpoint_pending_response")
+    def test_yes_reply_falls_through_when_no_pending_checkpoint(
+        self,
+        load_pending_mock,
+        mark_responded_mock,
+        load_plan_today_snapshot_mock,
+        load_ollama_conversation_config_mock,
+    ) -> None:
+        load_pending_mock.return_value = None
+        load_plan_today_snapshot_mock.return_value = None
+        load_ollama_conversation_config_mock.return_value = OllamaConversationConfig(
+            enabled=False,
+            endpoint="http://localhost:11434",
+            model="gemma3:latest",
+            timeout_seconds=20,
+        )
+
+        envelope = build_conversation_response_envelope(
+            "yes",
+            author_user_id=777,
+            reference_time=datetime.fromisoformat("2026-04-24T10:00:00+09:00"),
+        )
+
+        self.assertNotEqual(envelope.intent_id, "checkpoint_response")
+        mark_responded_mock.assert_not_called()
 
 
 def _user(user_id: int, name: str):

@@ -142,6 +142,7 @@ def format_checkpoints_message(
     *,
     reference_time: datetime,
     mention_user_id: Optional[int] = None,
+    include_response_prompt: bool = False,
 ) -> str:
     if not checkpoints:
         lines: list[str] = []
@@ -154,6 +155,9 @@ def format_checkpoints_message(
     lines.append(f"{reference_time.strftime('%H:%M')} 기준 체크포인트")
     for checkpoint in checkpoints:
         lines.append(f"- {checkpoint.prompt}")
+    if include_response_prompt:
+        lines.append("")
+        lines.append("완료했으면 `완료` 또는 `yes`, 건너뛰려면 `건너뛰기` 또는 `skip`으로 답해 주세요.")
     return "\n".join(lines)
 
 

@@ -9,6 +9,14 @@ from ..planning.ollama import generate_ollama_text
 from ..planning.ollama_config import load_ollama_conversation_config
 from ..planning.snapshots import DailyPlanSnapshot
 from ..storage import load_json_cache, save_json_cache
+from .checkpoint_state import (
+    CHECKPOINT_RESPONSE_STATUS_DONE,
+    CHECKPOINT_RESPONSE_STATUS_SKIPPED,
+    CheckpointPendingResponse,
+    clear_checkpoint_pending_response,
+    load_checkpoint_pending_response,
+    mark_checkpoint_responded,
+)
 from .formatter import (
     format_plan_today_message,
     format_snapshot_regenerating_message,
@@ -65,6 +73,19 @@ def build_conversation_response_envelope(
 ) -> ConversationResponse:
     now = reference_time or datetime.now().astimezone()
     mention_user_id = author_user_id if mention_user else None
+    checkpoint_resolution = _resolve_checkpoint_pending_response(
+        message_text=message_text,
+        author_user_id=author_user_id,
+        reference_time=now,
+        mention_user_id=mention_user_id,
+    )
+    if checkpoint_resolution is not None:
+        return ConversationResponse(
+            content=checkpoint_resolution,
+            intent_id="checkpoint_response",
+            mention_user_id=mention_user_id,
+        )
+
     pending_resolution = _resolve_pending_confirmation(
         message_text=message_text,
         author_user_id=author_user_id,
@@ -558,6 +579,67 @@ def _clear_pending_confirmation(
             "resolved": True,
         },
     )
+
+
+_CHECKPOINT_DONE_REPLIES = frozenset(
+    {"yes", "y", "네", "예", "응", "완료", "done", "complete"}
+)
+_CHECKPOINT_SKIP_REPLIES = frozenset(
+    {"no", "n", "아니", "아니오", "건너뛰기", "건너뛰", "skip", "pass"}
+)
+
+
+def _resolve_checkpoint_pending_response(
+    *,
+    message_text: str,
+    author_user_id: int | None,
+    reference_time: datetime,
+    mention_user_id: int | None,
+) -> str | None:
+    if author_user_id is None:
+        return None
+
+    normalized = _normalize_message(message_text)
+    if normalized in _CHECKPOINT_DONE_REPLIES:
+        status = CHECKPOINT_RESPONSE_STATUS_DONE
+    elif normalized in _CHECKPOINT_SKIP_REPLIES:
+        status = CHECKPOINT_RESPONSE_STATUS_SKIPPED
+    else:
+        return None
+
+    pending = load_checkpoint_pending_response(user_id=author_user_id)
+    if pending is None or not pending.checkpoint_ids:
+        return None
+
+    for checkpoint_id in pending.checkpoint_ids:
+        mark_checkpoint_responded(
+            plan_date=pending.plan_date,
+            checkpoint_id=checkpoint_id,
+            status=status,
+            user_id=author_user_id,
+            responded_at=reference_time,
+        )
+    clear_checkpoint_pending_response(user_id=author_user_id)
+
+    return _format_checkpoint_response_ack(
+        pending=pending,
+        status=status,
+        mention_user_id=mention_user_id,
+    )
+
+
+def _format_checkpoint_response_ack(
+    *,
+    pending: CheckpointPendingResponse,
+    status: str,
+    mention_user_id: int | None,
+) -> str:
+    count = len(pending.checkpoint_ids)
+    if status == CHECKPOINT_RESPONSE_STATUS_DONE:
+        body = f"체크포인트 {count}건을 완료로 기록했어요. 같은 알림은 다시 보내지 않을게요."
+    else:
+        body = f"체크포인트 {count}건을 건너뛰기로 기록했어요. 같은 알림은 다시 보내지 않을게요."
+    return _prepend_mention(body, mention_user_id=mention_user_id)
 
 
 def _normalize_message(message_text: str) -> str:

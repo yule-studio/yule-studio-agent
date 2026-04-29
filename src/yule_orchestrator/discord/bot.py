@@ -15,6 +15,10 @@ from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_
 from ..planning.day_profile import DayProfile, DayProfileBriefingSlot, load_day_profile
 from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..storage import load_json_cache, save_json_cache
+from .checkpoint_state import (
+    filter_unresponded_checkpoints,
+    save_checkpoint_pending_response,
+)
 from .commands import register_discord_commands
 from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
@@ -669,6 +673,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 error_label=_checkpoint_channel_error_label(config),
             )
             resolved_channel_id = getattr(channel, "id", None) or channel_id or 0
+            plan_date = scan_time.date()
             async with self._checkpoint_lock():
                 due_checkpoints = await asyncio.to_thread(
                     _resolve_due_checkpoints,
@@ -680,13 +685,20 @@ def run_discord_bot(repo_root: Path) -> None:
                     resolved_channel_id,
                     due_checkpoints,
                 )
-            if not unsent_checkpoints:
+                actionable_checkpoints = await asyncio.to_thread(
+                    filter_unresponded_checkpoints,
+                    plan_date,
+                    unsent_checkpoints,
+                )
+            if not actionable_checkpoints:
                 return
 
+            include_response_prompt = config.notify_user_id is not None
             content = format_checkpoints_message(
-                unsent_checkpoints,
+                actionable_checkpoints,
                 reference_time=scan_time,
                 mention_user_id=config.notify_user_id,
+                include_response_prompt=include_response_prompt,
             )
             await _send_channel_message_chunks(
                 channel,
@@ -697,8 +709,17 @@ def run_discord_bot(repo_root: Path) -> None:
                 await asyncio.to_thread(
                     _mark_checkpoints_sent,
                     resolved_channel_id,
-                    unsent_checkpoints,
+                    actionable_checkpoints,
                 )
+                if include_response_prompt:
+                    await asyncio.to_thread(
+                        save_checkpoint_pending_response,
+                        user_id=config.notify_user_id,
+                        plan_date=plan_date,
+                        channel_id=resolved_channel_id,
+                        checkpoint_ids=[cp.checkpoint_id for cp in actionable_checkpoints],
+                        sent_at=scan_time,
+                    )
 
         def _checkpoint_lock(self) -> asyncio.Lock:
             if self._checkpoint_storage_lock is None:

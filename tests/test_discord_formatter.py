@@ -18,6 +18,7 @@ from yule_orchestrator.planning.models import (
     DailyPlanEnvelope,
     DailyPlanSummary,
     PlanningBlockBriefing,
+    PlanningCheckpoint,
     PlanningInputs,
     PlanningScheduledBriefing,
     PlanningSourceStatus,
@@ -123,6 +124,50 @@ class DiscordFormatterTestCase(unittest.TestCase):
         )
 
         self.assertIn("<@123456789>", message)
+
+    def test_format_checkpoints_message_appends_response_prompt_when_requested(self) -> None:
+        checkpoint = PlanningCheckpoint(
+            checkpoint_id="cp-1",
+            remind_at="2026-04-22T09:55:00+09:00",
+            source_event_uid="evt-1",
+            source_event_title="업무 수행",
+            block_id="blk-1",
+            block_title="업무 수행 마무리",
+            block_start="2026-04-22T09:00:00+09:00",
+            block_end="2026-04-22T10:00:00+09:00",
+            prompt="업무 수행 마무리 확인",
+        )
+
+        message = format_checkpoints_message(
+            [checkpoint],
+            reference_time=datetime.fromisoformat("2026-04-22T09:55:00+09:00"),
+            mention_user_id=42,
+            include_response_prompt=True,
+        )
+
+        self.assertIn("완료", message)
+        self.assertIn("건너뛰기", message)
+
+    def test_format_checkpoints_message_omits_response_prompt_by_default(self) -> None:
+        checkpoint = PlanningCheckpoint(
+            checkpoint_id="cp-1",
+            remind_at="2026-04-22T09:55:00+09:00",
+            source_event_uid="evt-1",
+            source_event_title="업무 수행",
+            block_id="blk-1",
+            block_title="업무 수행 마무리",
+            block_start="2026-04-22T09:00:00+09:00",
+            block_end="2026-04-22T10:00:00+09:00",
+            prompt="업무 수행 마무리 확인",
+        )
+
+        message = format_checkpoints_message(
+            [checkpoint],
+            reference_time=datetime.fromisoformat("2026-04-22T09:55:00+09:00"),
+        )
+
+        self.assertNotIn("완료", message)
+        self.assertNotIn("건너뛰기", message)
 
     def test_split_discord_message_breaks_long_text(self) -> None:
         message = "\n".join([f"line-{index:03d}" for index in range(400)])
