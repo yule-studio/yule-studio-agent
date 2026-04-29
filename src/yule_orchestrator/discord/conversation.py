@@ -649,12 +649,18 @@ def _resolve_checkpoint_pending_response(
         return None
 
     for checkpoint_id in pending.checkpoint_ids:
+        metadata = pending.checkpoint_metadata.get(checkpoint_id, {})
         mark_checkpoint_responded(
             plan_date=pending.plan_date,
             checkpoint_id=checkpoint_id,
             status=status,
             user_id=author_user_id,
             responded_at=reference_time,
+            source_event_uid=_metadata_str(metadata, "source_event_uid"),
+            source_event_title=_metadata_str(metadata, "source_event_title"),
+            block_title=_metadata_str(metadata, "block_title"),
+            checkpoint_kind=_metadata_str(metadata, "checkpoint_kind"),
+            block_minutes=_block_minutes_from_metadata(metadata),
         )
     clear_checkpoint_pending_response(user_id=author_user_id)
 
@@ -663,6 +669,29 @@ def _resolve_checkpoint_pending_response(
         status=status,
         mention_user_id=mention_user_id,
     )
+
+
+def _metadata_str(metadata: dict, key: str) -> str | None:
+    value = metadata.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _block_minutes_from_metadata(metadata: dict) -> int | None:
+    start_text = _metadata_str(metadata, "block_start")
+    end_text = _metadata_str(metadata, "block_end")
+    if start_text is None or end_text is None:
+        return None
+    try:
+        start = datetime.fromisoformat(start_text)
+        end = datetime.fromisoformat(end_text)
+    except ValueError:
+        return None
+    if end <= start:
+        return None
+    return max(1, int((end - start).total_seconds() // 60))
 
 
 def _format_checkpoint_response_ack(

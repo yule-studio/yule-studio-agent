@@ -24,6 +24,7 @@ class TaskCompletionEvent:
     source_event_title: Optional[str] = None
     block_title: Optional[str] = None
     checkpoint_kind: Optional[str] = None
+    block_minutes: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,33 @@ class TaskCompletionStats:
     total_count: int
     done_count: int
     skipped_count: int
+
+    @property
+    def done_ratio(self) -> float:
+        if self.total_count == 0:
+            return 0.0
+        return self.done_count / self.total_count
+
+    @property
+    def skip_ratio(self) -> float:
+        if self.total_count == 0:
+            return 0.0
+        return self.skipped_count / self.total_count
+
+
+@dataclass(frozen=True)
+class UserPatternSignals:
+    source_event_title: Optional[str]
+    total_count: int
+    done_count: int
+    skipped_count: int
+    typical_block_minutes: Optional[int]
+
+    @property
+    def skip_ratio(self) -> float:
+        if self.total_count == 0:
+            return 0.0
+        return self.skipped_count / self.total_count
 
     @property
     def done_ratio(self) -> float:
@@ -58,8 +86,9 @@ def record_task_completion_event(event: TaskCompletionEvent) -> None:
                 status,
                 user_id,
                 responded_at,
-                recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                recorded_at,
+                block_minutes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.plan_date.isoformat(),
@@ -72,6 +101,7 @@ def record_task_completion_event(event: TaskCompletionEvent) -> None:
                 event.user_id,
                 event.responded_at.isoformat(),
                 recorded_at,
+                event.block_minutes,
             ),
         )
 
@@ -131,6 +161,78 @@ def query_task_completion_stats(
     )
 
 
+def compute_user_pattern_signals(
+    *,
+    source_event_title: str,
+    user_id: Optional[int] = None,
+    days_back: Optional[int] = 60,
+    reference_time: Optional[datetime] = None,
+) -> UserPatternSignals:
+    db_path = _database_path()
+    if not db_path.exists():
+        return UserPatternSignals(
+            source_event_title=source_event_title,
+            total_count=0,
+            done_count=0,
+            skipped_count=0,
+            typical_block_minutes=None,
+        )
+
+    conditions: list[str] = ["source_event_title = ?"]
+    params: list[object] = [source_event_title]
+    if user_id is not None:
+        conditions.append("user_id = ?")
+        params.append(user_id)
+    if days_back is not None and days_back > 0:
+        now = reference_time or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days_back)).date().isoformat()
+        conditions.append("plan_date >= ?")
+        params.append(cutoff)
+
+    where_clause = " WHERE " + " AND ".join(conditions)
+
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
+        _ensure_schema(connection)
+        counts_row = connection.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_count
+            FROM task_completion_events
+            {where_clause}
+            """,
+            tuple(params),
+        ).fetchone()
+
+        duration_row = connection.execute(
+            f"""
+            SELECT AVG(block_minutes) AS typical_minutes
+            FROM task_completion_events
+            {where_clause} AND status = 'done' AND block_minutes IS NOT NULL
+            """,
+            tuple(params),
+        ).fetchone()
+
+    total_count = int(counts_row["total_count"] or 0) if counts_row else 0
+    done_count = int(counts_row["done_count"] or 0) if counts_row else 0
+    skipped_count = int(counts_row["skipped_count"] or 0) if counts_row else 0
+    typical_value = duration_row["typical_minutes"] if duration_row else None
+    typical_block_minutes: Optional[int]
+    if typical_value is None:
+        typical_block_minutes = None
+    else:
+        typical_block_minutes = max(1, int(round(float(typical_value))))
+
+    return UserPatternSignals(
+        source_event_title=source_event_title,
+        total_count=total_count,
+        done_count=done_count,
+        skipped_count=skipped_count,
+        typical_block_minutes=typical_block_minutes,
+    )
+
+
 def _ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
@@ -145,10 +247,12 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             user_id INTEGER NOT NULL,
             responded_at TEXT NOT NULL,
-            recorded_at REAL NOT NULL
+            recorded_at REAL NOT NULL,
+            block_minutes INTEGER
         )
         """
     )
+    _ensure_column(connection, "task_completion_events", "block_minutes", "INTEGER")
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_task_completion_events_user_status
@@ -167,6 +271,18 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         ON task_completion_events (checkpoint_kind, plan_date)
         """
     )
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    if any(row["name"] == column_name for row in rows):
+        return
+    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:

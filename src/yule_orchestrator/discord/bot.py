@@ -717,7 +717,7 @@ def run_discord_bot(repo_root: Path) -> None:
                         user_id=config.notify_user_id,
                         plan_date=plan_date,
                         channel_id=resolved_channel_id,
-                        checkpoint_ids=[cp.checkpoint_id for cp in actionable_checkpoints],
+                        checkpoints=list(actionable_checkpoints),
                         sent_at=scan_time,
                     )
 

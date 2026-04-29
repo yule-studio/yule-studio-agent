@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Optional, Sequence
 
 from ..integrations.calendar.models import CalendarTodo
 from ..integrations.github.issues import GitHubIssue
+from ..storage import compute_user_pattern_signals
 from .category_policy import resolve_naver_category_policy
 from .github_label_policy import resolve_github_label_policies
 from .models import PlanningInputs, PlanningTaskCandidate, ReminderItem
+
+USER_PATTERN_MIN_HISTORY = 2
+USER_PATTERN_SKIP_THRESHOLD = 0.5
+USER_PATTERN_MAX_SKIP_PENALTY = 15
+USER_PATTERN_DONE_THRESHOLD = 0.7
+USER_PATTERN_DONE_BONUS = 5
 
 
 def build_task_candidates(inputs: PlanningInputs) -> list[PlanningTaskCandidate]:
@@ -24,8 +32,56 @@ def build_task_candidates(inputs: PlanningInputs) -> list[PlanningTaskCandidate]
     for reminder in inputs.reminders:
         tasks.append(_build_reminder_candidate(inputs.plan_date, reminder))
 
+    tasks = [_apply_user_pattern_signals(task) for task in tasks]
+
     tasks.sort(key=lambda task: (-task.priority_score, task.due_date or "9999-12-31", task.title.lower()))
     return tasks
+
+
+def _apply_user_pattern_signals(task: PlanningTaskCandidate) -> PlanningTaskCandidate:
+    signals = compute_user_pattern_signals(source_event_title=task.title)
+    if signals.total_count < USER_PATTERN_MIN_HISTORY:
+        return task
+
+    score_delta = 0
+    extra_reasons: list[str] = []
+
+    if signals.skip_ratio >= USER_PATTERN_SKIP_THRESHOLD:
+        penalty = min(
+            USER_PATTERN_MAX_SKIP_PENALTY,
+            int(round(USER_PATTERN_MAX_SKIP_PENALTY * signals.skip_ratio)),
+        )
+        if penalty > 0:
+            score_delta -= penalty
+            extra_reasons.append(
+                f"최근 {signals.total_count}회 중 {signals.skipped_count}회 건너뛴 패턴 (-{penalty})"
+            )
+    elif signals.done_ratio >= USER_PATTERN_DONE_THRESHOLD:
+        score_delta += USER_PATTERN_DONE_BONUS
+        extra_reasons.append(
+            f"최근 {signals.total_count}회 중 {signals.done_count}회 완료한 패턴 (+{USER_PATTERN_DONE_BONUS})"
+        )
+
+    estimated_minutes = task.estimated_minutes
+    typical_minutes = signals.typical_block_minutes
+    if typical_minutes is not None and typical_minutes > 0:
+        if abs(typical_minutes - estimated_minutes) >= 15:
+            extra_reasons.append(
+                f"평소 {typical_minutes}분 슬롯에서 마무리하는 패턴 → estimated_minutes 조정"
+            )
+            estimated_minutes = typical_minutes
+
+    if score_delta == 0 and estimated_minutes == task.estimated_minutes:
+        return task
+
+    new_score = task.priority_score + score_delta
+    return replace(
+        task,
+        priority_score=new_score,
+        priority_level=_priority_level(new_score),
+        estimated_minutes=estimated_minutes,
+        reasons=tuple([*task.reasons, *extra_reasons]),
+    )
 
 
 def _build_todo_candidate(plan_date: date, todo: CalendarTodo) -> PlanningTaskCandidate:

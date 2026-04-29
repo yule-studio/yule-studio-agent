@@ -16,6 +16,8 @@ from .local_cache import (
 from .task_history import (
     TaskCompletionEvent,
     TaskCompletionStats,
+    UserPatternSignals,
+    compute_user_pattern_signals,
     query_task_completion_stats,
     record_task_completion_event,
 )
@@ -26,8 +28,10 @@ __all__ = [
     "LocalCacheEntry",
     "TaskCompletionEvent",
     "TaskCompletionStats",
+    "UserPatternSignals",
     "cleanup_calendar_state_records",
     "cleanup_json_cache",
+    "compute_user_pattern_signals",
     "list_json_cache_entries",
     "list_calendar_state_records",
     "load_json_cache",

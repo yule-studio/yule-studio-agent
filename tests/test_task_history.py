@@ -13,6 +13,7 @@ except ModuleNotFoundError:
 
 from yule_orchestrator.storage import (
     TaskCompletionEvent,
+    compute_user_pattern_signals,
     query_task_completion_stats,
     record_task_completion_event,
 )
@@ -140,6 +141,53 @@ class TaskHistoryTestCase(unittest.TestCase):
 
         self.assertEqual(stats.total_count, 0)
         self.assertEqual(stats.done_ratio, 0.0)
+
+    def test_compute_user_pattern_signals_returns_skip_ratio_and_typical_minutes(self) -> None:
+        plan_date = date(2026, 4, 24)
+        # Two skipped events for "PR 리뷰"
+        for index in range(2):
+            record_task_completion_event(
+                TaskCompletionEvent(
+                    plan_date=plan_date,
+                    checkpoint_id=f"cp-skip-{index}",
+                    status="skipped",
+                    user_id=777,
+                    responded_at=datetime(2026, 4, 24, 11, 0, tzinfo=timezone.utc),
+                    source_event_title="PR 리뷰",
+                    block_minutes=60,
+                )
+            )
+        # Three done events with 90-minute blocks
+        for index in range(3):
+            record_task_completion_event(
+                TaskCompletionEvent(
+                    plan_date=plan_date,
+                    checkpoint_id=f"cp-done-{index}",
+                    status="done",
+                    user_id=777,
+                    responded_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                    source_event_title="PR 리뷰",
+                    block_minutes=90,
+                )
+            )
+
+        signals = compute_user_pattern_signals(
+            source_event_title="PR 리뷰",
+            user_id=777,
+            reference_time=datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(signals.total_count, 5)
+        self.assertEqual(signals.done_count, 3)
+        self.assertEqual(signals.skipped_count, 2)
+        self.assertAlmostEqual(signals.skip_ratio, 0.4)
+        self.assertAlmostEqual(signals.done_ratio, 0.6)
+        self.assertEqual(signals.typical_block_minutes, 90)
+
+    def test_compute_user_pattern_signals_returns_empty_when_no_history(self) -> None:
+        signals = compute_user_pattern_signals(source_event_title="never seen")
+        self.assertEqual(signals.total_count, 0)
+        self.assertIsNone(signals.typical_block_minutes)
 
 
 if __name__ == "__main__":
