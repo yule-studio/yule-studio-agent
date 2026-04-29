@@ -330,6 +330,78 @@ class DiscordConversationTestCase(unittest.TestCase):
         self.assertNotEqual(envelope.intent_id, "checkpoint_response")
         mark_responded_mock.assert_not_called()
 
+    @patch("yule_orchestrator.discord.conversation.clear_checkpoint_pending_response")
+    @patch("yule_orchestrator.discord.conversation.mark_checkpoint_responded")
+    @patch("yule_orchestrator.discord.conversation.load_checkpoint_pending_response")
+    def test_done_replies_recognize_korean_and_chat_slang_variants(
+        self,
+        load_pending_mock,
+        mark_responded_mock,
+        clear_pending_mock,
+    ) -> None:
+        plan_date = datetime.fromisoformat("2026-04-24T00:00:00+09:00").date()
+        for reply in ["넵", "응", "ㅇㅇ", "ok", "OK", "Yeah!", "완료요", "끝났어요", "  done  "]:
+            load_pending_mock.reset_mock()
+            mark_responded_mock.reset_mock()
+            clear_pending_mock.reset_mock()
+            load_pending_mock.return_value = CheckpointPendingResponse(
+                user_id=777,
+                plan_date=plan_date,
+                channel_id=42,
+                checkpoint_ids=("cp-1",),
+                sent_at=datetime.fromisoformat("2026-04-24T09:55:00+09:00"),
+            )
+
+            envelope = build_conversation_response_envelope(
+                reply,
+                author_user_id=777,
+                reference_time=datetime.fromisoformat("2026-04-24T10:00:00+09:00"),
+            )
+
+            self.assertEqual(envelope.intent_id, "checkpoint_response", f"reply={reply!r}")
+            mark_responded_mock.assert_called_once()
+            self.assertEqual(
+                mark_responded_mock.call_args.kwargs["status"],
+                CHECKPOINT_RESPONSE_STATUS_DONE,
+                f"reply={reply!r}",
+            )
+
+    @patch("yule_orchestrator.discord.conversation.clear_checkpoint_pending_response")
+    @patch("yule_orchestrator.discord.conversation.mark_checkpoint_responded")
+    @patch("yule_orchestrator.discord.conversation.load_checkpoint_pending_response")
+    def test_skip_replies_recognize_korean_and_chat_slang_variants(
+        self,
+        load_pending_mock,
+        mark_responded_mock,
+        clear_pending_mock,
+    ) -> None:
+        plan_date = datetime.fromisoformat("2026-04-24T00:00:00+09:00").date()
+        for reply in ["아니야", "ㄴㄴ", "Nope.", "스킵", "패스", "  skip!  "]:
+            load_pending_mock.reset_mock()
+            mark_responded_mock.reset_mock()
+            clear_pending_mock.reset_mock()
+            load_pending_mock.return_value = CheckpointPendingResponse(
+                user_id=777,
+                plan_date=plan_date,
+                channel_id=42,
+                checkpoint_ids=("cp-1",),
+                sent_at=datetime.fromisoformat("2026-04-24T09:55:00+09:00"),
+            )
+
+            envelope = build_conversation_response_envelope(
+                reply,
+                author_user_id=777,
+                reference_time=datetime.fromisoformat("2026-04-24T10:00:00+09:00"),
+            )
+
+            self.assertEqual(envelope.intent_id, "checkpoint_response", f"reply={reply!r}")
+            mark_responded_mock.assert_called_once()
+            self.assertEqual(
+                mark_responded_mock.call_args.kwargs["status"],
+                CHECKPOINT_RESPONSE_STATUS_SKIPPED,
+                f"reply={reply!r}",
+            )
+
 
 def _user(user_id: int, name: str):
     class User:

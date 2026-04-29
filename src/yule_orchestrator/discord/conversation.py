@@ -511,8 +511,12 @@ def _resolve_pending_confirmation(
     if author_user_id is None or conversation_scope is None:
         return None
 
-    normalized = _normalize_message(message_text)
-    if normalized not in {"yes", "y", "네", "예", "응", "아니", "아니오", "no", "n"}:
+    normalized = _normalize_checkpoint_reply(message_text)
+    if normalized in _CHECKPOINT_DONE_REPLIES:
+        is_skip = False
+    elif normalized in _CHECKPOINT_SKIP_REPLIES:
+        is_skip = True
+    else:
         return None
 
     entry = load_json_cache(
@@ -533,7 +537,7 @@ def _resolve_pending_confirmation(
         conversation_scope=conversation_scope,
         reference_time=reference_time,
     )
-    if normalized in {"no", "n", "아니", "아니오"}:
+    if is_skip:
         return _prepend_mention("좋아요. 여기서는 더 이어서 브리핑하지 않을게요.", mention_user_id=mention_user_id)
 
     snapshot = load_plan_today_snapshot(reference_time.date())
@@ -585,11 +589,41 @@ def _clear_pending_confirmation(
 
 
 _CHECKPOINT_DONE_REPLIES = frozenset(
-    {"yes", "y", "네", "예", "응", "완료", "done", "complete"}
+    {
+        # English
+        "yes", "y", "yeah", "yep", "yup", "ok", "okay",
+        "done", "complete", "completed", "finish", "finished",
+        # Korean (formal/informal)
+        "네", "넵", "넹", "예", "응", "엉", "어", "응응",
+        "오케이", "오케", "오키",
+        "완료", "완수", "완료요", "완료함", "완료했어", "완료했어요",
+        "끝", "끝남", "끝났어", "끝났어요", "했어", "했음", "했어요",
+        # Korean chat slang (자모)
+        "ㅇㅇ", "ㅇㅋ", "ㄱㄱ",
+    }
 )
 _CHECKPOINT_SKIP_REPLIES = frozenset(
-    {"no", "n", "아니", "아니오", "건너뛰기", "건너뛰", "skip", "pass"}
+    {
+        # English
+        "no", "n", "nope", "nah",
+        "skip", "skipped", "pass",
+        # Korean (formal/informal)
+        "아니", "아니오", "아니요", "아니야", "아냐",
+        "안해", "안할래", "안 해",
+        "패스", "패스해", "패스할래",
+        "건너뛰기", "건너뛰", "건너뛰어", "건너뜀", "건너뛸래", "건너뛸게",
+        "스킵", "스킵해", "스킵할래",
+        # Korean chat slang (자모)
+        "ㄴㄴ", "ㄴㄱ",
+    }
 )
+
+_CHECKPOINT_REPLY_TRIM_CHARS = "!?.~,。!?.~"
+
+
+def _normalize_checkpoint_reply(message_text: str) -> str:
+    collapsed = " ".join(message_text.lower().split())
+    return collapsed.strip(_CHECKPOINT_REPLY_TRIM_CHARS)
 
 
 def _resolve_checkpoint_pending_response(
@@ -602,7 +636,7 @@ def _resolve_checkpoint_pending_response(
     if author_user_id is None:
         return None
 
-    normalized = _normalize_message(message_text)
+    normalized = _normalize_checkpoint_reply(message_text)
     if normalized in _CHECKPOINT_DONE_REPLIES:
         status = CHECKPOINT_RESPONSE_STATUS_DONE
     elif normalized in _CHECKPOINT_SKIP_REPLIES:
