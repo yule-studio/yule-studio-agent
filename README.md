@@ -131,6 +131,7 @@ YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-cat
 # YULE_HOME_AREA=신정동
 # YULE_WORK_AREA=마곡
 # YULE_WORK_MODE_ENABLED=true
+# YULE_LUNCH_DURATION_MINUTES=60
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
@@ -172,7 +173,9 @@ DISCORD_GUILD_ID=
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
-- `YULE_WORK_MODE_ENABLED`는 회사 업무 우선 모드 토글입니다. 기본값은 `true`이며, `true`일 때는 `업무 수행` 일정 시간이 차단되어 todo는 그 외 시간대로만 배치되고, 다른 캘린더 이벤트는 모두 퇴근 이후 일정으로 안내됩니다. `false`로 두면 자유 모드로 동작해 `업무 수행` 일정을 무시하고 todo 우선순위 기준으로 하루 전체 시간을 자유롭게 분배합니다.
+- `YULE_WORK_MODE_ENABLED`는 회사 업무 우선 모드 토글입니다. 기본값은 `true`이며, `true`일 때는 `업무 수행` 일정 시간 안에는 네이버 카테고리 `회사 업무`(기본 색상 코드 27) todo만 배치되고, 그 외 todo는 점심·퇴근 후 같은 비업무 시간으로 분배됩니다. `false`로 두면 자유 모드로 동작해 `업무 수행` 일정을 무시하고 todo 우선순위 기준으로 하루 전체 시간을 자유롭게 분배합니다.
+- `YULE_LUNCH_DURATION_MINUTES`는 점심 시간 길이(분)입니다. 기본값은 60이며, `YULE_LUNCH_START_TIME`부터 이 길이만큼은 가상의 차단 블록으로 처리되어 어떤 focus block도 배치되지 않습니다. 점심에 매번 산책처럼 고정 활동이 있어 일정 잡지 않고 비워두고 싶을 때 사용합니다.
+- GitHub 이슈는 제목에 도메인/엔티티/스키마/마이그레이션/infrastructure 같은 기반 키워드가 있으면 우선순위가 추가로 올라가고, ui/디자인/댓글/색상 같은 표면 키워드가 있으면 낮아집니다. 실제 개발 순서(예: 도메인 모델 → 회원가입 기능 → UI)에 맞춰 자동으로 정렬되도록 돕는 휴리스틱입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
