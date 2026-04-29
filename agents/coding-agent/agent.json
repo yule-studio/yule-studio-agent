@@ -1,13 +1,22 @@
 {
   "id": "coding-agent",
-  "name": "Coding Agent",
-  "description": "Implements approved development tasks with a single executor and multiple AI advisors.",
+  "name": "Coding Agent (Engineering Department)",
+  "type": "department",
+  "description": "Engineering department gateway. Receives coding requests from upstream agents (planning-agent, orchestrator) and delegates to its role members (frontend-engineer, backend-engineer, designer, qa-engineer, tech-lead). Members share the participants/integrations pool defined here so any role can be backed by Claude, Codex, Gemini, Ollama, or GitHub Copilot depending on the task.",
+  "members": [
+    "frontend-engineer",
+    "backend-engineer",
+    "designer",
+    "qa-engineer",
+    "tech-lead"
+  ],
   "execution_mode": "single_executor_multi_advisor",
   "default_executor": "claude",
   "instruction_entry": "agents/coding-agent/CLAUDE.md",
   "policies": [
     "policies/runtime/common/safety.md",
     "policies/runtime/common/context-loading.md",
+    "policies/runtime/agents/coding-agent/team-structure.md",
     "policies/runtime/agents/coding-agent/version-control.md",
     "policies/runtime/agents/coding-agent/workflow.md",
     "policies/runtime/agents/coding-agent/testing.md"
