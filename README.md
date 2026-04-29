@@ -13,6 +13,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 - Planning Agent 기반 daily plan 생성
 - 시간 블록 브리핑과 체크포인트 생성
 - Discord 슬래시 명령 기반 최소 봇 실행
+- Discord 대화형 Planning 응답과 Ollama 기반 자연어 응답
 
 ## 디렉토리 구조
 
@@ -113,25 +114,51 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
+# YULE_NAVER_CATEGORY_POLICY_JSON=
+# YULE_GITHUB_LABEL_POLICY_FILE=policies/runtime/agents/planning-agent/github-label-policy.json
+# YULE_GITHUB_LABEL_POLICY_JSON=
 # YULE_SQLITE_BUSY_TIMEOUT_MS=30000
 # PLANNING_DAILY_SNAPSHOT_SECONDS=21600
+# OLLAMA_PLANNING_ENABLED=false
+# OLLAMA_ENDPOINT=http://localhost:11434
+# OLLAMA_MODEL=gemma3:latest
+# OLLAMA_TIMEOUT_SECONDS=20
+# OLLAMA_FALLBACK_MODEL=
+# OLLAMA_RETRY_COUNT=1
+# OLLAMA_DISCORD_ENABLED=false
+# OLLAMA_DISCORD_ENDPOINT=http://localhost:11434
+# OLLAMA_DISCORD_MODEL=gemma3:latest
+# OLLAMA_DISCORD_TIMEOUT_SECONDS=20
+# OLLAMA_DISCORD_FALLBACK_MODEL=
+# OLLAMA_DISCORD_RETRY_COUNT=1
 # YULE_WAKE_TIME=06:00
 # YULE_WORK_START_TIME=09:00
 # YULE_COMMUTE_MINUTES=45
 # YULE_DEPARTURE_BUFFER_MINUTES=10
 # YULE_HOME_AREA=신정동
 # YULE_WORK_AREA=마곡
+# YULE_WORK_MODE_ENABLED=true
+# YULE_LUNCH_DURATION_MINUTES=60
+# YULE_TIMEZONE=Asia/Seoul
 
 DISCORD_BOT_TOKEN=
 # DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 # DISCORD_DAILY_CHANNEL_ID=
+# DISCORD_DAILY_CHANNEL_NAME=
+# DISCORD_DEBUG_CHANNEL_ID=
+# DISCORD_DEBUG_CHANNEL_NAME=
 # DISCORD_CHECKPOINT_CHANNEL_ID=
+# DISCORD_CHECKPOINT_CHANNEL_NAME=
+# DISCORD_CONVERSATION_CHANNEL_ID=
+# DISCORD_CONVERSATION_CHANNEL_NAME=
 # DISCORD_NOTIFY_USER_ID=
-# DISCORD_DAILY_BRIEFING_TIME=06:00
 # DISCORD_CHECKPOINT_PREFETCH_MINUTES=5
+# DISCORD_PREPARATION_RETRY_COUNT=2
+# DISCORD_PREPARATION_RETRY_DELAY_SECONDS=15
 
 # GITHUB_ISSUES_CACHE_SECONDS=300
+# GITHUB_PULL_REQUESTS_CACHE_SECONDS=300
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
@@ -145,10 +172,26 @@ DISCORD_GUILD_ID=
 - 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
 - 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
 - `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
+- `YULE_NAVER_CATEGORY_POLICY_JSON`을 설정하면 파일을 읽지 않고 환경 변수에 담긴 JSON 본문을 바로 정책으로 사용합니다. CI나 컨테이너 환경처럼 파일을 두기 어려울 때 사용합니다.
 - `YULE_SQLITE_BUSY_TIMEOUT_MS`로 Discord Bot, warmup, snapshot이 같은 SQLite를 만질 때 잠금 대기 시간을 조정할 수 있습니다. 기본값은 30000ms입니다.
 - `PLANNING_DAILY_SNAPSHOT_SECONDS`로 daily-plan snapshot 유효 시간을 조정할 수 있습니다. 기본값은 6시간입니다.
-- `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 아침 브리핑의 기상/출발/업무 시작 기준을 조정할 수 있습니다.
+- `OLLAMA_PLANNING_ENABLED=true`를 설정하면 `planning daily`, `planning snapshot`, `daily warmup`에서 Ollama가 아침 브리핑 문장을 다듬습니다.
+- `OLLAMA_ENDPOINT`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`로 로컬 또는 서버 Ollama 연결 정보를 조정할 수 있습니다.
+- `OLLAMA_FALLBACK_MODEL`을 지정하면 Planning Ollama 호출이 실패하거나 응답 검증에 실패했을 때 fallback 모델로 한 번 더 시도합니다.
+- `OLLAMA_RETRY_COUNT`로 Planning Ollama 호출의 재시도 횟수를 조정할 수 있습니다. 기본값은 1입니다.
+- `OLLAMA_DISCORD_ENABLED=true`를 설정하면 Discord 대화형 응답도 snapshot 기반으로 Ollama를 사용합니다.
+- `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`, `OLLAMA_DISCORD_FALLBACK_MODEL`, `OLLAMA_DISCORD_RETRY_COUNT`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트/재시도 정책으로 분리할 수 있습니다. 미지정 시 Planning 측 설정을 그대로 따릅니다.
+- Ollama 응답은 모델이 단일 줄바꿈으로 문단을 끊어도 Discord 표시용으로 문단 사이 빈 줄을 자동 보장합니다.
+- CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
+- `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
 - `YULE_HOME_AREA`, `YULE_WORK_AREA`는 아침 브리핑 문구에 사용하는 출발/도착 지역 이름입니다.
+- `YULE_WORK_MODE_ENABLED`는 회사 업무 우선 모드 토글입니다. 기본값은 `true`이며, `true`일 때는 `업무 수행` 일정 시간 안에는 네이버 카테고리 `회사 업무`(기본 색상 코드 27) todo만 배치되고, 그 외 todo는 점심·퇴근 후 같은 비업무 시간으로 분배됩니다. `false`로 두면 자유 모드로 동작해 `업무 수행` 일정을 무시하고 todo 우선순위 기준으로 하루 전체 시간을 자유롭게 분배합니다.
+- `YULE_LUNCH_DURATION_MINUTES`는 점심 시간 길이(분)입니다. 기본값은 60이며, `YULE_LUNCH_START_TIME`부터 이 길이만큼은 가상의 차단 블록으로 처리되어 어떤 focus block도 배치되지 않습니다. 점심에 매번 산책처럼 고정 활동이 있어 일정 잡지 않고 비워두고 싶을 때 사용합니다.
+- `YULE_TIMEZONE`은 Planning Agent와 Discord 자동 브리핑이 사용할 IANA 타임존 이름입니다(`Asia/Seoul`, `America/New_York` 등). 비워두면 시스템 로컬 타임존을 그대로 사용합니다. 여행이나 원격 근무로 시스템 타임존이 바뀌어도 브리핑 시간을 한국 기준에 고정하고 싶을 때 사용합니다.
+- GitHub 이슈는 제목에 도메인/엔티티/스키마/마이그레이션/infrastructure 같은 기반 키워드가 있으면 우선순위가 추가로 올라가고, ui/디자인/댓글/색상 같은 표면 키워드가 있으면 낮아집니다. 실제 개발 순서(예: 도메인 모델 → 회원가입 기능 → UI)에 맞춰 자동으로 정렬되도록 돕는 휴리스틱입니다.
+- GitHub 이슈에 라벨이 붙어 있으면 `policies/runtime/agents/planning-agent/github-label-policy.json` 정책에 따라 추가 우선순위 보정이 적용됩니다. 기본 매핑은 `infrastructure: +30`, `domain: +25`, `bug: +25`, `feature: +10`, `chore: -5`, `ui: -10` 등이며, `YULE_GITHUB_LABEL_POLICY_FILE` 또는 `YULE_GITHUB_LABEL_POLICY_JSON`으로 정책을 덮어쓸 수 있습니다.
+- GitHub 이슈는 fetch 시 라벨, 본문(body), 담당자, 마지막 갱신 시각까지 함께 가져와 캐시에 저장되며, 정책 기반 우선순위와 향후 확장(라벨 그룹별 알림 등)에 활용됩니다.
+- 네이버 카테고리 정책에 `"flexible": true`를 추가하면 해당 색상 코드가 붙은 todo는 시간 블록에 자동 배정되지 않고 추천 작업 목록에만 노출됩니다. mail-mail 정리 같이 정해진 시간 없이 자유롭게 처리하는 상시 작업 분류용입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
 - 자동 탐지된 할 일 캘린더가 여러 개일 때는 `NAVER_CALDAV_TODO_CALENDAR` 설정을 우선합니다.
@@ -158,11 +201,36 @@ DISCORD_GUILD_ID=
 - 캐시를 무시하고 새로 가져오려면 `--force-refresh`를 사용합니다.
 - Discord Bot 실행에는 `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`가 필요합니다.
 - `DISCORD_APPLICATION_ID`는 선택값입니다. 비워두면 토큰 기준으로 실제 Discord 애플리케이션 ID를 자동 사용합니다.
-- `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
-- `DISCORD_DAILY_CHANNEL_ID`와 `DISCORD_DAILY_BRIEFING_TIME`을 함께 넣으면 봇이 살아 있는 동안 매일 해당 시각에 자동 브리핑을 보냅니다.
+- `DISCORD_DAILY_CHANNEL_ID`, `DISCORD_CHECKPOINT_CHANNEL_ID`, `DISCORD_CONVERSATION_CHANNEL_ID`에는 애플리케이션 ID가 아니라 메시지를 보낼 Discord 텍스트 채널 ID를 넣습니다.
+- `DISCORD_DAILY_CHANNEL_NAME`, `DISCORD_CHECKPOINT_CHANNEL_NAME`, `DISCORD_CONVERSATION_CHANNEL_NAME`을 같이 넣으면 채널 ID가 바뀌었거나 잘못 들어간 경우 이름 기반 fallback 으로 채널을 다시 찾을 수 있습니다.
+- `DISCORD_DEBUG_CHANNEL_ID` 또는 `DISCORD_DEBUG_CHANNEL_NAME`을 넣으면 자동 준비 단계(`calendar sync`, `github sync`, `planning snapshot`)의 성공/실패 결과를 Discord 메시지로도 확인할 수 있습니다.
+- `DISCORD_CONVERSATION_CHANNEL_ID` 또는 `DISCORD_CONVERSATION_CHANNEL_NAME`은 대화 채널 지정용입니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=mention-only`가 기본값이며, 이때는 봇 멘션이 있을 때만 응답합니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=plain-message-or-mention`으로 바꾸면 지정한 대화 채널에서 평문 메시지에도 응답합니다.
+- `DISCORD_CONVERSATION_REPLY_MODE=disabled`로 두면 대화형 응답을 완전히 끌 수 있습니다.
+- 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
+- `DISCORD_DAILY_CHANNEL_ID`(또는 NAME)와 `DISCORD_CONVERSATION_CHANNEL_ID`(또는 NAME)를 **다르게** 설정하면 DAILY 채널은 자동 브리핑 전용 broadcast 채널로 잠기고, 사용자가 그곳에서 메시지를 보내거나 봇을 멘션해도 응답하지 않습니다. 채팅은 오직 CONVERSATION 채널에서만 이루어집니다. DAILY와 CONVERSATION을 같은 채널로 두거나 CONVERSATION을 비워 fallback으로 두면, 같은 채널 안에서 자동 브리핑과 채팅이 함께 이루어집니다.
+- 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
+- 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
+- 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.
+- 아침 준비 작업은 `YULE_WAKE_TIME` 기준으로 자동 수행되며, `10분 전 calendar sync`, `5분 전 github sync`, `2분 전 planning snapshot` 순서로 진행합니다.
+- `DISCORD_DAILY_BRIEFING_TIME`은 더 이상 사용하지 않으며, 설정되어 있어도 경고만 출력하고 무시합니다.
+- 준비 단계가 실패하면 `DISCORD_PREPARATION_RETRY_COUNT`와 `DISCORD_PREPARATION_RETRY_DELAY_SECONDS` 기준으로 자동 재시도합니다.
+- 채널 ID가 잘못되었어도 해당 이름 설정이 있으면 이름 기반 fallback 을 먼저 시도하고, 시작 로그와 런타임 경고에서 그 사실을 알려줍니다.
+- `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
+- Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
+- 체크포인트 알림은 응답 안내 푸터를 함께 보내며, 사용자가 같은 채널에서 `완료/yes/네/응` 또는 `건너뛰기/skip/아니/ㄴㄴ`처럼 답하면 해당 체크포인트는 done/skipped 상태로 닫혀 다시 알리지 않습니다. 한국어 정중/반말, 영어 변형, 채팅 자모(ㅇㅇ/ㄴㄴ)까지 인식하며, 좌우 공백과 끝 문장부호는 자동으로 정규화합니다.
+- 닫힌 응답은 SQLite `task_completion_events` 테이블에 누적 저장되어, 같은 종류의 작업을 자주 미루거나 빠르게 끝내는 패턴을 다음 우선순위/소요 시간 추정에 자동 반영합니다(skip 비율 ≥ 50% 면 우선순위 -최대 15, done 비율 ≥ 70% 면 +5, 평균 block_minutes 가 기본값과 15분 이상 차이나면 estimated_minutes 교체).
+- snapshot이 없을 때 동작은 모든 경로(`/plan_today`, 자동 브리핑, 채팅)에서 동일하게 처리됩니다. 즉시 "브리핑 데이터를 준비하고 있습니다" ack를 보낸 뒤, 백그라운드에서 캘린더 sync, GitHub 이슈, planning snapshot을 자동으로 만들고 follow-up 메시지로 실제 브리핑을 이어 보냅니다.
+- 같은 날짜에 동시 요청이 들어와도 per-date 잠금 덕분에 자동 재생성 파이프라인은 한 번만 실행됩니다.
+- 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
+- 슬래시 명령(`/plan_today`, `/checkpoints_now`)은 interaction 토큰이 만료된 상황(`Unknown interaction`)을 만나면 traceback 대신 한 줄 경고만 남기고 graceful 하게 종료합니다.
 - `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
+- `GITHUB_PULL_REQUESTS_CACHE_SECONDS`를 지정하면 GitHub open PR 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
+- Planning Agent는 open issue뿐 아니라 open pull request도 함께 fetch해서 작업 후보로 다룹니다. PR은 ready 상태면 +10, draft면 -10이 우선순위에 반영되고 라벨 정책도 동일하게 적용됩니다. 자동 준비 단계의 `github_sync` 결과 metadata에 `pull_request_count`도 함께 기록됩니다.
+- 자동 준비 단계는 표준 출력에 구조화된 JSON 로그를 남기고, debug 채널을 지정한 경우 Discord에서도 같은 흐름을 확인할 수 있습니다.
 
 ## 실행
 
@@ -230,6 +298,7 @@ yule calendar events --start-date 2026-04-21 --end-date 2026-04-25 --json
 - Planning Agent는 캘린더 일정, 캘린더 할 일, GitHub open issue, reminder JSON을 받아 daily plan을 만듭니다.
 - 현재 버전은 설명 가능한 규칙 기반 우선순위, 추천 시간 블록, 이벤트 설명 기반 세부 실행 블록, 10분 전/5분 전 체크포인트 생성에 집중합니다.
 - 기본 출력은 짧은 `discord_briefing`과 상세한 `morning_briefing`, `time_block_briefings`, `checkpoints`를 함께 제공합니다.
+- snapshot에 저장되는 scheduled briefing은 `morning`, `work_start`, `lunch`, `evening` 4개입니다. Discord 자동 발송도 같은 4개 슬롯을 사용합니다.
 - 아침 브리핑은 기상, 출근 준비, 권장 출발 시간, 업무 시작 시간을 구분해서 안내합니다.
 - 추천 집중 작업은 기본적으로 `YULE_WORK_START_TIME` 이후 시간대에 배치합니다.
 - 일정 이벤트가 없으면 전체 일정 작성 안내를 포함합니다.
@@ -244,7 +313,9 @@ yule planning daily --date 2026-04-22 --github-limit 10
 yule planning daily --reminders-file reminders.json --json
 yule planning daily --use-ollama --json
 yule planning snapshot --json
+yule planning snapshot --use-ollama --json
 yule daily warmup --json
+yule daily warmup --use-ollama --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 ```
 
@@ -270,8 +341,10 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 - `/plan_today`는 외부 API를 직접 기다리지 않고 저장된 daily-plan snapshot을 Discord 메시지로 정리해 보여줍니다.
 - `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
-- snapshot이 없으면 `/plan_today`는 로컬 동기화와 snapshot 생성 명령을 안내합니다.
-- snapshot이 만료된 상태면 “마지막 동기화 기준 브리핑입니다” 문구를 붙입니다.
+- snapshot이 없으면 `/plan_today`도 채팅 경로와 동일하게 즉시 "브리핑 데이터를 준비하고 있습니다" 안내 후 백그라운드에서 snapshot을 만들고 followup으로 브리핑을 이어 보냅니다.
+- snapshot이 만료된 상태면 "마지막 동기화 기준 브리핑입니다" 문구를 붙입니다.
+- `/plan_today` 응답과 자동 브리핑 메시지 상단에는 표시 시점의 실제 현재 시각(`_지금 YYYY-MM-DD HH:MM 기준_`)이 자동으로 추가되어, 6시간 캐시된 snapshot을 한참 뒤에 보더라도 사용자가 보는 시각과 메시지의 "지금" 표기가 어긋나지 않습니다.
+- 옛 snapshot에 남아 있을 수 있는 "현재 X시 Y분입니다" 형태의 환각 시각 줄은 표시 직전에 자동으로 제거됩니다.
 - 자동 브리핑 전송 시간은 `runtime-metrics`에 `discord_send` 단계로 저장됩니다.
 
 ```bash
@@ -291,7 +364,9 @@ yule discord bot
 05:50 yule calendar sync --force-refresh --json
 05:55 yule github issues --limit 30 --force-refresh
 05:58 yule planning snapshot --json
-06:00 Discord bot scheduled briefing
+06:00 Discord bot scheduled morning briefing
+13:00 Discord bot scheduled lunch briefing
+18:00 Discord bot scheduled evening briefing
 ```
 
 이 구조에서는 Discord 봇이 브리핑 시점에 캘린더나 GitHub API 응답을 기다리지 않습니다.

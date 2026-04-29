@@ -36,6 +36,7 @@ Quick start after bootstrap:
   yule calendar categories
   yule daily warmup --json
   yule planning snapshot --json
+  yule discord bot
 EOF
 }
 

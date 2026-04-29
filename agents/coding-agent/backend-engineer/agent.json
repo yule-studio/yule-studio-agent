@@ -1,0 +1,17 @@
+{
+  "id": "backend-engineer",
+  "name": "Backend Engineer",
+  "type": "role",
+  "department": "coding-agent",
+  "description": "도메인 모델, 비즈니스 로직, API와 데이터 계층을 구현하는 부서 멤버. 기획/제품의 요구사항을 받아 서비스가 작동하는 코어를 만든다.",
+  "instruction_entry": "agents/coding-agent/backend-engineer/CLAUDE.md",
+  "runner": null,
+  "responsibilities": [
+    "도메인 모델과 엔티티, 서비스 계층 설계와 구현",
+    "API 엔드포인트 정의(요청/응답 계약)와 라우팅",
+    "데이터 계층(저장소, 마이그레이션) 작업",
+    "인증, 권한, 트랜잭션, 외부 시스템 연동 책임"
+  ],
+  "preferred_advisors": ["claude", "codex", "gemini"],
+  "phase": "skeleton"
+}

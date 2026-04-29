@@ -1,22 +1,35 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import date, datetime
 import json
 import time
 from typing import Any, Callable, Optional, Sequence, TypeVar
 
 from ..integrations.calendar import list_naver_calendar_items
+from ..integrations.calendar.models import CalendarQueryResult
 from ..integrations.github.issues import list_open_issues
+from ..integrations.github.issues import GitHubIssue
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
 from ..planning import (
     build_daily_plan,
-    collect_planning_inputs,
+    build_planning_inputs,
     load_reminder_items,
+    PlanningSourceStatus,
     save_daily_plan_snapshot,
 )
 from ..storage import local_cache_database_path
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class WarmupFetchPayload:
+    calendar_result: Optional[CalendarQueryResult]
+    github_issues: Optional[Sequence[GitHubIssue]]
+    source_statuses: Sequence[dict[str, Any]]
+    warnings: Sequence[str]
 
 
 def run_daily_warmup_command(
@@ -28,6 +41,10 @@ def run_daily_warmup_command(
     force_refresh: bool,
     reminder_lead_minutes: int | str | Sequence[int],
     json_output: bool,
+    use_ollama: Optional[bool] = None,
+    ollama_model: Optional[str] = None,
+    ollama_endpoint: Optional[str] = None,
+    ollama_timeout_seconds: Optional[int] = None,
 ) -> int:
     plan_date = _parse_date(date_text)
     started_at = datetime.now().astimezone()
@@ -39,55 +56,43 @@ def run_daily_warmup_command(
         "database_path": str(local_cache_database_path()),
     }
 
-    calendar_result = None
-    if skip_calendar:
-        steps.append(_skipped_step("calendar_fetch"))
-    else:
-        calendar_result, metric = _measure_step(
-            "calendar_fetch",
-            lambda: list_naver_calendar_items(plan_date, plan_date, force_refresh=force_refresh),
-            metadata=lambda result: {
-                "event_count": len(result.events),
-                "todo_count": len(result.todos),
-                "calendar_metrics": dict(getattr(result, "metrics", {}) or {}),
-                "force_refresh": force_refresh,
-            },
-        )
-        steps.append(metric)
-        if calendar_result is not None:
-            payload["calendar"] = {
-                "event_count": len(calendar_result.events),
-                "todo_count": len(calendar_result.todos),
-                "metrics": dict(getattr(calendar_result, "metrics", {}) or {}),
-            }
-
-    github_issues = None
-    if skip_github:
-        steps.append(_skipped_step("github_fetch"))
-    else:
-        github_issues, metric = _measure_step(
-            "github_fetch",
-            lambda: list_open_issues(limit=github_limit, force_refresh=force_refresh),
-            metadata=lambda result: {
-                "issue_count": len(result),
-                "limit": github_limit,
-                "force_refresh": force_refresh,
-            },
-        )
-        steps.append(metric)
-        if github_issues is not None:
-            payload["github"] = {"issue_count": len(github_issues)}
+    (
+        fetch_payload,
+        calendar_metric,
+        github_metric,
+    ) = _fetch_warmup_sources(
+        plan_date=plan_date,
+        github_limit=github_limit,
+        skip_calendar=skip_calendar,
+        skip_github=skip_github,
+        force_refresh=force_refresh,
+    )
+    steps.extend([calendar_metric, github_metric])
+    if fetch_payload.calendar_result is not None:
+        payload["calendar"] = {
+            "event_count": len(fetch_payload.calendar_result.events),
+            "todo_count": len(fetch_payload.calendar_result.todos),
+            "metrics": dict(getattr(fetch_payload.calendar_result, "metrics", {}) or {}),
+        }
+    if fetch_payload.github_issues is not None:
+        payload["github"] = {"issue_count": len(fetch_payload.github_issues)}
+    if fetch_payload.source_statuses:
+        payload["source_statuses"] = list(fetch_payload.source_statuses)
+    if fetch_payload.warnings:
+        payload["warnings"] = list(fetch_payload.warnings)
 
     snapshot_payload = None
     snapshot, metric = _measure_step(
         "planning_build",
         lambda: _build_and_save_snapshot(
             plan_date=plan_date,
-            github_limit=github_limit,
             reminders_file=reminders_file,
-            skip_calendar=skip_calendar,
-            skip_github=skip_github,
+            fetch_payload=fetch_payload,
             reminder_lead_minutes=reminder_lead_minutes,
+            use_ollama=use_ollama,
+            ollama_model=ollama_model,
+            ollama_endpoint=ollama_endpoint,
+            ollama_timeout_seconds=ollama_timeout_seconds,
         ),
         metadata=lambda result: {
             "recommended_task_count": result["recommended_task_count"],
@@ -136,24 +141,33 @@ def run_daily_warmup_command(
 def _build_and_save_snapshot(
     *,
     plan_date: date,
-    github_limit: int,
     reminders_file: Optional[str],
-    skip_calendar: bool,
-    skip_github: bool,
+    fetch_payload: WarmupFetchPayload,
     reminder_lead_minutes: int | str | Sequence[int],
+    use_ollama: Optional[bool],
+    ollama_model: Optional[str],
+    ollama_endpoint: Optional[str],
+    ollama_timeout_seconds: Optional[int],
 ) -> dict[str, Any]:
     reminders = load_reminder_items(reminders_file)
-    inputs = collect_planning_inputs(
+    inputs = build_planning_inputs(
         plan_date=plan_date,
-        github_limit=github_limit,
-        include_calendar=not skip_calendar,
-        include_github=not skip_github,
         reminders=reminders,
+        source_statuses=[
+            PlanningSourceStatus.from_dict(item) for item in fetch_payload.source_statuses
+        ],
+        warnings=fetch_payload.warnings,
+        calendar_events=fetch_payload.calendar_result.events if fetch_payload.calendar_result is not None else [],
+        calendar_todos=fetch_payload.calendar_result.todos if fetch_payload.calendar_result is not None else [],
+        github_issues=fetch_payload.github_issues or [],
     )
     envelope = build_daily_plan(
         inputs,
         reminder_lead_minutes=reminder_lead_minutes,
-        use_ollama=False,
+        use_ollama=use_ollama,
+        ollama_model=ollama_model,
+        ollama_endpoint=ollama_endpoint,
+        ollama_timeout_seconds=ollama_timeout_seconds,
     )
     snapshot = save_daily_plan_snapshot(envelope)
     return {
@@ -196,6 +210,83 @@ def _measure_step(
     )
 
 
+def _fetch_warmup_sources(
+    *,
+    plan_date: date,
+    github_limit: int,
+    skip_calendar: bool,
+    skip_github: bool,
+    force_refresh: bool,
+) -> tuple[
+    WarmupFetchPayload,
+    RuntimeStepMetric,
+    RuntimeStepMetric,
+]:
+    if skip_calendar and skip_github:
+        return (
+            WarmupFetchPayload(
+                calendar_result=None,
+                github_issues=None,
+                source_statuses=[],
+                warnings=[],
+            ),
+            _skipped_step("calendar_fetch"),
+            _skipped_step("github_fetch"),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        calendar_future = None
+        github_future = None
+
+        if not skip_calendar:
+            calendar_future = executor.submit(
+                _measure_step,
+                "calendar_fetch",
+                lambda: list_naver_calendar_items(plan_date, plan_date, force_refresh=force_refresh),
+                lambda result: {
+                    "event_count": len(result.events),
+                    "todo_count": len(result.todos),
+                    "calendar_metrics": dict(getattr(result, "metrics", {}) or {}),
+                    "force_refresh": force_refresh,
+                },
+            )
+        if not skip_github:
+            github_future = executor.submit(
+                _measure_step,
+                "github_fetch",
+                lambda: list_open_issues(limit=github_limit, force_refresh=force_refresh),
+                lambda result: {
+                    "issue_count": len(result),
+                    "limit": github_limit,
+                    "force_refresh": force_refresh,
+                },
+            )
+
+        calendar_result, calendar_metric = (
+            calendar_future.result() if calendar_future is not None else (None, _skipped_step("calendar_fetch"))
+        )
+        github_issues, github_metric = (
+            github_future.result() if github_future is not None else (None, _skipped_step("github_fetch"))
+        )
+        return (
+            WarmupFetchPayload(
+                calendar_result=calendar_result,
+                github_issues=github_issues,
+                source_statuses=_build_source_statuses(
+                    skip_calendar=skip_calendar,
+                    calendar_result=calendar_result,
+                    calendar_metric=calendar_metric,
+                    skip_github=skip_github,
+                    github_issues=github_issues,
+                    github_metric=github_metric,
+                ),
+                warnings=_build_source_warnings(calendar_metric=calendar_metric, github_metric=github_metric),
+            ),
+            calendar_metric,
+            github_metric,
+        )
+
+
 def _skipped_step(name: str) -> RuntimeStepMetric:
     now = datetime.now().astimezone().isoformat()
     return RuntimeStepMetric(
@@ -206,6 +297,56 @@ def _skipped_step(name: str) -> RuntimeStepMetric:
         ended_at=now,
         metadata={"skipped": True},
     )
+
+
+def _build_source_statuses(
+    *,
+    skip_calendar: bool,
+    calendar_result: Optional[CalendarQueryResult],
+    calendar_metric: RuntimeStepMetric,
+    skip_github: bool,
+    github_issues: Optional[Sequence[GitHubIssue]],
+    github_metric: RuntimeStepMetric,
+) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    if not skip_calendar:
+        statuses.append(
+            PlanningSourceStatus(
+                source_id="calendar-prefetched",
+                source_type="calendar",
+                ok=calendar_metric.ok,
+                item_count=(
+                    len(calendar_result.events) + len(calendar_result.todos)
+                    if calendar_result is not None
+                    else 0
+                ),
+                warning=calendar_metric.error,
+            ).to_dict()
+        )
+    if not skip_github:
+        statuses.append(
+            PlanningSourceStatus(
+                source_id="github-issues-prefetched",
+                source_type="github",
+                ok=github_metric.ok,
+                item_count=len(github_issues) if github_issues is not None else 0,
+                warning=github_metric.error,
+            ).to_dict()
+        )
+    return statuses
+
+
+def _build_source_warnings(
+    *,
+    calendar_metric: RuntimeStepMetric,
+    github_metric: RuntimeStepMetric,
+) -> list[str]:
+    warnings: list[str] = []
+    if not calendar_metric.ok and calendar_metric.error:
+        warnings.append(f"calendar: {calendar_metric.error}")
+    if not github_metric.ok and github_metric.error:
+        warnings.append(f"github: {github_metric.error}")
+    return warnings
 
 
 def _parse_date(value: Optional[str]) -> date:

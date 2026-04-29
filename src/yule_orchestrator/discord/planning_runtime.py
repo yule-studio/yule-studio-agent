@@ -2,23 +2,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from ..planning import build_daily_plan, collect_planning_inputs
-from ..planning.models import DailyPlanEnvelope, PlanningCheckpoint
+from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..planning.snapshots import DailyPlanSnapshot, load_daily_plan_snapshot
 from ..storage import load_json_cache, save_json_cache
 
 CHECKPOINT_SNAPSHOT_NAMESPACE = "planning-checkpoint-snapshots"
 CHECKPOINT_SNAPSHOT_PROVIDER = "discord-bot"
 CHECKPOINT_SNAPSHOT_TTL_SECONDS = 2 * 60 * 60
-
-
-def build_plan_today_envelope(
-    plan_date: date,
-    *,
-    use_ollama: bool = False,
-) -> DailyPlanEnvelope:
-    inputs = collect_planning_inputs(plan_date=plan_date)
-    return build_daily_plan(inputs, use_ollama=use_ollama)
 
 
 def load_plan_today_snapshot(plan_date: date) -> DailyPlanSnapshot | None:
@@ -30,6 +20,13 @@ def build_daily_checkpoints_for_date(plan_date: date) -> list[PlanningCheckpoint
     if snapshot is None:
         return []
     return list(snapshot.envelope.daily_plan.checkpoints)
+
+
+def build_daily_briefings_for_date(plan_date: date) -> list[PlanningScheduledBriefing]:
+    snapshot = load_daily_plan_snapshot(plan_date, allow_stale=True)
+    if snapshot is None:
+        return []
+    return list(snapshot.envelope.daily_plan.briefings)
 
 
 def build_due_checkpoints(
@@ -57,6 +54,33 @@ def build_due_checkpoints(
         plan_date += timedelta(days=1)
 
     return sorted(checkpoints.values(), key=lambda checkpoint: checkpoint.remind_at)
+
+
+def build_due_briefings(
+    window_start: datetime,
+    *,
+    window_minutes: int,
+) -> list[PlanningScheduledBriefing]:
+    if window_minutes <= 0:
+        return []
+
+    window_end = window_start + timedelta(minutes=window_minutes)
+    briefings: dict[str, PlanningScheduledBriefing] = {}
+    plan_date = window_start.date()
+
+    while plan_date <= window_end.date():
+        snapshot = load_daily_plan_snapshot(plan_date, allow_stale=True)
+        if snapshot is None:
+            plan_date += timedelta(days=1)
+            continue
+
+        for briefing in snapshot.envelope.daily_plan.briefings:
+            send_at = datetime.fromisoformat(briefing.send_at)
+            if window_start <= send_at <= window_end:
+                briefings[briefing.briefing_id] = briefing
+        plan_date += timedelta(days=1)
+
+    return sorted(briefings.values(), key=lambda briefing: briefing.send_at)
 
 
 def prefetch_checkpoint_snapshots(

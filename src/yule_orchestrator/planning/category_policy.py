@@ -20,6 +20,7 @@ class NaverCategoryPolicy:
     reason: str = ""
     coding_candidate: bool = False
     alert_policy: Optional[str] = None
+    flexible: bool = False
 
     @property
     def reason_label(self) -> str:
@@ -54,6 +55,7 @@ def load_naver_category_policies() -> dict[str, NaverCategoryPolicy]:
             reason=str(raw_policy.get("reason") or ""),
             coding_candidate=bool(raw_policy.get("coding_candidate") or False),
             alert_policy=_optional_string(raw_policy.get("alert_policy")),
+            flexible=bool(raw_policy.get("flexible") or False),
         )
     return policies
 

@@ -21,9 +21,10 @@ def run_planning_daily_command(
     skip_calendar: bool,
     skip_github: bool,
     reminder_lead_minutes: int | str | Sequence[int],
-    use_ollama: bool,
-    ollama_model: str,
-    ollama_endpoint: str,
+    use_ollama: Optional[bool],
+    ollama_model: Optional[str],
+    ollama_endpoint: Optional[str],
+    ollama_timeout_seconds: Optional[int],
     json_output: bool,
 ) -> int:
     plan_date = _parse_plan_date(date_text)
@@ -34,6 +35,8 @@ def run_planning_daily_command(
         include_calendar=not skip_calendar,
         include_github=not skip_github,
         reminders=reminders,
+        allow_live_calendar_fetch=not skip_calendar,
+        allow_live_github_fetch=not skip_github,
     )
     envelope = build_daily_plan(
         inputs,
@@ -41,6 +44,7 @@ def run_planning_daily_command(
         use_ollama=use_ollama,
         ollama_model=ollama_model,
         ollama_endpoint=ollama_endpoint,
+        ollama_timeout_seconds=ollama_timeout_seconds,
     )
 
     if json_output:
@@ -65,6 +69,7 @@ def run_planning_checkpoints_command(
         include_calendar=True,
         include_github=False,
         reminders=[],
+        allow_live_calendar_fetch=True,
     )
     envelope = build_daily_plan(
         inputs,
@@ -108,6 +113,10 @@ def run_planning_snapshot_command(
     skip_calendar: bool,
     skip_github: bool,
     reminder_lead_minutes: int | str | Sequence[int],
+    use_ollama: Optional[bool],
+    ollama_model: Optional[str],
+    ollama_endpoint: Optional[str],
+    ollama_timeout_seconds: Optional[int],
     json_output: bool,
 ) -> int:
     plan_date = _parse_plan_date(date_text)
@@ -118,11 +127,16 @@ def run_planning_snapshot_command(
         include_calendar=not skip_calendar,
         include_github=not skip_github,
         reminders=reminders,
+        allow_live_calendar_fetch=not skip_calendar,
+        allow_live_github_fetch=not skip_github,
     )
     envelope = build_daily_plan(
         inputs,
         reminder_lead_minutes=reminder_lead_minutes,
-        use_ollama=False,
+        use_ollama=use_ollama,
+        ollama_model=ollama_model,
+        ollama_endpoint=ollama_endpoint,
+        ollama_timeout_seconds=ollama_timeout_seconds,
     )
     snapshot = save_daily_plan_snapshot(envelope)
     payload = {
@@ -143,7 +157,6 @@ def run_planning_snapshot_command(
     print(f"cache_key: {snapshot.cache_key}")
     print(f"recommended tasks: {envelope.daily_plan.summary.recommended_task_count}")
     return 0
-
 
 def _parse_plan_date(value: Optional[str]) -> date:
     if value is None:

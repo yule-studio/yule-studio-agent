@@ -45,20 +45,91 @@ def build_focus_blocks(
     fixed_schedule: Sequence[PlanningTimeBlock],
     tasks: Sequence[PlanningTaskCandidate],
     focus_start_time: time = PLANNING_DAY_START,
+    work_mode_enabled: bool = True,
+    lunch_start_time: Optional[time] = None,
+    lunch_duration_minutes: int = 0,
 ) -> tuple[list[PlanningTimeBlock], int]:
-    windows = _available_windows(plan_date, fixed_schedule, day_start_time=focus_start_time)
-    focus_blocks: list[PlanningTimeBlock] = []
-    available_focus_minutes = sum(int((end - start).total_seconds() // 60) for start, end in windows)
-    if not windows:
+    timezone = _derive_schedule_timezone(fixed_schedule)
+    lunch_block = _build_lunch_block(plan_date, lunch_start_time, lunch_duration_minutes, timezone)
+
+    schedulable_tasks = [task for task in tasks if not getattr(task, "flexible", False)]
+
+    if not work_mode_enabled:
+        non_work_schedule = [block for block in fixed_schedule if "업무 수행" not in block.title]
+        if lunch_block is not None:
+            non_work_schedule = list(non_work_schedule) + [lunch_block]
+        windows = _available_windows(plan_date, non_work_schedule, day_start_time=focus_start_time)
+        available_focus_minutes = sum(int((end - start).total_seconds() // 60) for start, end in windows)
+        if not windows:
+            return [], available_focus_minutes
+        working_windows = list(windows)
+        focus_blocks: list[PlanningTimeBlock] = []
+        for task in schedulable_tasks[:6]:
+            assigned = _assign_task_block(task, working_windows)
+            if assigned is not None:
+                focus_blocks.append(assigned)
         return focus_blocks, available_focus_minutes
 
-    working_windows = list(windows)
-    for task in tasks[:6]:
-        assigned = _assign_task_block(task, working_windows)
-        if assigned is not None:
-            focus_blocks.append(assigned)
+    work_event_blocks = [block for block in fixed_schedule if "업무 수행" in block.title]
+    work_priority_tasks = [task for task in schedulable_tasks if task.category_label == "회사 업무"]
+    other_tasks = [task for task in schedulable_tasks if task.category_label != "회사 업무"]
 
-    return focus_blocks, available_focus_minutes
+    work_windows = sorted(
+        (
+            (datetime.fromisoformat(block.start), datetime.fromisoformat(block.end))
+            for block in work_event_blocks
+        ),
+        key=lambda item: item[0],
+    )
+
+    schedule_with_lunch: list[PlanningTimeBlock] = list(fixed_schedule)
+    if lunch_block is not None:
+        schedule_with_lunch.append(lunch_block)
+    non_work_windows = _available_windows(
+        plan_date, schedule_with_lunch, day_start_time=focus_start_time
+    )
+
+    available_focus_minutes = sum(
+        int((end - start).total_seconds() // 60)
+        for start, end in (list(work_windows) + list(non_work_windows))
+    )
+
+    work_focus_blocks: list[PlanningTimeBlock] = []
+    work_window_buffer = list(work_windows)
+    for task in work_priority_tasks[:6]:
+        assigned = _assign_task_block(task, work_window_buffer)
+        if assigned is not None:
+            work_focus_blocks.append(assigned)
+
+    other_focus_blocks: list[PlanningTimeBlock] = []
+    non_work_window_buffer = list(non_work_windows)
+    for task in other_tasks[:6]:
+        assigned = _assign_task_block(task, non_work_window_buffer)
+        if assigned is not None:
+            other_focus_blocks.append(assigned)
+
+    combined = sorted(work_focus_blocks + other_focus_blocks, key=lambda block: block.start)
+    return combined, available_focus_minutes
+
+
+def _build_lunch_block(
+    plan_date: date,
+    lunch_start_time: Optional[time],
+    lunch_duration_minutes: int,
+    timezone: Optional[tzinfo],
+) -> Optional[PlanningTimeBlock]:
+    if lunch_start_time is None or lunch_duration_minutes <= 0:
+        return None
+    lunch_start = datetime.combine(plan_date, lunch_start_time, tzinfo=timezone)
+    lunch_end = lunch_start + timedelta(minutes=lunch_duration_minutes)
+    return PlanningTimeBlock(
+        start=lunch_start.isoformat(),
+        end=lunch_end.isoformat(),
+        block_type="fixed_event",
+        title="점심 산책",
+        task_id="planning-lunch-window",
+        locked=True,
+    )
 
 
 def build_execution_blocks(events: Sequence[CalendarEvent]) -> list[PlanningExecutionBlock]:

@@ -17,6 +17,7 @@ from yule_orchestrator.storage import (
     load_json_cache,
     save_json_cache,
 )
+from yule_orchestrator.storage.local_cache import _reset_cleanup_schedule_for_tests
 
 
 class LocalCacheTestCase(unittest.TestCase):
@@ -24,10 +25,14 @@ class LocalCacheTestCase(unittest.TestCase):
         self.temp_dir = Path("tests/.tmp/local-cache-tests")
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+        except (FileNotFoundError, PermissionError) as exc:
+            self.skipTest(f"temporary directory is not writable in this environment: {exc}")
         self.db_path = self.temp_dir / "cache.sqlite3"
         self.previous_db_path = os.environ.get("YULE_CACHE_DB_PATH")
         os.environ["YULE_CACHE_DB_PATH"] = str(self.db_path)
+        _reset_cleanup_schedule_for_tests()
 
     def tearDown(self) -> None:
         if self.previous_db_path is None:
@@ -151,6 +156,40 @@ class LocalCacheTestCase(unittest.TestCase):
 
         self.assertIsNotNone(fresh_entry)
         self.assertIsNone(stale_entry)
+
+    def test_save_skips_expired_cleanup_within_throttle_window(self) -> None:
+        save_json_cache(
+            namespace="calendar-query-results",
+            cache_key="throttle-survivor",
+            provider="naver-caldav",
+            range_start="2026-04-22",
+            range_end="2026-04-22",
+            scope_hash="scope-throttle-1",
+            ttl_seconds=60,
+            payload={"value": 1},
+        )
+
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "UPDATE local_cache_entries SET expires_at = ? WHERE cache_key = ?",
+                (time.time() - 100, "throttle-survivor"),
+            )
+
+        save_json_cache(
+            namespace="calendar-query-results",
+            cache_key="throttle-new",
+            provider="naver-caldav",
+            range_start="2026-04-22",
+            range_end="2026-04-22",
+            scope_hash="scope-throttle-2",
+            ttl_seconds=60,
+            payload={"value": 2},
+        )
+
+        cache_keys = sorted(
+            entry.cache_key for entry in list_json_cache_entries(namespace="calendar-query-results")
+        )
+        self.assertEqual(cache_keys, ["throttle-new", "throttle-survivor"])
 
     def test_touch_false_does_not_update_last_accessed_at(self) -> None:
         save_json_cache(

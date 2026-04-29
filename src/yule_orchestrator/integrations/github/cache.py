@@ -7,9 +7,11 @@ from typing import Any, Optional, Sequence
 from ...storage import load_json_cache, save_json_cache
 
 GITHUB_ISSUE_CACHE_NAMESPACE = "github-open-issues"
+GITHUB_PULL_REQUEST_CACHE_NAMESPACE = "github-open-pull-requests"
 GITHUB_VIEWER_CONTEXT_CACHE_NAMESPACE = "github-viewer-context"
 GITHUB_CACHE_PROVIDER = "gh-cli"
 DEFAULT_GITHUB_ISSUE_CACHE_SECONDS = 300
+DEFAULT_GITHUB_PULL_REQUEST_CACHE_SECONDS = 300
 DEFAULT_GITHUB_VIEWER_CONTEXT_CACHE_SECONDS = 1800
 
 
@@ -45,6 +47,41 @@ def save_issue_payload(
         ttl_seconds=ttl_seconds,
         payload={"issues": list(payload)},
         metadata={"issue_count": len(payload)},
+    )
+
+
+def load_cached_pull_request_payload(cache_key: str, ttl_seconds: int) -> Optional[list[dict[str, Any]]]:
+    payload = _load_cached_payload(
+        namespace=GITHUB_PULL_REQUEST_CACHE_NAMESPACE,
+        cache_key=cache_key,
+        ttl_seconds=ttl_seconds,
+    )
+    return _extract_pull_request_payload(payload)
+
+
+def load_stale_pull_request_payload(cache_key: str) -> Optional[list[dict[str, Any]]]:
+    payload = _load_cached_payload(
+        namespace=GITHUB_PULL_REQUEST_CACHE_NAMESPACE,
+        cache_key=cache_key,
+        ttl_seconds=None,
+        allow_stale=True,
+    )
+    return _extract_pull_request_payload(payload)
+
+
+def save_pull_request_payload(
+    cache_key: str,
+    scope_hash: str,
+    ttl_seconds: int,
+    payload: Sequence[dict[str, Any]],
+) -> None:
+    _save_cached_payload(
+        namespace=GITHUB_PULL_REQUEST_CACHE_NAMESPACE,
+        cache_key=cache_key,
+        scope_hash=scope_hash,
+        ttl_seconds=ttl_seconds,
+        payload={"pull_requests": list(payload)},
+        metadata={"pull_request_count": len(payload)},
     )
 
 
@@ -103,6 +140,18 @@ def _extract_issue_payload(payload: Optional[Any]) -> Optional[list[dict[str, An
     return None
 
 
+def _extract_pull_request_payload(payload: Optional[Any]) -> Optional[list[dict[str, Any]]]:
+    if payload is None:
+        return None
+
+    if isinstance(payload, dict):
+        pull_requests = payload.get("pull_requests")
+        if isinstance(pull_requests, list):
+            return [item for item in pull_requests if isinstance(item, dict)]
+
+    return None
+
+
 def _load_cached_payload(
     namespace: str,
     cache_key: str,
@@ -118,6 +167,7 @@ def _load_cached_payload(
             cache_key=cache_key,
             ttl_seconds=ttl_seconds,
             allow_stale=allow_stale,
+            touch=False,
         )
     except Exception:
         return None

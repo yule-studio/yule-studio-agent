@@ -1,27 +1,48 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time as time_module
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from ..integrations.calendar import list_naver_calendar_items
+from ..integrations.calendar.models import build_fallback_item_uid
+from ..integrations.github.issues import list_open_issues
+from ..integrations.github.pulls import list_open_pull_requests
 from ..observability import RuntimeStepMetric, save_runtime_metric_run
-from ..planning.models import PlanningCheckpoint
+from ..planning import build_daily_plan, collect_planning_inputs, load_reminder_items, save_daily_plan_snapshot
+from ..planning.day_profile import DayProfile, DayProfileBriefingSlot, load_day_profile
+from ..planning.models import PlanningCheckpoint, PlanningScheduledBriefing
 from ..storage import load_json_cache, save_json_cache
+from .checkpoint_state import (
+    filter_unresponded_checkpoints,
+    save_checkpoint_pending_response,
+)
 from .commands import register_discord_commands
+from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
 from .formatter import (
     format_checkpoints_message,
-    format_missing_plan_snapshot_message,
     format_plan_today_message,
+    format_scheduled_briefing_message,
+    format_snapshot_regenerating_message,
+    format_snapshot_regeneration_failed_message,
     split_discord_message,
 )
 from .planning_runtime import build_due_checkpoints, load_plan_today_snapshot
-from .planning_runtime import load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
+from .planning_runtime import build_due_briefings, load_prefetched_due_checkpoints, prefetch_checkpoint_snapshots
+from .snapshot_refresh import regenerate_today_snapshot
 
 CHECKPOINT_NOTIFICATION_NAMESPACE = "discord-checkpoint-notifications"
+BRIEFING_NOTIFICATION_NAMESPACE = "discord-scheduled-briefings"
 CHECKPOINT_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
+BRIEFING_NOTIFICATION_TTL_SECONDS = 2 * 24 * 60 * 60
+DAILY_PREPARATION_GITHUB_LIMIT = 30
+DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES = 10
+DAILY_PREPARATION_GITHUB_OFFSET_MINUTES = 5
+DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES = 2
 
 
 def run_discord_bot(repo_root: Path) -> None:
@@ -29,14 +50,21 @@ def run_discord_bot(repo_root: Path) -> None:
     from discord.ext import commands
 
     config = DiscordBotConfig.from_env()
+    day_profile = load_day_profile()
 
     class YuleDiscordBot(commands.Bot):
         def __init__(self) -> None:
             intents = discord.Intents.default()
+            intents.message_content = True
+            intents.messages = True
             self._daily_briefing_task: asyncio.Task[None] | None = None
+            self._daily_preparation_task: asyncio.Task[None] | None = None
             self._checkpoint_notification_task: asyncio.Task[None] | None = None
             self._checkpoint_prefetch_task: asyncio.Task[None] | None = None
             self._checkpoint_storage_lock: asyncio.Lock | None = None
+            self._completed_preparation_steps: set[tuple[str, str]] = set()
+            self._daily_preparation_context: dict[str, dict[str, object]] = {}
+            self._snapshot_refresh_locks: dict[str, asyncio.Lock] = {}
             super().__init__(
                 command_prefix=commands.when_mentioned,
                 intents=intents,
@@ -62,9 +90,15 @@ def run_discord_bot(repo_root: Path) -> None:
             guild = discord.Object(id=config.guild_id)
             await self.tree.sync(guild=guild)
             self._checkpoint_storage_lock = asyncio.Lock()
-            if config.daily_channel_id is not None and config.daily_briefing_time is not None:
+            daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
+            if daily_channel_configured:
+                self._daily_preparation_task = asyncio.create_task(self._run_daily_preparation_loop())
+            if daily_channel_configured:
                 self._daily_briefing_task = asyncio.create_task(self._run_daily_briefing_loop())
-            if config.effective_checkpoint_channel_id is not None:
+            if (
+                config.effective_checkpoint_channel_id is not None
+                or config.effective_checkpoint_channel_name is not None
+            ):
                 self._checkpoint_prefetch_task = asyncio.create_task(self._run_checkpoint_prefetch_loop())
                 self._checkpoint_notification_task = asyncio.create_task(
                     self._run_checkpoint_notification_loop()
@@ -76,75 +110,534 @@ def run_discord_bot(repo_root: Path) -> None:
             for message in _startup_messages(config, now=datetime.now().astimezone()):
                 print(message)
 
+        async def on_message(self, message: "discord.Message") -> None:
+            if message.author.bot:
+                return
+            if message.guild is None or message.guild.id != config.guild_id:
+                return
+            if self.user is None:
+                return
+            if not _should_handle_message(
+                message=message,
+                bot_user=self.user,
+                conversation_channel_id=config.effective_conversation_channel_id,
+                conversation_channel_name=config.effective_conversation_channel_name,
+                conversation_reply_mode=config.conversation_reply_mode,
+                daily_channel_id=config.daily_channel_id,
+                daily_channel_name=config.daily_channel_name,
+            ):
+                return
+
+            prompt = _extract_conversation_prompt(message=message, bot_user=self.user).strip()
+            if not prompt:
+                prompt = "오늘 뭐부터 해야 해?"
+
+            mention_user = _message_mentions_bot(message=message, bot_user=self.user)
+            conversation_scope = (
+                f"guild:{config.guild_id}:channel:{getattr(message.channel, 'id', 'unknown')}"
+            )
+
+            async with message.channel.typing():
+                envelope = await asyncio.to_thread(
+                    build_conversation_response_envelope,
+                    prompt,
+                    author_user_id=message.author.id,
+                    conversation_scope=conversation_scope,
+                    mention_user=mention_user,
+                )
+
+            await _send_channel_message_chunks(
+                message.channel,
+                envelope.content,
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
+
+            if envelope.regenerate_snapshot:
+                asyncio.create_task(
+                    self._regenerate_snapshot_and_followup(
+                        channel=message.channel,
+                        prompt=prompt,
+                        author_user_id=message.author.id,
+                        conversation_scope=conversation_scope,
+                        mention_user=mention_user,
+                        mention_user_id=envelope.mention_user_id,
+                        discord_module=discord,
+                    )
+                )
+
         async def close(self) -> None:
+            await _cancel_task(self._daily_preparation_task)
             await _cancel_task(self._daily_briefing_task)
             await _cancel_task(self._checkpoint_prefetch_task)
             await _cancel_task(self._checkpoint_notification_task)
             await super().close()
 
-        async def _run_daily_briefing_loop(self) -> None:
+        async def ensure_snapshot(self, plan_date: date) -> tuple[object | None, str | None]:
+            lock = self._snapshot_refresh_locks.setdefault(plan_date.isoformat(), asyncio.Lock())
+            async with lock:
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is not None:
+                    return snapshot, None
+                result = await asyncio.to_thread(regenerate_today_snapshot, plan_date)
+                if not result.ok:
+                    return None, result.error
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is None:
+                    return None, "snapshot 재생성 직후에도 snapshot을 다시 읽지 못했습니다."
+                return snapshot, None
+
+        async def _regenerate_snapshot_and_followup(
+            self,
+            *,
+            channel: "discord.abc.Messageable",
+            prompt: str,
+            author_user_id: int,
+            conversation_scope: str,
+            mention_user: bool,
+            mention_user_id: int | None,
+            discord_module: "discord",
+        ) -> None:
+            plan_date = datetime.now().astimezone().date()
+            snapshot, error = await self.ensure_snapshot(plan_date)
+            if snapshot is None:
+                await _send_channel_message_chunks(
+                    channel,
+                    format_snapshot_regeneration_failed_message(
+                        mention_user_id=mention_user_id,
+                        error=error,
+                    ),
+                    allowed_mentions=_build_allowed_mentions(discord_module),
+                )
+                return
+
+            followup = await asyncio.to_thread(
+                build_conversation_response_envelope,
+                prompt,
+                author_user_id=author_user_id,
+                conversation_scope=conversation_scope,
+                mention_user=mention_user,
+            )
+
+            await _send_channel_message_chunks(
+                channel,
+                followup.content,
+                allowed_mentions=_build_allowed_mentions(discord_module),
+            )
+
+        async def _run_daily_preparation_loop(self) -> None:
             await self.wait_until_ready()
+            last_scan = datetime.now().astimezone()
             while not self.is_closed():
-                next_run = _next_daily_run(config.daily_briefing_time)
+                next_run = _next_checkpoint_scan()
                 wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
                 await asyncio.sleep(wait_seconds)
+                scan_time = datetime.now().astimezone()
+                due_steps = _collect_due_daily_preparation_steps(
+                    last_scan=last_scan,
+                    scan_time=scan_time,
+                    day_profile=day_profile,
+                    completed_steps=self._completed_preparation_steps,
+                )
+                for step_name, plan_date, scheduled_at in due_steps:
+                    try:
+                        await self._run_daily_preparation_step_with_retry(
+                            step_name=step_name,
+                            plan_date=plan_date,
+                            scheduled_at=scheduled_at,
+                        )
+                        self._completed_preparation_steps.add((plan_date.isoformat(), step_name))
+                    except Exception as exc:
+                        _log_preparation_event(
+                            level="warning",
+                            event="step_failed",
+                            step_name=step_name,
+                            plan_date=plan_date.isoformat(),
+                            scheduled_at=scheduled_at.isoformat(),
+                            ok=False,
+                            error=str(exc),
+                        )
+                _cleanup_completed_preparation_steps(
+                    self._completed_preparation_steps,
+                    today=scan_time.date(),
+                )
+                _cleanup_preparation_context(
+                    self._daily_preparation_context,
+                    today=scan_time.date(),
+                )
+                last_scan = scan_time
+
+        async def _run_daily_preparation_step_with_retry(
+            self,
+            *,
+            step_name: str,
+            plan_date: date,
+            scheduled_at: datetime,
+        ) -> None:
+            attempt_limit = max(1, config.preparation_retry_count + 1)
+            last_error: Exception | None = None
+            for attempt in range(1, attempt_limit + 1):
+                attempt_started_at = datetime.now().astimezone()
+                attempt_started_perf = time_module.perf_counter()
+                _log_preparation_event(
+                    level="info",
+                    event="step_started",
+                    step_name=step_name,
+                    plan_date=plan_date.isoformat(),
+                    scheduled_at=scheduled_at.isoformat(),
+                    attempt=attempt,
+                    attempt_limit=attempt_limit,
+                )
                 try:
-                    await self._send_daily_briefing()
+                    result_metadata = await self._run_daily_preparation_step(
+                        step_name=step_name,
+                        plan_date=plan_date,
+                    )
+                    duration_seconds = time_module.perf_counter() - attempt_started_perf
+                    _save_preparation_metric(
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        started_at=attempt_started_at,
+                        duration_seconds=duration_seconds,
+                        ok=True,
+                        metadata={
+                            "scheduled_at": scheduled_at.isoformat(),
+                            "attempt": attempt,
+                            "attempt_limit": attempt_limit,
+                            **result_metadata,
+                        },
+                    )
+                    _log_preparation_event(
+                        level="info",
+                        event="step_completed",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=True,
+                        duration_seconds=round(duration_seconds, 3),
+                        metadata=result_metadata,
+                    )
+                    await self._send_preparation_debug_message(
+                        level="info",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=True,
+                        duration_seconds=round(duration_seconds, 3),
+                        metadata=result_metadata,
+                    )
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    duration_seconds = time_module.perf_counter() - attempt_started_perf
+                    _save_preparation_metric(
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        started_at=attempt_started_at,
+                        duration_seconds=duration_seconds,
+                        ok=False,
+                        metadata={
+                            "scheduled_at": scheduled_at.isoformat(),
+                            "attempt": attempt,
+                            "attempt_limit": attempt_limit,
+                        },
+                        error=str(exc),
+                    )
+                    retry_delay_seconds = config.preparation_retry_delay_seconds
+                    retry_scheduled = attempt < attempt_limit
+                    _log_preparation_event(
+                        level="warning",
+                        event="step_attempt_failed",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=False,
+                        duration_seconds=round(duration_seconds, 3),
+                        retry_scheduled=retry_scheduled,
+                        retry_delay_seconds=retry_delay_seconds if retry_scheduled else 0,
+                        error=str(exc),
+                    )
+                    await self._send_preparation_debug_message(
+                        level="warning",
+                        step_name=step_name,
+                        plan_date=plan_date.isoformat(),
+                        scheduled_at=scheduled_at.isoformat(),
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        ok=False,
+                        duration_seconds=round(duration_seconds, 3),
+                        retry_scheduled=retry_scheduled,
+                        retry_delay_seconds=retry_delay_seconds if retry_scheduled else 0,
+                        error=str(exc),
+                    )
+                    if retry_scheduled:
+                        await asyncio.sleep(retry_delay_seconds)
+                        continue
+                    break
+
+            if last_error is not None:
+                raise last_error
+
+        async def _run_daily_preparation_step(
+            self,
+            *,
+            step_name: str,
+            plan_date: date,
+        ) -> dict[str, object]:
+            context = self._daily_preparation_context.setdefault(plan_date.isoformat(), {})
+            if step_name == "calendar_sync":
+                result = await asyncio.to_thread(
+                    list_naver_calendar_items,
+                    plan_date,
+                    plan_date,
+                )
+                context["calendar_result"] = result
+                return {
+                    "event_count": len(result.events),
+                    "todo_count": len(result.todos),
+                }
+
+            if step_name == "github_sync":
+                issues = await asyncio.to_thread(
+                    list_open_issues,
+                    DAILY_PREPARATION_GITHUB_LIMIT,
+                )
+                context["github_issues"] = list(issues)
+                pulls: list = []
+                try:
+                    fetched_pulls = await asyncio.to_thread(
+                        list_open_pull_requests,
+                        DAILY_PREPARATION_GITHUB_LIMIT,
+                    )
+                    pulls = list(fetched_pulls)
+                except Exception as exc:
+                    print(f"warning: github pulls fetch failed during daily preparation: {exc}")
+                context["github_pull_requests"] = pulls
+                return {
+                    "issue_count": len(issues),
+                    "pull_request_count": len(pulls),
+                }
+
+            if step_name == "planning_snapshot":
+                reminders = await asyncio.to_thread(load_reminder_items, None)
+                prefetched_calendar_result = context.get("calendar_result")
+                if prefetched_calendar_result is not None and not hasattr(prefetched_calendar_result, "events"):
+                    prefetched_calendar_result = None
+                prefetched_github_issues = context.get("github_issues")
+                if prefetched_github_issues is not None and not isinstance(prefetched_github_issues, list):
+                    prefetched_github_issues = None
+                prefetched_github_pull_requests = context.get("github_pull_requests")
+                if prefetched_github_pull_requests is not None and not isinstance(prefetched_github_pull_requests, list):
+                    prefetched_github_pull_requests = None
+                inputs = await asyncio.to_thread(
+                    collect_planning_inputs,
+                    plan_date,
+                    github_limit=DAILY_PREPARATION_GITHUB_LIMIT,
+                    include_calendar=True,
+                    include_github=True,
+                    reminders=reminders,
+                    prefetched_calendar_result=prefetched_calendar_result,
+                    prefetched_github_issues=prefetched_github_issues,
+                    prefetched_github_pull_requests=prefetched_github_pull_requests,
+                    allow_live_calendar_fetch=prefetched_calendar_result is None,
+                    allow_live_github_fetch=prefetched_github_issues is None,
+                )
+                envelope = await asyncio.to_thread(build_daily_plan, inputs)
+                await asyncio.to_thread(save_daily_plan_snapshot, envelope)
+                return {
+                    "recommended_task_count": envelope.daily_plan.summary.recommended_task_count,
+                    "checkpoint_count": len(envelope.daily_plan.checkpoints),
+                    "warning_count": len(inputs.warnings),
+                    "calendar_source": _preparation_source_label(inputs.source_statuses, "calendar"),
+                    "github_source": _preparation_source_label(inputs.source_statuses, "github"),
+                }
+
+            raise ValueError(f"Unsupported daily preparation step: {step_name}")
+
+        async def _send_preparation_debug_message(
+            self,
+            *,
+            level: str,
+            step_name: str,
+            plan_date: str,
+            scheduled_at: str,
+            attempt: int,
+            attempt_limit: int,
+            ok: bool,
+            duration_seconds: float,
+            metadata: dict[str, object] | None = None,
+            retry_scheduled: bool = False,
+            retry_delay_seconds: int = 0,
+            error: str | None = None,
+        ) -> None:
+            debug_channel_id = config.effective_debug_channel_id
+            debug_channel_name = config.effective_debug_channel_name
+            if debug_channel_id is None and debug_channel_name is None:
+                return
+
+            try:
+                channel = await _resolve_messageable_channel(
+                    self,
+                    guild_id=config.guild_id,
+                    channel_id=debug_channel_id,
+                    channel_name=debug_channel_name,
+                    discord_module=discord,
+                    error_label="DISCORD_DEBUG_CHANNEL_ID",
+                )
+            except Exception as exc:
+                print(f"warning: failed to resolve Discord debug channel: {exc}")
+                return
+
+            lines = [
+                f"[daily-preparation] {step_name}",
+                f"- level: {level}",
+                f"- plan_date: {plan_date}",
+                f"- scheduled_at: {scheduled_at}",
+                f"- attempt: {attempt}/{attempt_limit}",
+                f"- ok: {'true' if ok else 'false'}",
+                f"- duration_seconds: {duration_seconds:.3f}",
+            ]
+            if retry_scheduled:
+                lines.append(f"- retry_in_seconds: {retry_delay_seconds}")
+            if metadata:
+                lines.append(f"- metadata: {json.dumps(metadata, ensure_ascii=False, sort_keys=True)}")
+            if error:
+                lines.append(f"- error: {error}")
+            await _send_channel_message_chunks(
+                channel,
+                "\n".join(lines),
+                allowed_mentions=_build_allowed_mentions(discord),
+            )
+
+        async def _run_daily_briefing_loop(self) -> None:
+            await self.wait_until_ready()
+            last_scan = datetime.now().astimezone()
+            while not self.is_closed():
+                next_run = _next_checkpoint_scan()
+                wait_seconds = max(1.0, (next_run - datetime.now().astimezone()).total_seconds())
+                await asyncio.sleep(wait_seconds)
+                scan_time = datetime.now().astimezone()
+                try:
+                    await self._send_due_briefings(last_scan=last_scan, scan_time=scan_time)
                 except Exception as exc:
                     print(f"warning: failed to send scheduled daily briefing: {exc}")
+                last_scan = scan_time
 
-        async def _send_daily_briefing(self) -> None:
-            if config.daily_channel_id is None:
+        async def _send_due_briefings(
+            self,
+            *,
+            last_scan: datetime,
+            scan_time: datetime,
+        ) -> None:
+            if config.daily_channel_id is None and config.daily_channel_name is None:
+                return
+            if scan_time <= last_scan:
                 return
 
             channel = await _resolve_messageable_channel(
                 self,
+                guild_id=config.guild_id,
                 channel_id=config.daily_channel_id,
+                channel_name=config.daily_channel_name,
                 discord_module=discord,
                 error_label="DISCORD_DAILY_CHANNEL_ID",
             )
-            plan_date = datetime.now().astimezone().date()
-            snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
-            if snapshot is None:
-                content = format_missing_plan_snapshot_message(
-                    mention_user_id=config.notify_user_id,
-                )
-            else:
-                content = format_plan_today_message(
-                    snapshot.envelope,
+            resolved_channel_id = getattr(channel, "id", None) or config.daily_channel_id
+            due_slots = _collect_due_briefing_slots(
+                last_scan=last_scan,
+                scan_time=scan_time,
+                day_profile=day_profile,
+            )
+
+            for slot, plan_date in due_slots:
+                briefing = _synthesize_scheduled_briefing(slot, plan_date)
+                async with self._checkpoint_lock():
+                    already_sent = await asyncio.to_thread(
+                        _has_briefing_been_sent_async,
+                        resolved_channel_id,
+                        briefing.briefing_id,
+                    )
+                if already_sent:
+                    continue
+
+                snapshot = await asyncio.to_thread(load_plan_today_snapshot, plan_date)
+                if snapshot is None:
+                    ack = format_snapshot_regenerating_message(
+                        mention_user_id=config.notify_user_id,
+                        slot_title=slot.title,
+                    )
+                    try:
+                        await _send_channel_message_chunks(
+                            channel,
+                            ack,
+                            allowed_mentions=_build_allowed_mentions(discord),
+                        )
+                    except Exception as exc:
+                        print(f"warning: failed to send scheduled briefing ack: {exc}")
+                        continue
+
+                    snapshot, error = await self.ensure_snapshot(plan_date)
+                    if snapshot is None:
+                        fail = format_snapshot_regeneration_failed_message(
+                            mention_user_id=config.notify_user_id,
+                            error=error,
+                        )
+                        try:
+                            await _send_channel_message_chunks(
+                                channel,
+                                fail,
+                                allowed_mentions=_build_allowed_mentions(discord),
+                            )
+                        except Exception as exc:
+                            print(f"warning: failed to send scheduled briefing failure: {exc}")
+                        continue
+
+                content = format_scheduled_briefing_message(
+                    briefing,
                     mention_user_id=config.notify_user_id,
                     snapshot=snapshot,
                 )
-            send_started_at = datetime.now().astimezone()
-            send_started = time_module.perf_counter()
-            try:
-                await _send_channel_message_chunks(
-                    channel,
-                    content,
-                    allowed_mentions=_build_allowed_mentions(discord),
-                )
-            except Exception as exc:
+                send_started_at = datetime.now().astimezone()
+                send_started = time_module.perf_counter()
+                try:
+                    await _send_channel_message_chunks(
+                        channel,
+                        content,
+                        allowed_mentions=_build_allowed_mentions(discord),
+                    )
+                except Exception as exc:
+                    _save_discord_send_metric(
+                        workflow="discord-daily-briefing",
+                        started_at=send_started_at,
+                        duration_seconds=time_module.perf_counter() - send_started,
+                        ok=False,
+                        channel_id=resolved_channel_id,
+                        message_count=len(split_discord_message(content)),
+                        snapshot_state=_snapshot_state_label(snapshot),
+                        error=str(exc),
+                    )
+                    raise
+
                 _save_discord_send_metric(
                     workflow="discord-daily-briefing",
                     started_at=send_started_at,
                     duration_seconds=time_module.perf_counter() - send_started,
-                    ok=False,
-                    channel_id=config.daily_channel_id,
+                    ok=True,
+                    channel_id=resolved_channel_id,
                     message_count=len(split_discord_message(content)),
                     snapshot_state=_snapshot_state_label(snapshot),
-                    error=str(exc),
                 )
-                raise
-
-            _save_discord_send_metric(
-                workflow="discord-daily-briefing",
-                started_at=send_started_at,
-                duration_seconds=time_module.perf_counter() - send_started,
-                ok=True,
-                channel_id=config.daily_channel_id,
-                message_count=len(split_discord_message(content)),
-                snapshot_state=_snapshot_state_label(snapshot),
-            )
+                async with self._checkpoint_lock():
+                    await asyncio.to_thread(
+                        _mark_briefings_sent,
+                        resolved_channel_id,
+                        [briefing],
+                    )
 
         async def _run_checkpoint_notification_loop(self) -> None:
             await self.wait_until_ready()
@@ -185,17 +678,22 @@ def run_discord_bot(repo_root: Path) -> None:
             scan_time: datetime,
         ) -> None:
             channel_id = config.effective_checkpoint_channel_id
-            if channel_id is None:
+            channel_name = config.effective_checkpoint_channel_name
+            if channel_id is None and channel_name is None:
                 return
             if scan_time <= last_scan:
                 return
 
             channel = await _resolve_messageable_channel(
                 self,
+                guild_id=config.guild_id,
                 channel_id=channel_id,
+                channel_name=channel_name,
                 discord_module=discord,
                 error_label=_checkpoint_channel_error_label(config),
             )
+            resolved_channel_id = getattr(channel, "id", None) or channel_id or 0
+            plan_date = scan_time.date()
             async with self._checkpoint_lock():
                 due_checkpoints = await asyncio.to_thread(
                     _resolve_due_checkpoints,
@@ -204,16 +702,23 @@ def run_discord_bot(repo_root: Path) -> None:
                 )
                 unsent_checkpoints = await asyncio.to_thread(
                     _filter_unsent_checkpoints,
-                    channel_id,
+                    resolved_channel_id,
                     due_checkpoints,
                 )
-            if not unsent_checkpoints:
+                actionable_checkpoints = await asyncio.to_thread(
+                    filter_unresponded_checkpoints,
+                    plan_date,
+                    unsent_checkpoints,
+                )
+            if not actionable_checkpoints:
                 return
 
+            include_response_prompt = config.notify_user_id is not None
             content = format_checkpoints_message(
-                unsent_checkpoints,
+                actionable_checkpoints,
                 reference_time=scan_time,
                 mention_user_id=config.notify_user_id,
+                include_response_prompt=include_response_prompt,
             )
             await _send_channel_message_chunks(
                 channel,
@@ -223,9 +728,18 @@ def run_discord_bot(repo_root: Path) -> None:
             async with self._checkpoint_lock():
                 await asyncio.to_thread(
                     _mark_checkpoints_sent,
-                    channel_id,
-                    unsent_checkpoints,
+                    resolved_channel_id,
+                    actionable_checkpoints,
                 )
+                if include_response_prompt:
+                    await asyncio.to_thread(
+                        save_checkpoint_pending_response,
+                        user_id=config.notify_user_id,
+                        plan_date=plan_date,
+                        channel_id=resolved_channel_id,
+                        checkpoints=list(actionable_checkpoints),
+                        sent_at=scan_time,
+                    )
 
         def _checkpoint_lock(self) -> asyncio.Lock:
             if self._checkpoint_storage_lock is None:
@@ -256,47 +770,102 @@ def run_discord_bot(repo_root: Path) -> None:
 def _next_daily_run(target_time: time | None) -> datetime:
     if target_time is None:
         raise ValueError("daily briefing time is required for scheduling.")
-
     now = datetime.now().astimezone()
-    next_run = now.replace(
-        hour=target_time.hour,
-        minute=target_time.minute,
-        second=0,
-        microsecond=0,
-    )
+    next_run = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
     if next_run <= now:
         next_run = next_run + timedelta(days=1)
     return next_run
 
 
+def _collect_due_daily_preparation_steps(
+    *,
+    last_scan: datetime,
+    scan_time: datetime,
+    day_profile: DayProfile,
+    completed_steps: set[tuple[str, str]],
+) -> list[tuple[str, date, datetime]]:
+    if scan_time <= last_scan:
+        return []
+
+    due_steps: list[tuple[str, date, datetime]] = []
+    current_date = last_scan.date()
+    end_date = scan_time.date()
+    while current_date <= end_date:
+        for step_name, scheduled_at in _daily_preparation_schedule_for(current_date, day_profile):
+            step_key = (current_date.isoformat(), step_name)
+            if step_key in completed_steps:
+                continue
+            if last_scan < scheduled_at <= scan_time:
+                due_steps.append((step_name, current_date, scheduled_at))
+        current_date = current_date + timedelta(days=1)
+
+    due_steps.sort(key=lambda item: item[2])
+    return due_steps
+
+
+def _daily_preparation_schedule_for(plan_date: date, day_profile: DayProfile) -> list[tuple[str, datetime]]:
+    morning_slot = next(slot for slot in day_profile.briefing_schedule(plan_date) if slot.briefing_type == "morning")
+    briefing_at = morning_slot.send_at
+    return [
+        ("calendar_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES)),
+        ("github_sync", briefing_at - timedelta(minutes=DAILY_PREPARATION_GITHUB_OFFSET_MINUTES)),
+        ("planning_snapshot", briefing_at - timedelta(minutes=DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES)),
+    ]
+
+
+def _cleanup_completed_preparation_steps(
+    completed_steps: set[tuple[str, str]],
+    *,
+    today: date,
+) -> None:
+    stale_keys = [item for item in completed_steps if item[0] < today.isoformat()]
+    for item in stale_keys:
+        completed_steps.discard(item)
+
+
+def _next_daily_preparation_runs(*, now: datetime, day_profile: DayProfile) -> tuple[datetime, datetime, datetime]:
+    next_briefing = _next_scheduled_briefing_run(now=now, day_profile=day_profile, briefing_type="morning")
+
+    return (
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_CALENDAR_OFFSET_MINUTES),
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_GITHUB_OFFSET_MINUTES),
+        next_briefing - timedelta(minutes=DAILY_PREPARATION_SNAPSHOT_OFFSET_MINUTES),
+    )
+
+
 def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     messages: list[str] = []
+    daily_channel_configured = config.daily_channel_id is not None or config.daily_channel_name is not None
 
     messages.extend(_channel_configuration_warnings(config))
+    messages.extend(_channel_overlap_warnings(config))
 
-    if config.daily_briefing_time is not None and config.daily_channel_id is None:
+    if config.daily_briefing_time is not None:
         messages.append(
-            "warning: DISCORD_DAILY_BRIEFING_TIME is set but DISCORD_DAILY_CHANNEL_ID is missing. "
-            "Scheduled daily briefings will not run."
+            "warning: DISCORD_DAILY_BRIEFING_TIME is deprecated and ignored. "
+            "Planning Agent briefing schedule now follows YULE_WAKE_TIME, YULE_LUNCH_START_TIME, and YULE_WORK_END_TIME."
         )
-    elif config.daily_briefing_time is None and config.daily_channel_id is not None:
-        messages.append(
-            "warning: DISCORD_DAILY_CHANNEL_ID is set but DISCORD_DAILY_BRIEFING_TIME is missing. "
-            "Scheduled daily briefings will not run."
-        )
-    elif config.daily_briefing_time is not None and config.daily_channel_id is not None:
-        next_run = _next_daily_run(config.daily_briefing_time)
+
+    if daily_channel_configured:
+        next_run = _next_scheduled_briefing_run(now=now, day_profile=load_day_profile(), briefing_type=None)
         messages.append(
             "info: daily briefing enabled "
-            f"(channel={config.daily_channel_id}, next_run={next_run.isoformat()})"
+            f"({_channel_target_text(config.daily_channel_id, config.daily_channel_name)}, next_run={next_run.isoformat()})"
+        )
+    else:
+        messages.append(
+            "warning: DISCORD_DAILY_CHANNEL_ID or DISCORD_DAILY_CHANNEL_NAME is missing. "
+            "Scheduled daily briefings will not run."
         )
 
     checkpoint_channel_id = config.effective_checkpoint_channel_id
-    if checkpoint_channel_id is not None:
+    checkpoint_channel_name = config.effective_checkpoint_channel_name
+    if checkpoint_channel_id is not None or checkpoint_channel_name is not None:
         next_run = _next_checkpoint_scan(after=now)
         messages.append(
             "info: checkpoint notifications enabled "
-            f"(channel={checkpoint_channel_id}, prefetch_minutes={config.checkpoint_prefetch_minutes}, "
+            f"({_channel_target_text(checkpoint_channel_id, checkpoint_channel_name)}, "
+            f"prefetch_minutes={config.checkpoint_prefetch_minutes}, "
             f"next_scan={next_run.isoformat()})"
         )
     else:
@@ -307,24 +876,79 @@ def _startup_messages(config: DiscordBotConfig, *, now: datetime) -> list[str]:
     else:
         messages.append("info: Discord notifications will be sent without a user mention")
 
+    if daily_channel_configured:
+        next_calendar_sync, next_github_sync, next_snapshot = _next_daily_preparation_runs(
+            now=now,
+            day_profile=load_day_profile(),
+        )
+        messages.append(
+            "info: daily preparation enabled "
+            f"(calendar_sync={next_calendar_sync.isoformat()}, "
+            f"github_sync={next_github_sync.isoformat()}, "
+            f"snapshot={next_snapshot.isoformat()})"
+        )
+        messages.append(
+            "info: daily preparation retry policy "
+            f"(retry_count={config.preparation_retry_count}, retry_delay_seconds={config.preparation_retry_delay_seconds})"
+        )
+
+    if config.effective_debug_channel_id is not None or config.effective_debug_channel_name is not None:
+        messages.append(
+            "info: Discord debug messages enabled "
+            f"({_channel_target_text(config.effective_debug_channel_id, config.effective_debug_channel_name)})"
+        )
+    else:
+        messages.append("info: Discord debug messages disabled")
+
+    if config.effective_conversation_channel_id is not None or config.effective_conversation_channel_name is not None:
+        messages.append(
+            "info: conversation replies enabled "
+            f"({_channel_target_text(config.effective_conversation_channel_id, config.effective_conversation_channel_name)}, "
+            f"mode={config.conversation_reply_mode})"
+        )
+    elif config.conversation_reply_mode == "disabled":
+        messages.append("info: conversation replies disabled")
+    else:
+        messages.append("info: conversation replies enabled in mention-only mode")
+
     return messages
 
 
 def _channel_configuration_warnings(config: DiscordBotConfig) -> list[str]:
-    if config.application_id is None:
-        return []
-
     warnings = []
     configured_channels = [
         ("DISCORD_DAILY_CHANNEL_ID", config.daily_channel_id),
         ("DISCORD_CHECKPOINT_CHANNEL_ID", config.checkpoint_channel_id),
+        ("DISCORD_CONVERSATION_CHANNEL_ID", config.conversation_channel_id),
     ]
     for label, channel_id in configured_channels:
-        if channel_id is not None and channel_id == config.application_id:
+        if config.application_id is not None and channel_id is not None and channel_id == config.application_id:
             warnings.append(
                 f"warning: {label} looks like DISCORD_APPLICATION_ID. "
                 "Use the target Discord text channel id instead."
             )
+        if channel_id is not None and channel_id == config.guild_id:
+            warnings.append(
+                f"warning: {label} looks like DISCORD_GUILD_ID. "
+                "Use the target Discord text channel id instead."
+            )
+    return warnings
+
+
+def _channel_overlap_warnings(config: DiscordBotConfig) -> list[str]:
+    warnings: list[str] = []
+    daily_id = config.daily_channel_id
+    daily_name = _normalize_channel_name(config.daily_channel_name)
+    conversation_id = config.effective_conversation_channel_id
+    conversation_name = _normalize_channel_name(config.effective_conversation_channel_name)
+
+    same_id = daily_id is not None and conversation_id is not None and daily_id == conversation_id
+    same_name = daily_name and conversation_name and daily_name == conversation_name
+    if same_id or same_name:
+        warnings.append(
+            "warning: daily briefing channel and conversation channel are the same. "
+            "Manual chat replies can look like duplicate briefings in that channel."
+        )
     return warnings
 
 
@@ -342,13 +966,140 @@ def _checkpoint_channel_error_label(config: DiscordBotConfig) -> str:
     return "DISCORD_DAILY_CHANNEL_ID"
 
 
+def _next_scheduled_briefing_run(
+    *,
+    now: datetime,
+    day_profile: DayProfile,
+    briefing_type: str | None,
+) -> datetime:
+    upcoming: list[datetime] = []
+    for offset in range(0, 3):
+        plan_date = now.date() + timedelta(days=offset)
+        for slot in day_profile.briefing_schedule(plan_date):
+            if briefing_type is not None and slot.briefing_type != briefing_type:
+                continue
+            if slot.send_at > now:
+                upcoming.append(slot.send_at)
+    if not upcoming:
+        raise ValueError("no upcoming briefing schedule could be computed")
+    return min(upcoming)
+
+
+def _resolve_due_briefings(
+    window_start: datetime,
+    window_end: datetime,
+) -> list[PlanningScheduledBriefing]:
+    window_minutes = max(1, math.ceil((window_end - window_start).total_seconds() / 60))
+    return build_due_briefings(window_start, window_minutes=window_minutes)
+
+
+def _collect_due_briefing_slots(
+    *,
+    last_scan: datetime,
+    scan_time: datetime,
+    day_profile: DayProfile,
+) -> list[tuple[DayProfileBriefingSlot, date]]:
+    if scan_time <= last_scan:
+        return []
+
+    slots: list[tuple[DayProfileBriefingSlot, date]] = []
+    plan_date = last_scan.date()
+    end_date = scan_time.date()
+    while plan_date <= end_date:
+        for slot in day_profile.briefing_schedule(plan_date):
+            if last_scan < slot.send_at <= scan_time:
+                slots.append((slot, plan_date))
+        plan_date += timedelta(days=1)
+    slots.sort(key=lambda item: item[0].send_at)
+    return slots
+
+
+def _synthesize_scheduled_briefing(
+    slot: DayProfileBriefingSlot,
+    plan_date: date,
+) -> PlanningScheduledBriefing:
+    return PlanningScheduledBriefing(
+        briefing_id=build_fallback_item_uid(
+            "planning-scheduled-briefing", plan_date.isoformat(), slot.briefing_type
+        ),
+        briefing_type=slot.briefing_type,
+        title=slot.title,
+        send_at=slot.send_at.isoformat(),
+        content="",
+        source="rules",
+    )
+
+
+def _has_briefing_been_sent_async(channel_id: int | None, briefing_id: str) -> bool:
+    if channel_id is None:
+        return False
+    entry = load_json_cache(
+        namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+        cache_key=_briefing_notification_cache_key(channel_id, briefing_id),
+        allow_stale=False,
+        touch=False,
+    )
+    return entry is not None
+
+
+def _briefing_notification_cache_key(channel_id: int, briefing_id: str) -> str:
+    return f"{channel_id}:{briefing_id}"
+
+
+def _filter_unsent_briefings(
+    channel_id: int | None,
+    briefings: list[PlanningScheduledBriefing],
+) -> list[PlanningScheduledBriefing]:
+    if channel_id is None:
+        return briefings
+    unsent: list[PlanningScheduledBriefing] = []
+    for briefing in briefings:
+        entry = load_json_cache(
+            namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+            cache_key=_briefing_notification_cache_key(channel_id, briefing.briefing_id),
+            allow_stale=False,
+            touch=False,
+        )
+        if entry is None:
+            unsent.append(briefing)
+    return unsent
+
+
+def _mark_briefings_sent(
+    channel_id: int | None,
+    briefings: list[PlanningScheduledBriefing],
+) -> None:
+    if channel_id is None:
+        return
+    for briefing in briefings:
+        save_json_cache(
+            namespace=BRIEFING_NOTIFICATION_NAMESPACE,
+            cache_key=_briefing_notification_cache_key(channel_id, briefing.briefing_id),
+            provider="discord-bot",
+            range_start=briefing.send_at,
+            range_end=briefing.send_at,
+            scope_hash=str(channel_id),
+            ttl_seconds=BRIEFING_NOTIFICATION_TTL_SECONDS,
+            payload={
+                "channel_id": channel_id,
+                "briefing_id": briefing.briefing_id,
+                "briefing_type": briefing.briefing_type,
+                "send_at": briefing.send_at,
+            },
+            metadata={
+                "channel_id": channel_id,
+                "briefing_type": briefing.briefing_type,
+            },
+        )
+
+
 def _save_discord_send_metric(
     *,
     workflow: str,
     started_at: datetime,
     duration_seconds: float,
     ok: bool,
-    channel_id: int,
+    channel_id: int | None,
     message_count: int,
     snapshot_state: str,
     error: str | None = None,
@@ -399,18 +1150,83 @@ async def _cancel_task(task: asyncio.Task[None] | None) -> None:
 async def _resolve_messageable_channel(
     bot: "commands.Bot",
     *,
-    channel_id: int,
+    guild_id: int,
+    channel_id: int | None,
+    channel_name: str | None,
     discord_module: "discord",
     error_label: str,
 ) -> "discord.abc.Messageable":
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        channel = await bot.fetch_channel(channel_id)
+    channel = None
+    fallback_used = False
+    if channel_id is not None:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+
+    if channel is None and channel_name:
+        if channel_id is not None:
+            print(
+                f"warning: {error_label} could not be resolved by id={channel_id}; "
+                f"falling back to channel_name={channel_name!r}."
+            )
+        channel = await _find_messageable_channel_by_name(
+            bot,
+            guild_id=guild_id,
+            channel_name=channel_name,
+            discord_module=discord_module,
+        )
+        fallback_used = channel is not None
 
     if not isinstance(channel, discord_module.abc.Messageable):
-        raise ValueError(f"Configured {error_label} is not a messageable channel.")
+        target_text = _channel_target_text(channel_id, channel_name)
+        raise ValueError(f"Configured {error_label} could not be resolved to a messageable channel ({target_text}).")
+
+    if fallback_used:
+        print(
+            f"info: resolved {error_label} by channel name fallback "
+            f"({_channel_target_text(getattr(channel, 'id', None), channel_name)})"
+        )
 
     return channel
+
+
+async def _find_messageable_channel_by_name(
+    bot: "commands.Bot",
+    *,
+    guild_id: int,
+    channel_name: str,
+    discord_module: "discord",
+) -> "discord.abc.Messageable | None":
+    normalized_target = _normalize_channel_name(channel_name)
+    guild = bot.get_guild(guild_id)
+
+    channels = []
+    if guild is not None:
+        channels.extend(getattr(guild, "channels", []) or [])
+        fetch_channels = getattr(guild, "fetch_channels", None)
+        if not channels and callable(fetch_channels):
+            try:
+                channels.extend(await fetch_channels())
+            except Exception:
+                pass
+
+    if not channels:
+        channels.extend(
+            channel
+            for channel in bot.get_all_channels()
+            if getattr(getattr(channel, "guild", None), "id", None) == guild_id
+        )
+
+    for channel in channels:
+        if _normalize_channel_name(getattr(channel, "name", None)) != normalized_target:
+            continue
+        if isinstance(channel, discord_module.abc.Messageable):
+            return channel
+
+    return None
 
 
 async def _send_channel_message_chunks(
@@ -421,6 +1237,106 @@ async def _send_channel_message_chunks(
 ) -> None:
     for chunk in split_discord_message(message):
         await channel.send(chunk, allowed_mentions=allowed_mentions)
+
+
+def _should_handle_message(
+    *,
+    message: object,
+    bot_user: object,
+    conversation_channel_id: int | None,
+    conversation_channel_name: str | None,
+    conversation_reply_mode: str,
+    daily_channel_id: int | None = None,
+    daily_channel_name: str | None = None,
+) -> bool:
+    if conversation_reply_mode == "disabled":
+        return False
+
+    content = str(getattr(message, "content", "") or "").strip()
+    if content.startswith("/"):
+        return False
+
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    parent = getattr(channel, "parent", None)
+    parent_id = getattr(parent, "id", None) or getattr(channel, "parent_id", None)
+    channel_name = getattr(channel, "name", None)
+    parent_name = getattr(parent, "name", None)
+
+    daily_is_separate_channel = (
+        daily_channel_id is not None
+        and daily_channel_id != conversation_channel_id
+    ) or (
+        bool(_normalize_channel_name(daily_channel_name))
+        and _normalize_channel_name(daily_channel_name)
+        != _normalize_channel_name(conversation_channel_name)
+    )
+    if daily_is_separate_channel and _channel_matches_target(
+        channel_id=channel_id,
+        parent_id=parent_id,
+        channel_name=channel_name,
+        parent_name=parent_name,
+        target_id=daily_channel_id,
+        target_name=daily_channel_name,
+    ):
+        return False
+
+    plain_message_allowed = conversation_reply_mode == "plain-message-or-mention"
+
+    if plain_message_allowed and conversation_channel_id is not None and channel_id == conversation_channel_id:
+        return True
+    if plain_message_allowed and conversation_channel_id is not None and parent_id == conversation_channel_id:
+        return True
+    if plain_message_allowed and _normalize_channel_name(conversation_channel_name) and (
+        _normalize_channel_name(channel_name) == _normalize_channel_name(conversation_channel_name)
+        or _normalize_channel_name(parent_name) == _normalize_channel_name(conversation_channel_name)
+    ):
+        return True
+
+    return _message_mentions_bot(message=message, bot_user=bot_user)
+
+
+def _channel_matches_target(
+    *,
+    channel_id: int | None,
+    parent_id: int | None,
+    channel_name: str | None,
+    parent_name: str | None,
+    target_id: int | None,
+    target_name: str | None,
+) -> bool:
+    if target_id is not None:
+        if channel_id is not None and channel_id == target_id:
+            return True
+        if parent_id is not None and parent_id == target_id:
+            return True
+    target_name_normalized = _normalize_channel_name(target_name)
+    if target_name_normalized:
+        if _normalize_channel_name(channel_name) == target_name_normalized:
+            return True
+        if _normalize_channel_name(parent_name) == target_name_normalized:
+            return True
+    return False
+
+
+def _extract_conversation_prompt(*, message: object, bot_user: object) -> str:
+    content = str(getattr(message, "content", "") or "")
+    bot_id = getattr(bot_user, "id", None)
+    bot_name = str(getattr(bot_user, "name", "") or "").strip()
+
+    if bot_id is not None:
+        content = content.replace(f"<@{bot_id}>", " ")
+        content = content.replace(f"<@!{bot_id}>", " ")
+    if bot_name:
+        content = content.replace(f"@{bot_name}", " ")
+
+    return " ".join(content.split())
+
+
+def _message_mentions_bot(*, message: object, bot_user: object) -> bool:
+    mentions = getattr(message, "mentions", None) or []
+    bot_id = getattr(bot_user, "id", None)
+    return any(getattr(user, "id", None) == bot_id for user in mentions)
 
 
 def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentions":
@@ -489,3 +1405,109 @@ def _has_checkpoint_been_sent(channel_id: int, checkpoint_id: str) -> bool:
 
 def _checkpoint_cache_key(channel_id: int, checkpoint_id: str) -> str:
     return f"{channel_id}:{checkpoint_id}"
+
+
+def _normalize_channel_name(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lstrip("#").lower()
+
+
+def _channel_target_text(channel_id: int | None, channel_name: str | None) -> str:
+    parts = []
+    if channel_id is not None:
+        parts.append(f"channel_id={channel_id}")
+    if channel_name:
+        parts.append(f"channel_name={channel_name}")
+    return ", ".join(parts) if parts else "channel=unconfigured"
+
+
+def _cleanup_preparation_context(
+    context_store: dict[str, dict[str, object]],
+    *,
+    today: date,
+) -> None:
+    stale_keys = [key for key in context_store if key < today.isoformat()]
+    for key in stale_keys:
+        context_store.pop(key, None)
+
+
+def _preparation_source_label(source_statuses, source_type: str) -> str:
+    for status in source_statuses:
+        if getattr(status, "source_type", None) == source_type:
+            return str(getattr(status, "source_id", "unknown"))
+    return "unknown"
+
+
+def _log_preparation_event(
+    *,
+    level: str,
+    event: str,
+    step_name: str,
+    plan_date: str,
+    scheduled_at: str,
+    ok: bool | None = None,
+    attempt: int | None = None,
+    attempt_limit: int | None = None,
+    duration_seconds: float | None = None,
+    retry_scheduled: bool | None = None,
+    retry_delay_seconds: int | None = None,
+    metadata: dict[str, object] | None = None,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "component": "discord-daily-preparation",
+        "event": event,
+        "step_name": step_name,
+        "plan_date": plan_date,
+        "scheduled_at": scheduled_at,
+    }
+    if ok is not None:
+        payload["ok"] = ok
+    if attempt is not None:
+        payload["attempt"] = attempt
+    if attempt_limit is not None:
+        payload["attempt_limit"] = attempt_limit
+    if duration_seconds is not None:
+        payload["duration_seconds"] = round(duration_seconds, 3)
+    if retry_scheduled is not None:
+        payload["retry_scheduled"] = retry_scheduled
+    if retry_delay_seconds is not None:
+        payload["retry_delay_seconds"] = retry_delay_seconds
+    if metadata:
+        payload["metadata"] = metadata
+    if error:
+        payload["error"] = error
+    print(f"{level}: {json.dumps(payload, ensure_ascii=False, sort_keys=True)}")
+
+
+def _save_preparation_metric(
+    *,
+    step_name: str,
+    plan_date: str,
+    started_at: datetime,
+    duration_seconds: float,
+    ok: bool,
+    metadata: dict[str, object],
+    error: str | None = None,
+) -> None:
+    ended_at = datetime.now().astimezone()
+    step = RuntimeStepMetric(
+        name=step_name,
+        duration_seconds=duration_seconds,
+        ok=ok,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        metadata=metadata,
+        error=error,
+    )
+    save_runtime_metric_run(
+        workflow="discord-daily-preparation",
+        started_at=started_at,
+        ended_at=ended_at,
+        steps=[step],
+        metadata={
+            "plan_date": plan_date,
+            "step_name": step_name,
+        },
+    )

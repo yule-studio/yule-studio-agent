@@ -1,0 +1,17 @@
+{
+  "id": "designer",
+  "name": "Designer",
+  "type": "role",
+  "department": "coding-agent",
+  "description": "사용자 흐름과 화면 구조, 컴포넌트 분해, 시각 표현 가이드를 설계하는 부서 멤버. 코드 직접 작성보다 의사 결정과 산출물 가이드 생산이 주된 책임이다.",
+  "instruction_entry": "agents/coding-agent/designer/CLAUDE.md",
+  "runner": null,
+  "responsibilities": [
+    "기능별 사용자 흐름과 화면 구조 정의",
+    "컴포넌트 단위 분해와 상태/이벤트 흐름 정리",
+    "시각 표현 가이드(타이포, 컬러, 간격) 정의",
+    "프론트가 옮길 수 있는 형태로 의사결정 산출물 정리"
+  ],
+  "preferred_advisors": ["claude", "gemini"],
+  "phase": "skeleton"
+}

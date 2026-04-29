@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Optional, Sequence
 
@@ -10,10 +11,59 @@ from .models import (
     DailyPlanSummary,
     PlanningBlockBriefing,
     PlanningCheckpoint,
+    PlanningScheduledBriefing,
     PlanningExecutionBlock,
     PlanningTaskCandidate,
     PlanningTimeBlock,
 )
+
+
+def normalize_paragraph_spacing(text: str) -> str:
+    if not text:
+        return text
+    raw = text.replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
+
+    paragraph_blocks = re.split(r"\n\s*\n", raw)
+
+    output_paragraphs: list[str] = []
+    for block in paragraph_blocks:
+        block_lines: list[str] = []
+        for raw_line in block.split("\n"):
+            line = raw_line.rstrip()
+            if not line.strip():
+                continue
+            if _is_list_or_heading(line):
+                block_lines.append(line)
+            else:
+                block_lines.extend(_split_sentences(line))
+        if block_lines:
+            output_paragraphs.append("\n".join(block_lines))
+
+    return "\n\n".join(output_paragraphs)
+
+
+def _split_sentences(line: str) -> list[str]:
+    if not line.strip():
+        return []
+    parts = re.split(r"(?<=[.!?。！？])\s+", line.strip())
+    sentences = [part.strip() for part in parts if part.strip()]
+    return sentences or [line.strip()]
+
+
+def _is_list_or_heading(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped[0] in "-*•":
+        return True
+    head = stripped.split(maxsplit=1)[0]
+    if len(head) >= 2 and head[:-1].isdigit() and head[-1] in ".)":
+        return True
+    if stripped.endswith(":"):
+        return True
+    return False
 
 
 def render_daily_plan(envelope: DailyPlanEnvelope) -> str:
@@ -305,6 +355,170 @@ def render_discord_briefing(
         lines.append(f"개발 후보 작업은 {len(coding_agent_handoff)}건입니다.")
 
     return "\n".join(lines)
+
+
+def render_work_start_briefing(
+    *,
+    plan_date: date,
+    summary: DailyPlanSummary,
+    fixed_schedule: Sequence[PlanningTimeBlock],
+    prioritized_tasks: Sequence[PlanningTaskCandidate],
+    suggested_time_blocks: Sequence[PlanningTimeBlock],
+    checkpoints: Sequence[PlanningCheckpoint],
+    day_profile: DayProfile,
+) -> str:
+    work_start_label = day_profile.work_start_time.strftime("%H:%M")
+    lines = [f"{plan_date.isoformat()} 업무 시작 브리핑"]
+    lines.append(
+        f"- {work_start_label} 기준으로 오전에 집중할 작업과 남은 일정을 빠르게 점검하는 시간입니다."
+    )
+    if prioritized_tasks:
+        top_task = prioritized_tasks[0]
+        lines.append(f"- 지금 가장 먼저 잡으면 좋은 작업은 '{top_task.title}'입니다.")
+    morning_focus_blocks = [
+        block for block in suggested_time_blocks
+        if datetime.fromisoformat(block.start).time() < day_profile.lunch_start_time
+    ]
+    if morning_focus_blocks:
+        focus = morning_focus_blocks[0]
+        lines.append(
+            f"- 오전 집중 시간대는 {_format_time_range(focus.start, focus.end)} '{focus.title}'로 잡혀 있습니다."
+        )
+    morning_events = [
+        block for block in fixed_schedule
+        if datetime.fromisoformat(block.start).time() < day_profile.lunch_start_time
+    ]
+    if morning_events:
+        next_event = morning_events[0]
+        lines.append(
+            f"- 가장 먼저 챙겨야 할 일정은 {_format_time_range(next_event.start, next_event.end)} '{next_event.title}'입니다."
+        )
+    morning_checkpoints = [
+        checkpoint for checkpoint in checkpoints
+        if datetime.fromisoformat(checkpoint.remind_at).time() < day_profile.lunch_start_time
+    ]
+    if morning_checkpoints:
+        first_time = datetime.fromisoformat(morning_checkpoints[0].remind_at).strftime("%H:%M")
+        lines.append(f"- 오전 첫 체크포인트는 {first_time}입니다.")
+    return "\n".join(lines)
+
+
+def render_lunch_briefing(
+    *,
+    plan_date: date,
+    summary: DailyPlanSummary,
+    fixed_schedule: Sequence[PlanningTimeBlock],
+    prioritized_tasks: Sequence[PlanningTaskCandidate],
+    checkpoints: Sequence[PlanningCheckpoint],
+    day_profile: DayProfile,
+) -> str:
+    lines = [f"{plan_date.isoformat()} 점심 브리핑"]
+    lines.append(
+        f"- 오전 흐름을 한 번 점검하고, {day_profile.lunch_start_time.strftime('%H:%M')} 이후 블록을 다시 정리하는 시간입니다."
+    )
+    if prioritized_tasks:
+        top_task = prioritized_tasks[0]
+        lines.append(f"- 오후 첫 우선 작업은 '{top_task.title}'입니다.")
+    afternoon_events = [
+        block for block in fixed_schedule if datetime.fromisoformat(block.start).time() >= day_profile.lunch_start_time
+    ]
+    if afternoon_events:
+        next_block = afternoon_events[0]
+        lines.append(
+            f"- 점심 이후에는 {_format_time_range(next_block.start, next_block.end)} '{next_block.title}' 흐름을 먼저 확인해 주세요."
+        )
+    if checkpoints:
+        upcoming = [
+            checkpoint
+            for checkpoint in checkpoints
+            if datetime.fromisoformat(checkpoint.remind_at).time() >= day_profile.lunch_start_time
+        ]
+        if upcoming:
+            first_time = datetime.fromisoformat(upcoming[0].remind_at).strftime("%H:%M")
+            lines.append(f"- 다음 체크포인트는 {first_time}입니다.")
+    return "\n".join(lines)
+
+
+def render_evening_briefing(
+    *,
+    plan_date: date,
+    summary: DailyPlanSummary,
+    prioritized_tasks: Sequence[PlanningTaskCandidate],
+    coding_agent_handoff: Sequence[PlanningTaskCandidate],
+    warnings: Sequence[str],
+    day_profile: DayProfile,
+) -> str:
+    lines = [f"{plan_date.isoformat()} 퇴근 후 브리핑"]
+    lines.append(
+        f"- {day_profile.work_end_time.strftime('%H:%M')} 기준으로 오늘 흐름을 마무리하고, 내일 첫 작업을 가볍게 준비하는 시간입니다."
+    )
+    if prioritized_tasks:
+        lines.append(f"- 아직 마음에 걸리는 작업이 있다면 '{prioritized_tasks[0].title}'부터 상태를 정리해 두는 편이 좋습니다.")
+    if coding_agent_handoff:
+        lines.append(f"- 개발 후보 작업은 {len(coding_agent_handoff)}건이며, 내일 첫 handoff 후보는 '{coding_agent_handoff[0].title}'입니다.")
+    if warnings:
+        lines.append("- 오늘 계획에서 비어 있거나 확인이 필요한 항목이 있었으니, 자기 전에 한 번만 점검해 주세요.")
+    return "\n".join(lines)
+
+
+def build_scheduled_briefings(
+    *,
+    plan_date: date,
+    day_profile: DayProfile,
+    discord_briefing: str,
+    morning_briefing: str,
+    work_start_briefing: str,
+    lunch_briefing: str,
+    evening_briefing: str,
+    morning_source: str,
+) -> Sequence[PlanningScheduledBriefing]:
+    schedule_map = {slot.briefing_type: slot for slot in day_profile.briefing_schedule(plan_date)}
+    morning_slot = schedule_map["morning"]
+    work_start_slot = schedule_map["work_start"]
+    lunch_slot = schedule_map["lunch"]
+    evening_slot = schedule_map["evening"]
+    morning_content = "\n\n".join(
+        [
+            "오늘 브리핑",
+            discord_briefing,
+            "아침 브리핑",
+            morning_briefing,
+        ]
+    ).strip()
+    return [
+        PlanningScheduledBriefing(
+            briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "morning"),
+            briefing_type="morning",
+            title=morning_slot.title,
+            send_at=morning_slot.send_at.isoformat(),
+            content=morning_content,
+            source=morning_source,
+        ),
+        PlanningScheduledBriefing(
+            briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "work_start"),
+            briefing_type="work_start",
+            title=work_start_slot.title,
+            send_at=work_start_slot.send_at.isoformat(),
+            content=work_start_briefing,
+            source="rules",
+        ),
+        PlanningScheduledBriefing(
+            briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "lunch"),
+            briefing_type="lunch",
+            title=lunch_slot.title,
+            send_at=lunch_slot.send_at.isoformat(),
+            content=lunch_briefing,
+            source="rules",
+        ),
+        PlanningScheduledBriefing(
+            briefing_id=build_fallback_item_uid("planning-scheduled-briefing", plan_date.isoformat(), "evening"),
+            briefing_type="evening",
+            title=evening_slot.title,
+            send_at=evening_slot.send_at.isoformat(),
+            content=evening_briefing,
+            source="rules",
+        ),
+    ]
 
 
 def _build_execution_block_briefing(

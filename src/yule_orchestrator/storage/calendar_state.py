@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, timedelta
 from hashlib import sha256
 import json
 import os
@@ -10,11 +10,14 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
+from ._sqlite import SQLITE_WRITE_LOCK
+
 if TYPE_CHECKING:
     from ..integrations.calendar.models import CalendarEvent, CalendarQueryResult, CalendarTodo
 
 DEFAULT_CALENDAR_STATE_RETENTION_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 30_000
+_RANGE_END_SENTINEL = f"{date.max.isoformat()}T23:59:59.999999+00:00"
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ def sync_calendar_query_result(
     unchanged_count = 0
     completed_transition_count = 0
 
-    with _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
 
         for item in items:
@@ -259,71 +262,92 @@ def list_calendar_state_records(
     if not db_path.exists():
         return []
 
-    with _connect(db_path) as connection:
-        _ensure_schema(connection)
-        rows = connection.execute(
-            """
-            SELECT
-                source,
-                scope_hash,
-                item_type,
-                item_key,
-                external_uid,
-                calendar_name,
-                title,
-                start_at,
-                end_at,
-                due_at,
-                all_day,
-                status,
-                completed,
-                completed_at,
-                priority,
-                percent_complete,
-                description,
-                last_modified,
-                category_color,
-                payload_json,
-                first_seen_at,
-                last_seen_at,
-                last_changed_at
-            FROM calendar_item_states
-            ORDER BY item_type, COALESCE(due_at, start_at, end_at), title
-            """
-        ).fetchall()
+    clauses: list[str] = []
+    params: list[Any] = []
 
-    records = []
+    if start_date is not None or end_date is not None:
+        range_start_iso = (start_date or date.min).isoformat()
+        resolved_end = end_date or date.max
+        if resolved_end < date.max:
+            range_end_exclusive_iso = (resolved_end + timedelta(days=1)).isoformat()
+        else:
+            range_end_exclusive_iso = _RANGE_END_SENTINEL
+        or_parts: list[str] = []
+        for column in ("start_at", "end_at", "due_at", "completed_at"):
+            or_parts.append(f"({column} IS NOT NULL AND {column} >= ? AND {column} < ?)")
+            params.extend([range_start_iso, range_end_exclusive_iso])
+        clauses.append("(" + " OR ".join(or_parts) + ")")
+
+    if not include_completed:
+        clauses.append("completed = 0")
+
+    where_clause = ""
+    if clauses:
+        where_clause = "WHERE " + " AND ".join(clauses)
+
+    query = f"""
+        SELECT
+            source,
+            scope_hash,
+            item_type,
+            item_key,
+            external_uid,
+            calendar_name,
+            title,
+            start_at,
+            end_at,
+            due_at,
+            all_day,
+            status,
+            completed,
+            completed_at,
+            priority,
+            percent_complete,
+            description,
+            last_modified,
+            category_color,
+            payload_json,
+            first_seen_at,
+            last_seen_at,
+            last_changed_at
+        FROM calendar_item_states
+        {where_clause}
+        ORDER BY item_type, COALESCE(due_at, start_at, end_at), title
+    """
+
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
+        _ensure_schema(connection)
+        rows = connection.execute(query, params).fetchall()
+
+    records: list[CalendarStateRecord] = []
     for row in rows:
-        record = CalendarStateRecord(
-            source=row["source"],
-            scope_hash=row["scope_hash"],
-            item_type=row["item_type"],
-            item_key=row["item_key"],
-            external_uid=row["external_uid"],
-            calendar_name=row["calendar_name"],
-            title=row["title"],
-            start_at=row["start_at"],
-            end_at=row["end_at"],
-            due_at=row["due_at"],
-            all_day=bool(row["all_day"]),
-            status=row["status"],
-            completed=bool(row["completed"]),
-            completed_at=row["completed_at"],
-            priority=row["priority"],
-            percent_complete=row["percent_complete"],
-            description=row["description"] or "",
-            last_modified=row["last_modified"],
-            category_color=row["category_color"],
-            payload=_deserialize_json_object(row["payload_json"]) or {},
-            first_seen_at=float(row["first_seen_at"]),
-            last_seen_at=float(row["last_seen_at"]),
-            last_changed_at=float(row["last_changed_at"]),
+        records.append(
+            CalendarStateRecord(
+                source=row["source"],
+                scope_hash=row["scope_hash"],
+                item_type=row["item_type"],
+                item_key=row["item_key"],
+                external_uid=row["external_uid"],
+                calendar_name=row["calendar_name"],
+                title=row["title"],
+                start_at=row["start_at"],
+                end_at=row["end_at"],
+                due_at=row["due_at"],
+                all_day=bool(row["all_day"]),
+                status=row["status"],
+                completed=bool(row["completed"]),
+                completed_at=row["completed_at"],
+                priority=row["priority"],
+                percent_complete=row["percent_complete"],
+                description=row["description"] or "",
+                last_modified=row["last_modified"],
+                category_color=row["category_color"],
+                payload=_deserialize_json_object(row["payload_json"]) or {},
+                first_seen_at=float(row["first_seen_at"]),
+                last_seen_at=float(row["last_seen_at"]),
+                last_changed_at=float(row["last_changed_at"]),
+            )
         )
-        if not include_completed and record.completed:
-            continue
-        if not _record_matches_range(record, start_date=start_date, end_date=end_date):
-            continue
-        records.append(record)
 
     return records
 
@@ -336,7 +360,7 @@ def cleanup_calendar_state_records(
         return 0
 
     threshold = time.time() - max(0, retention_seconds)
-    with _connect(db_path) as connection:
+    with SQLITE_WRITE_LOCK, _connect(db_path) as connection:
         _ensure_schema(connection)
         cursor = connection.execute(
             "DELETE FROM calendar_item_states WHERE last_seen_at <= ?",
@@ -446,34 +470,6 @@ def _build_item_record(
         "payload_json": payload_json,
         "state_hash": state_hash,
     }
-
-
-def _record_matches_range(
-    record: CalendarStateRecord,
-    start_date: Optional[date],
-    end_date: Optional[date],
-) -> bool:
-    if start_date is None and end_date is None:
-        return True
-
-    range_start = start_date or date.min
-    range_end = end_date or date.max
-    candidate_values = [record.start_at, record.end_at, record.due_at, record.completed_at]
-
-    for value in candidate_values:
-        if not value:
-            continue
-        candidate_date = _date_from_iso(value)
-        if range_start <= candidate_date <= range_end:
-            return True
-
-    return False
-
-
-def _date_from_iso(value: str) -> date:
-    if "T" in value:
-        return datetime.fromisoformat(value).date()
-    return date.fromisoformat(value)
 
 
 def _deserialize_json_object(value: Optional[str]) -> Optional[dict[str, Any]]:

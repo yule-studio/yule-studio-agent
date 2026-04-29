@@ -102,6 +102,60 @@ END:VCALENDAR
         self.assertEqual(records[0].category_color, "7")
         self.assertEqual(records[0].payload["category_color"], "7")
 
+    def test_calendar_state_range_filter_excludes_other_days(self) -> None:
+        temp_dir = _temporary_directory_or_skip(self)
+        self.addCleanup(temp_dir.cleanup)
+        previous_db_path = os.environ.get("YULE_CACHE_DB_PATH")
+        self.addCleanup(_restore_env, "YULE_CACHE_DB_PATH", previous_db_path)
+        os.environ["YULE_CACHE_DB_PATH"] = os.path.join(temp_dir.name, "cache.sqlite3")
+
+        today_todo = build_todo(
+            _first_component(
+                """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VTODO
+UID:todo-today
+SUMMARY:오늘 할 일
+DUE;VALUE=DATE:20260423
+END:VTODO
+END:VCALENDAR
+"""
+            ),
+            "내 할 일",
+        )
+        tomorrow_todo = build_todo(
+            _first_component(
+                """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VTODO
+UID:todo-tomorrow
+SUMMARY:내일 할 일
+DUE;VALUE=DATE:20260424
+END:VTODO
+END:VCALENDAR
+"""
+            ),
+            "내 할 일",
+        )
+
+        sync_calendar_query_result(
+            CalendarQueryResult(
+                source="naver-caldav",
+                start_date=date(2026, 4, 23),
+                end_date=date(2026, 4, 24),
+                events=[],
+                todos=[today_todo, tomorrow_todo],
+            ),
+            scope_hash="scope-range",
+        )
+
+        same_day = list_calendar_state_records(
+            start_date=date(2026, 4, 23),
+            end_date=date(2026, 4, 23),
+        )
+
+        self.assertEqual([record.external_uid for record in same_day], ["todo-today"])
+
 
 def _first_component(raw_ical: str):
     calendar = Calendar.from_ical(raw_ical)

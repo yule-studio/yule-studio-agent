@@ -12,6 +12,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from yule_orchestrator.integrations.calendar.cache import load_calendar_cache
 from yule_orchestrator.integrations.github.cache import (
     load_cached_issue_payload,
     save_issue_payload,
@@ -63,6 +64,22 @@ class GitHubIssueCacheTestCase(unittest.TestCase):
         payload = load_cached_issue_payload(cache_key="cache-key", ttl_seconds=60)
 
         self.assertEqual(payload, [issue])
+
+    @patch("yule_orchestrator.integrations.github.cache.load_json_cache")
+    def test_issue_cache_load_does_not_touch_access_time(self, load_json_cache_mock) -> None:
+        load_json_cache_mock.return_value = None
+
+        load_cached_issue_payload(cache_key="cache-key", ttl_seconds=60)
+
+        self.assertFalse(load_json_cache_mock.call_args.kwargs["touch"])
+
+    @patch("yule_orchestrator.integrations.calendar.cache.load_json_cache")
+    def test_calendar_cache_load_does_not_touch_access_time(self, load_json_cache_mock) -> None:
+        load_json_cache_mock.return_value = None
+
+        load_calendar_cache(cache_key="cache-key", ttl_seconds=60)
+
+        self.assertFalse(load_json_cache_mock.call_args.kwargs["touch"])
 
     def test_list_open_issues_uses_cached_result_before_remote_fetch(self) -> None:
         cached_issue = GitHubIssue(

@@ -134,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to 10,5."
         ),
     )
+    _add_ollama_planning_arguments(daily_warmup_parser)
     daily_warmup_parser.add_argument(
         "--json",
         action="store_true",
@@ -329,21 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to 10,5."
         ),
     )
-    planning_daily_parser.add_argument(
-        "--use-ollama",
-        action="store_true",
-        help="Use Ollama to rewrite the morning briefing in a more natural tone.",
-    )
-    planning_daily_parser.add_argument(
-        "--ollama-model",
-        default="gemma3:latest",
-        help="Ollama model to use when --use-ollama is enabled. Defaults to gemma3:latest.",
-    )
-    planning_daily_parser.add_argument(
-        "--ollama-endpoint",
-        default="http://localhost:11434",
-        help="Ollama API endpoint. Defaults to http://localhost:11434.",
-    )
+    _add_ollama_planning_arguments(planning_daily_parser)
     planning_daily_parser.add_argument(
         "--json",
         action="store_true",
@@ -418,6 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to 10,5."
         ),
     )
+    _add_ollama_planning_arguments(planning_snapshot_parser)
     planning_snapshot_parser.add_argument(
         "--json",
         action="store_true",
@@ -436,6 +424,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _add_ollama_planning_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.set_defaults(use_ollama=None)
+    parser.add_argument(
+        "--use-ollama",
+        dest="use_ollama",
+        action="store_true",
+        help="Use Ollama to rewrite the morning briefing. Overrides OLLAMA_PLANNING_ENABLED.",
+    )
+    parser.add_argument(
+        "--no-ollama",
+        dest="use_ollama",
+        action="store_false",
+        help="Disable Ollama for this run even when OLLAMA_PLANNING_ENABLED=true.",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        help="Ollama model to use. Defaults to OLLAMA_MODEL or gemma3:latest.",
+    )
+    parser.add_argument(
+        "--ollama-endpoint",
+        help="Ollama API endpoint. Defaults to OLLAMA_ENDPOINT or http://localhost:11434.",
+    )
+    parser.add_argument(
+        "--ollama-timeout-seconds",
+        type=int,
+        help="Ollama request timeout. Defaults to OLLAMA_TIMEOUT_SECONDS or 20.",
+    )
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -462,6 +479,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.force_refresh,
                 args.reminder_lead_minutes,
                 args.json,
+                args.use_ollama,
+                args.ollama_model,
+                args.ollama_endpoint,
+                args.ollama_timeout_seconds,
             )
         if args.command == "calendar" and args.calendar_command == "events":
             return run_calendar_events_command(
@@ -515,6 +536,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.use_ollama,
                 args.ollama_model,
                 args.ollama_endpoint,
+                args.ollama_timeout_seconds,
                 args.json,
             )
         if args.command == "planning" and args.planning_command == "checkpoints":
@@ -533,6 +555,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.skip_calendar,
                 args.skip_github,
                 args.reminder_lead_minutes,
+                args.use_ollama,
+                args.ollama_model,
+                args.ollama_endpoint,
+                args.ollama_timeout_seconds,
                 args.json,
             )
         if args.command == "discord" and args.discord_command == "bot":

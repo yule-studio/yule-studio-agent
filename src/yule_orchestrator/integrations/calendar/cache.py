@@ -24,6 +24,7 @@ def load_calendar_cache(cache_key: str, ttl_seconds: int) -> Optional[CalendarQu
             namespace=CALENDAR_CACHE_NAMESPACE,
             cache_key=cache_key,
             ttl_seconds=ttl_seconds,
+            touch=False,
         )
     except Exception:
         return None
@@ -43,6 +44,7 @@ def load_stale_calendar_cache(cache_key: str) -> Optional[CalendarQueryResult]:
             namespace=CALENDAR_CACHE_NAMESPACE,
             cache_key=cache_key,
             allow_stale=True,
+            touch=False,
         )
     except Exception:
         return None

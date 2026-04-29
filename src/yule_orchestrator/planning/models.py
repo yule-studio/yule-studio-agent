@@ -85,6 +85,7 @@ class PlanningInputs:
     calendar_todos: Sequence[CalendarTodo]
     github_issues: Sequence[GitHubIssue]
     reminders: Sequence[ReminderItem]
+    github_pull_requests: Sequence["GitHubPullRequest"] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -96,10 +97,13 @@ class PlanningInputs:
             "calendar_todos": [todo.to_dict() for todo in self.calendar_todos],
             "github_issues": [issue.to_dict() for issue in self.github_issues],
             "reminders": [reminder.to_dict() for reminder in self.reminders],
+            "github_pull_requests": [pr.to_dict() for pr in self.github_pull_requests],
         }
 
     @classmethod
     def from_dict(cls, payload: dict) -> "PlanningInputs":
+        from ..integrations.github.pulls import GitHubPullRequest as _GitHubPullRequest
+
         return cls(
             plan_date=date.fromisoformat(str(payload["plan_date"])),
             timezone=str(payload["timezone"]),
@@ -127,6 +131,11 @@ class PlanningInputs:
             reminders=[
                 ReminderItem.from_dict(item)
                 for item in payload.get("reminders", [])
+                if isinstance(item, dict)
+            ],
+            github_pull_requests=[
+                _GitHubPullRequest.from_dict(item)
+                for item in payload.get("github_pull_requests", [])
                 if isinstance(item, dict)
             ],
         )
@@ -180,6 +189,7 @@ class PlanningTaskCandidate:
     coding_candidate: bool
     category_color: Optional[str] = None
     category_label: Optional[str] = None
+    flexible: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -195,6 +205,7 @@ class PlanningTaskCandidate:
             "coding_candidate": self.coding_candidate,
             "category_color": self.category_color,
             "category_label": self.category_label,
+            "flexible": self.flexible,
         }
 
     @classmethod
@@ -212,6 +223,7 @@ class PlanningTaskCandidate:
             coding_candidate=bool(payload["coding_candidate"]),
             category_color=_optional_string(payload.get("category_color")),
             category_label=_optional_string(payload.get("category_label")),
+            flexible=bool(payload.get("flexible") or False),
         )
 
 
@@ -358,6 +370,37 @@ class PlanningCheckpoint:
 
 
 @dataclass(frozen=True)
+class PlanningScheduledBriefing:
+    briefing_id: str
+    briefing_type: str
+    title: str
+    send_at: str
+    content: str
+    source: str = "rules"
+
+    def to_dict(self) -> dict:
+        return {
+            "briefing_id": self.briefing_id,
+            "briefing_type": self.briefing_type,
+            "title": self.title,
+            "send_at": self.send_at,
+            "content": self.content,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "PlanningScheduledBriefing":
+        return cls(
+            briefing_id=str(payload["briefing_id"]),
+            briefing_type=str(payload["briefing_type"]),
+            title=str(payload["title"]),
+            send_at=str(payload["send_at"]),
+            content=str(payload["content"]),
+            source=str(payload.get("source") or "rules"),
+        )
+
+
+@dataclass(frozen=True)
 class DailyPlan:
     plan_date: date
     timezone: str
@@ -371,6 +414,7 @@ class DailyPlan:
     morning_briefing: str
     time_block_briefings: Sequence[PlanningBlockBriefing]
     checkpoints: Sequence[PlanningCheckpoint]
+    briefings: Sequence[PlanningScheduledBriefing]
     coding_agent_handoff: Sequence[PlanningTaskCandidate]
     discord_briefing: str
     morning_briefing_source: str
@@ -390,6 +434,7 @@ class DailyPlan:
             "morning_briefing": self.morning_briefing,
             "time_block_briefings": [briefing.to_dict() for briefing in self.time_block_briefings],
             "checkpoints": [checkpoint.to_dict() for checkpoint in self.checkpoints],
+            "briefings": [briefing.to_dict() for briefing in self.briefings],
             "coding_agent_handoff": [task.to_dict() for task in self.coding_agent_handoff],
             "discord_briefing": self.discord_briefing,
             "morning_briefing_source": self.morning_briefing_source,
@@ -437,6 +482,11 @@ class DailyPlan:
             checkpoints=[
                 PlanningCheckpoint.from_dict(item)
                 for item in payload.get("checkpoints", [])
+                if isinstance(item, dict)
+            ],
+            briefings=[
+                PlanningScheduledBriefing.from_dict(item)
+                for item in payload.get("briefings", [])
                 if isinstance(item, dict)
             ],
             coding_agent_handoff=[
