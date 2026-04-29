@@ -24,6 +24,7 @@
     "policies/runtime/agents/engineering-agent/multi-bot-launcher.md",
     "policies/runtime/agents/engineering-agent/dispatcher.md",
     "policies/runtime/agents/engineering-agent/discord-workflow.md",
+    "policies/runtime/agents/engineering-agent/message-protocol.md",
     "policies/runtime/agents/engineering-agent/version-control.md",
     "policies/runtime/agents/engineering-agent/workflow.md",
     "policies/runtime/agents/engineering-agent/testing.md"

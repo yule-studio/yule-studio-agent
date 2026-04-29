@@ -8,6 +8,17 @@ from .dispatcher import (
     TaskType,
     render_plan_summary,
 )
+from .message import (
+    AgentMessage,
+    ContextRef,
+    Priority,
+    RequestedAction,
+    close_thread,
+    new_request,
+    reply_to,
+    role_address,
+    with_thread_id,
+)
 from .registry import (
     DEFAULT_RUNNER_FACTORIES,
     ParticipantsPool,
@@ -29,15 +40,19 @@ from .workflow import (
 from .workflow_state import WorkflowSession, WorkflowState
 
 __all__ = [
+    "AgentMessage",
     "CompletionResult",
+    "ContextRef",
     "DEFAULT_RUNNER_FACTORIES",
     "DispatchPlan",
     "DispatchRequest",
     "Dispatcher",
     "IntakeResult",
     "ParticipantsPool",
+    "Priority",
     "ProgressResult",
     "RegistryError",
+    "RequestedAction",
     "RoleAssignment",
     "RunnerFactory",
     "TaskType",
@@ -46,9 +61,14 @@ __all__ = [
     "WorkflowSession",
     "WorkflowState",
     "build_participants_pool",
+    "close_thread",
     "extract_urls",
     "format_completion_message",
     "format_intake_message",
     "format_progress_message",
+    "new_request",
     "render_plan_summary",
+    "reply_to",
+    "role_address",
+    "with_thread_id",
 ]
