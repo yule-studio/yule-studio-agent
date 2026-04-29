@@ -30,7 +30,7 @@ Manual steps still required:
 Quick start after bootstrap:
   source .venv/bin/activate
   yule doctor
-  yule context coding-agent
+  yule context engineering-agent
   yule context planning-agent
   yule calendar sync --json
   yule calendar categories
@@ -266,7 +266,7 @@ Quick start:
 
   source .venv/bin/activate
   yule doctor
-  yule context coding-agent
+  yule context engineering-agent
   yule context planning-agent
   yule calendar sync --json
   yule calendar categories

@@ -24,7 +24,7 @@ GitHub 이슈, 일정 데이터, 에이전트 정책, 실행 흐름을 하나의
 ├── GEMINI.md
 ├── README.md
 ├── agents/
-│   ├── coding-agent/
+│   ├── engineering-agent/
 │   │   ├── CLAUDE.md
 │   │   └── agent.json
 │   └── planning-agent/
@@ -236,7 +236,7 @@ DISCORD_GUILD_ID=
 
 ```bash
 yule doctor
-yule context coding-agent
+yule context engineering-agent
 yule context planning-agent
 yule github issues --limit 30
 yule github issues --limit 30 --force-refresh

@@ -1,8 +1,8 @@
 # Coding Testing Policy
 
 ## Purpose
-This policy defines how Coding Agent should handle tests and validation.  
-(이 정책은 Coding Agent가 테스트와 검증을 다루는 방식을 정의한다)
+This policy defines how Engineering Agent should handle tests and validation.  
+(이 정책은 Engineering Agent가 테스트와 검증을 다루는 방식을 정의한다)
 
 ## Rules
 - Discover existing test, lint, typecheck, and build commands before inventing new ones.  

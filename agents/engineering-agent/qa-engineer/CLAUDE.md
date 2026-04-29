@@ -12,7 +12,7 @@
 - 다른 멤버의 산출물에 대한 검증 보고
 
 ## Inputs (from other roles)
-- `designer` → 기대 사용자 흐름
+- `product-designer` → 기대 사용자 흐름
 - `backend-engineer` → API 계약과 데이터 모델
 - `frontend-engineer` → UI 동작 명세
 - `tech-lead` → 위험 영역 우선순위

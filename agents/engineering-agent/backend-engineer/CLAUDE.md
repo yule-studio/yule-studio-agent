@@ -12,7 +12,7 @@
 
 ## Inputs (from other roles)
 - `tech-lead` → 작업 분해와 의존 순서(예: 도메인 모델 → 서비스 → API)
-- `designer` 또는 상위 기획 → 비즈니스 요구사항
+- `product-designer` 또는 상위 기획 → 비즈니스 요구사항
 - `qa-engineer` → 검증 케이스와 회귀 시나리오
 
 ## Outputs

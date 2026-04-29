@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     context_parser.add_argument(
         "agent_id",
-        help="Agent id to load, for example: coding-agent.",
+        help="Agent id to load, for example: engineering-agent.",
     )
     context_parser.add_argument(
         "--output",
@@ -61,8 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor_parser.add_argument(
         "--agent-id",
-        default="coding-agent",
-        help="Agent id to use for manifest-backed checks. Defaults to coding-agent.",
+        default="engineering-agent",
+        help="Agent id to use for manifest-backed checks. Defaults to engineering-agent.",
     )
 
     github_parser = subparsers.add_parser(
