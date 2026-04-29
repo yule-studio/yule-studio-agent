@@ -209,6 +209,7 @@ DISCORD_GUILD_ID=
 - `DISCORD_CONVERSATION_REPLY_MODE=plain-message-or-mention`으로 바꾸면 지정한 대화 채널에서 평문 메시지에도 응답합니다.
 - `DISCORD_CONVERSATION_REPLY_MODE=disabled`로 두면 대화형 응답을 완전히 끌 수 있습니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
+- `DISCORD_DAILY_CHANNEL_ID`(또는 NAME)와 `DISCORD_CONVERSATION_CHANNEL_ID`(또는 NAME)를 **다르게** 설정하면 DAILY 채널은 자동 브리핑 전용 broadcast 채널로 잠기고, 사용자가 그곳에서 메시지를 보내거나 봇을 멘션해도 응답하지 않습니다. 채팅은 오직 CONVERSATION 채널에서만 이루어집니다. DAILY와 CONVERSATION을 같은 채널로 두거나 CONVERSATION을 비워 fallback으로 두면, 같은 채널 안에서 자동 브리핑과 채팅이 함께 이루어집니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
 - 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.
