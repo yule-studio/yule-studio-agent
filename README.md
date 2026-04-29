@@ -158,6 +158,7 @@ DISCORD_GUILD_ID=
 # DISCORD_PREPARATION_RETRY_DELAY_SECONDS=15
 
 # GITHUB_ISSUES_CACHE_SECONDS=300
+# GITHUB_PULL_REQUESTS_CACHE_SECONDS=300
 ```
 
 - 실제 값은 `.env.local`에 넣습니다.
@@ -226,6 +227,8 @@ DISCORD_GUILD_ID=
 - 슬래시 명령 동기화를 빠르게 하기 위해 현재 최소 봇은 guild 단위 명령 등록을 사용합니다.
 - 슬래시 명령(`/plan_today`, `/checkpoints_now`)은 interaction 토큰이 만료된 상황(`Unknown interaction`)을 만나면 traceback 대신 한 줄 경고만 남기고 graceful 하게 종료합니다.
 - `GITHUB_ISSUES_CACHE_SECONDS`를 지정하면 GitHub open issue 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
+- `GITHUB_PULL_REQUESTS_CACHE_SECONDS`를 지정하면 GitHub open PR 조회 결과를 해당 TTL 동안 재사용합니다. 기본값은 300초입니다.
+- Planning Agent는 open issue뿐 아니라 open pull request도 함께 fetch해서 작업 후보로 다룹니다. PR은 ready 상태면 +10, draft면 -10이 우선순위에 반영되고 라벨 정책도 동일하게 적용됩니다. 자동 준비 단계의 `github_sync` 결과 metadata에 `pull_request_count`도 함께 기록됩니다.
 - 자동 준비 단계는 표준 출력에 구조화된 JSON 로그를 남기고, debug 채널을 지정한 경우 Discord에서도 같은 흐름을 확인할 수 있습니다.
 
 ## 실행
