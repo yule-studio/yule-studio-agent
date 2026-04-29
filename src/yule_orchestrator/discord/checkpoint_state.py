@@ -5,7 +5,12 @@ from datetime import date, datetime
 from typing import Sequence
 
 from ..planning.models import PlanningCheckpoint
-from ..storage import load_json_cache, save_json_cache
+from ..storage import (
+    TaskCompletionEvent,
+    load_json_cache,
+    record_task_completion_event,
+    save_json_cache,
+)
 
 CHECKPOINT_RESPONSE_NAMESPACE = "discord-checkpoint-responses"
 CHECKPOINT_RESPONSE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -33,6 +38,10 @@ def mark_checkpoint_responded(
     status: str,
     user_id: int,
     responded_at: datetime,
+    source_event_uid: str | None = None,
+    source_event_title: str | None = None,
+    block_title: str | None = None,
+    checkpoint_kind: str | None = None,
 ) -> None:
     save_json_cache(
         namespace=CHECKPOINT_RESPONSE_NAMESPACE,
@@ -48,7 +57,25 @@ def mark_checkpoint_responded(
             "status": status,
             "responded_at": responded_at.isoformat(),
             "user_id": user_id,
+            "source_event_uid": source_event_uid,
+            "source_event_title": source_event_title,
+            "block_title": block_title,
+            "checkpoint_kind": checkpoint_kind,
         },
+    )
+
+    record_task_completion_event(
+        TaskCompletionEvent(
+            plan_date=plan_date,
+            checkpoint_id=checkpoint_id,
+            status=status,
+            user_id=user_id,
+            responded_at=responded_at,
+            source_event_uid=source_event_uid,
+            source_event_title=source_event_title,
+            block_title=block_title,
+            checkpoint_kind=checkpoint_kind,
+        )
     )
 
 

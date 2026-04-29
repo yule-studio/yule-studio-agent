@@ -13,17 +13,27 @@ from .local_cache import (
     local_cache_database_path,
     save_json_cache,
 )
+from .task_history import (
+    TaskCompletionEvent,
+    TaskCompletionStats,
+    query_task_completion_stats,
+    record_task_completion_event,
+)
 
 __all__ = [
     "CalendarStateRecord",
     "CalendarStateSyncSummary",
     "LocalCacheEntry",
+    "TaskCompletionEvent",
+    "TaskCompletionStats",
     "cleanup_calendar_state_records",
     "cleanup_json_cache",
     "list_json_cache_entries",
     "list_calendar_state_records",
     "load_json_cache",
     "local_cache_database_path",
+    "query_task_completion_stats",
+    "record_task_completion_event",
     "save_json_cache",
     "sync_calendar_query_result",
 ]
