@@ -54,6 +54,8 @@ class WorkflowSession:
     thread_id: Optional[int] = None
     write_requested: bool = False
     write_blocked_reason: Optional[str] = None
+    review_cycle: int = 0
+    review_feedbacks: Sequence[Mapping[str, Any]] = ()
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -117,6 +119,8 @@ def _to_payload(session: WorkflowSession) -> Mapping[str, Any]:
         "thread_id": session.thread_id,
         "write_requested": session.write_requested,
         "write_blocked_reason": session.write_blocked_reason,
+        "review_cycle": session.review_cycle,
+        "review_feedbacks": [dict(item) for item in session.review_feedbacks],
         "extra": dict(session.extra),
     }
 
@@ -146,6 +150,11 @@ def _from_payload(payload: Mapping[str, Any]) -> WorkflowSession:
         thread_id=_optional_int(payload.get("thread_id")),
         write_requested=bool(payload.get("write_requested", False)),
         write_blocked_reason=_optional_str(payload.get("write_blocked_reason")),
+        review_cycle=int(payload.get("review_cycle") or 0),
+        review_feedbacks=tuple(
+            dict(item) if isinstance(item, dict) else {}
+            for item in payload.get("review_feedbacks") or ()
+        ),
         extra=dict(payload.get("extra") or {}),
     )
 

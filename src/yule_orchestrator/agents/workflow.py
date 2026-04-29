@@ -17,6 +17,15 @@ from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence
 
 from .dispatcher import Dispatcher, DispatchPlan, DispatchRequest, TaskType
+from .review_loop import (
+    ReviewFeedback,
+    ReviewRouting,
+    format_review_intake_message,
+    format_review_reply_message,
+    from_payload as review_feedback_from_payload,
+    route_review_feedback,
+    to_payload as review_feedback_to_payload,
+)
 from .workflow_state import (
     WorkflowSession,
     WorkflowState,
@@ -49,6 +58,20 @@ class ProgressResult:
 
 @dataclass(frozen=True)
 class CompletionResult:
+    session: WorkflowSession
+    message: str
+
+
+@dataclass(frozen=True)
+class ReviewIntakeResult:
+    session: WorkflowSession
+    feedback: ReviewFeedback
+    routing: ReviewRouting
+    message: str
+
+
+@dataclass(frozen=True)
+class ReviewReplyResult:
     session: WorkflowSession
     message: str
 
@@ -184,6 +207,116 @@ class WorkflowOrchestrator:
         updated = update_session(completed, now=self.now_fn())
         return CompletionResult(session=updated, message=format_completion_message(updated))
 
+    def record_review_feedback(
+        self,
+        session_id: str,
+        feedback: ReviewFeedback,
+    ) -> ReviewIntakeResult:
+        """Append a review feedback record and re-route to the right role.
+
+        Allowed from any state except ``REJECTED``. If the session was
+        ``COMPLETED``, the session re-opens to ``IN_PROGRESS`` so subsequent
+        ``progress()`` / ``complete()`` / ``respond_to_review()`` calls work.
+        """
+
+        session = self._require_session(session_id)
+        if session.state == WorkflowState.REJECTED:
+            raise WorkflowError(
+                f"session {session_id} is rejected; review feedback is not accepted"
+            )
+
+        routing = route_review_feedback(feedback)
+        feedback_record = dict(review_feedback_to_payload(feedback))
+        feedback_record["routing"] = {
+            "primary_role": routing.primary_role,
+            "supporting_roles": list(routing.supporting_roles),
+            "reasons": list(routing.reasons),
+            "reference_needed": routing.reference_needed,
+            "reference_sources": list(routing.reference_sources),
+            "reference_gaps": list(routing.reference_gaps),
+        }
+
+        new_state = (
+            WorkflowState.IN_PROGRESS
+            if session.state == WorkflowState.COMPLETED
+            else session.state
+        )
+        new_cycle = session.review_cycle + 1
+        new_feedbacks = tuple(session.review_feedbacks) + (feedback_record,)
+        thread_id = feedback.target_thread_id or session.thread_id
+
+        updated = replace(
+            session,
+            state=new_state,
+            review_cycle=new_cycle,
+            review_feedbacks=new_feedbacks,
+            thread_id=thread_id,
+        )
+        updated = update_session(updated, now=self.now_fn())
+
+        message = format_review_intake_message(
+            feedback,
+            routing,
+            session_id=updated.session_id,
+            review_cycle=new_cycle,
+        )
+        return ReviewIntakeResult(
+            session=updated,
+            feedback=feedback,
+            routing=routing,
+            message=message,
+        )
+
+    def respond_to_review(
+        self,
+        session_id: str,
+        *,
+        feedback_id: str,
+        applied: Sequence[str],
+        proposed: Sequence[str] = (),
+        remaining: Sequence[str] = (),
+        references_used: Sequence[Mapping[str, Any]] = (),
+    ) -> ReviewReplyResult:
+        session = self._require_session(session_id)
+        if session.state == WorkflowState.REJECTED:
+            raise WorkflowError(
+                f"session {session_id} is rejected; review reply is not allowed"
+            )
+
+        target_record: Optional[Mapping[str, Any]] = None
+        for record in session.review_feedbacks:
+            if record.get("feedback_id") == feedback_id:
+                target_record = record
+                break
+        if target_record is None:
+            raise WorkflowError(
+                f"feedback {feedback_id} not found in session {session_id}"
+            )
+
+        feedback = _feedback_from_record(target_record)
+        routing = _routing_from_record(target_record, fallback=feedback)
+        message = format_review_reply_message(
+            feedback,
+            routing,
+            session_id=session.session_id,
+            review_cycle=session.review_cycle,
+            applied=applied,
+            proposed=proposed,
+            remaining=remaining,
+            references_used=references_used,
+        )
+        note = (
+            f"review cycle {session.review_cycle} 회신: "
+            f"적용 {len(applied)}건, 제안 {len(proposed)}건, 남음 {len(remaining)}건"
+        )
+        notes = tuple(session.progress_notes) + (note,)
+        used = tuple(dict(item) for item in session.references_used) + tuple(
+            dict(item) for item in references_used
+        )
+        updated = replace(session, progress_notes=notes, references_used=used)
+        updated = update_session(updated, now=self.now_fn())
+        return ReviewReplyResult(session=updated, message=message)
+
     def get(self, session_id: str) -> Optional[WorkflowSession]:
         return load_session(session_id)
 
@@ -192,6 +325,32 @@ class WorkflowOrchestrator:
         if session is None:
             raise WorkflowError(f"session {session_id} not found")
         return session
+
+
+def _feedback_from_record(record: Mapping[str, Any]) -> ReviewFeedback:
+    payload = {key: value for key, value in record.items() if key != "routing"}
+    return review_feedback_from_payload(payload)
+
+
+def _routing_from_record(record: Mapping[str, Any], *, fallback: ReviewFeedback) -> ReviewRouting:
+    routing_data = record.get("routing")
+    if isinstance(routing_data, Mapping):
+        return ReviewRouting(
+            feedback_id=fallback.feedback_id,
+            primary_role=str(routing_data.get("primary_role") or "tech-lead"),
+            supporting_roles=tuple(
+                str(item) for item in routing_data.get("supporting_roles") or ()
+            ),
+            reasons=tuple(str(item) for item in routing_data.get("reasons") or ()),
+            reference_needed=bool(routing_data.get("reference_needed")),
+            reference_sources=tuple(
+                str(item) for item in routing_data.get("reference_sources") or ()
+            ),
+            reference_gaps=tuple(
+                str(item) for item in routing_data.get("reference_gaps") or ()
+            ),
+        )
+    return route_review_feedback(fallback)
 
 
 def extract_urls(text: str) -> tuple[str, ...]:
