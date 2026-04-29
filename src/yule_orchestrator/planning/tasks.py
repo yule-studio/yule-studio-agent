@@ -67,6 +67,7 @@ def _build_todo_candidate(plan_date: date, todo: CalendarTodo) -> PlanningTaskCa
         or bool(category_policy and category_policy.coding_candidate),
         category_color=todo.category_color,
         category_label=category_policy.label if category_policy is not None else None,
+        flexible=bool(category_policy and category_policy.flexible),
     )
 
 

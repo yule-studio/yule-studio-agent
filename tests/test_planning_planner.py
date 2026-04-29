@@ -791,6 +791,62 @@ class PlanningPlannerTestCase(unittest.TestCase):
                 f"focus block {block.title!r} should not overlap lunch (got end={block_end})",
             )
 
+    def test_flexible_category_todo_is_excluded_from_focus_blocks(self) -> None:
+        from yule_orchestrator.planning.category_policy import (
+            reset_naver_category_policy_cache,
+        )
+
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "YULE_NAVER_CATEGORY_POLICY_JSON": (
+                        '{"colors": {"99": {"label": "상시 작업", "flexible": true}}}'
+                    ),
+                    "YULE_WORK_MODE_ENABLED": "true",
+                    "YULE_WORK_START_TIME": "09:00",
+                },
+                clear=False,
+            ):
+                reset_naver_category_policy_cache()
+                inputs = PlanningInputs(
+                    plan_date=date(2026, 4, 29),
+                    timezone="KST",
+                    source_statuses=[],
+                    warnings=[],
+                    calendar_events=[],
+                    calendar_todos=[
+                        CalendarTodo(
+                            item_uid="todo-flexible",
+                            title="mail-mail 동작 원리 정리",
+                            start=None,
+                            due="2026-04-29",
+                            start_all_day=False,
+                            due_all_day=True,
+                            status="NEEDS-ACTION",
+                            completed=False,
+                            completed_at=None,
+                            priority=0,
+                            percent_complete=None,
+                            calendar_name="내 할 일",
+                            source="naver-caldav",
+                            description="",
+                            last_modified=None,
+                            category_color="99",
+                        ),
+                    ],
+                    github_issues=[],
+                    reminders=[],
+                )
+
+                envelope = build_daily_plan(inputs)
+                titles_in_focus = [block.title for block in envelope.daily_plan.suggested_time_blocks]
+                self.assertNotIn("mail-mail 동작 원리 정리", titles_in_focus)
+                titles_in_priority = [task.title for task in envelope.daily_plan.prioritized_tasks]
+                self.assertIn("mail-mail 동작 원리 정리", titles_in_priority)
+        finally:
+            reset_naver_category_policy_cache()
+
     def test_build_issue_candidate_boosts_foundation_keywords(self) -> None:
         from yule_orchestrator.planning.tasks import _build_issue_candidate
 

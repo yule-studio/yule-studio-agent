@@ -52,6 +52,8 @@ def build_focus_blocks(
     timezone = _derive_schedule_timezone(fixed_schedule)
     lunch_block = _build_lunch_block(plan_date, lunch_start_time, lunch_duration_minutes, timezone)
 
+    schedulable_tasks = [task for task in tasks if not getattr(task, "flexible", False)]
+
     if not work_mode_enabled:
         non_work_schedule = [block for block in fixed_schedule if "업무 수행" not in block.title]
         if lunch_block is not None:
@@ -62,15 +64,15 @@ def build_focus_blocks(
             return [], available_focus_minutes
         working_windows = list(windows)
         focus_blocks: list[PlanningTimeBlock] = []
-        for task in tasks[:6]:
+        for task in schedulable_tasks[:6]:
             assigned = _assign_task_block(task, working_windows)
             if assigned is not None:
                 focus_blocks.append(assigned)
         return focus_blocks, available_focus_minutes
 
     work_event_blocks = [block for block in fixed_schedule if "업무 수행" in block.title]
-    work_priority_tasks = [task for task in tasks if task.category_label == "회사 업무"]
-    other_tasks = [task for task in tasks if task.category_label != "회사 업무"]
+    work_priority_tasks = [task for task in schedulable_tasks if task.category_label == "회사 업무"]
+    other_tasks = [task for task in schedulable_tasks if task.category_label != "회사 업무"]
 
     work_windows = sorted(
         (

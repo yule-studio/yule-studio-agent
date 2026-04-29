@@ -180,6 +180,7 @@ class PlanningTaskCandidate:
     coding_candidate: bool
     category_color: Optional[str] = None
     category_label: Optional[str] = None
+    flexible: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -195,6 +196,7 @@ class PlanningTaskCandidate:
             "coding_candidate": self.coding_candidate,
             "category_color": self.category_color,
             "category_label": self.category_label,
+            "flexible": self.flexible,
         }
 
     @classmethod
@@ -212,6 +214,7 @@ class PlanningTaskCandidate:
             coding_candidate=bool(payload["coding_candidate"]),
             category_color=_optional_string(payload.get("category_color")),
             category_label=_optional_string(payload.get("category_label")),
+            flexible=bool(payload.get("flexible") or False),
         )
 
 
