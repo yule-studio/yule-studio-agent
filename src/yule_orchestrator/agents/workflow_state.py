@@ -1,0 +1,166 @@
+"""SQLite-backed state for the engineering-agent Discord workflow.
+
+Each task started by ``/engineer-intake`` (or the ``yule engineer`` CLI) is
+tracked as a :class:`WorkflowSession`. State transitions are guarded by the
+orchestrator (``workflow.py``), but the persistence shape is here so tests
+and operators can introspect a session without going through Discord.
+
+Stored via the existing ``save_json_cache`` / ``load_json_cache`` layer to
+match the checkpoint state pattern.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from enum import Enum
+from typing import Any, Mapping, Optional, Sequence
+
+from ..storage import load_json_cache, save_json_cache
+
+
+WORKFLOW_NAMESPACE = "engineering-agent-workflow"
+WORKFLOW_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+class WorkflowState(str, Enum):
+    INTAKE = "intake"
+    APPROVED = "approved"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True)
+class WorkflowSession:
+    session_id: str
+    prompt: str
+    task_type: str
+    state: WorkflowState
+    created_at: datetime
+    updated_at: datetime
+    role_sequence: Sequence[str] = ()
+    executor_role: Optional[str] = None
+    executor_runner: Optional[str] = None
+    references_user: Sequence[str] = ()
+    references_suggested: Sequence[str] = ()
+    references_used: Sequence[Mapping[str, Any]] = ()
+    progress_notes: Sequence[str] = ()
+    summary: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    channel_id: Optional[int] = None
+    user_id: Optional[int] = None
+    thread_id: Optional[int] = None
+    write_requested: bool = False
+    write_blocked_reason: Optional[str] = None
+    extra: Mapping[str, Any] = field(default_factory=dict)
+
+
+def new_session_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def save_session(session: WorkflowSession) -> None:
+    payload = _to_payload(session)
+    save_json_cache(
+        namespace=WORKFLOW_NAMESPACE,
+        cache_key=session.session_id,
+        provider="engineering-agent-workflow",
+        range_start=session.created_at.isoformat(),
+        range_end=session.updated_at.isoformat(),
+        scope_hash=session.task_type,
+        ttl_seconds=WORKFLOW_TTL_SECONDS,
+        payload=payload,
+    )
+
+
+def load_session(session_id: str) -> Optional[WorkflowSession]:
+    entry = load_json_cache(
+        namespace=WORKFLOW_NAMESPACE,
+        cache_key=session_id,
+        allow_stale=True,
+        touch=False,
+    )
+    if entry is None:
+        return None
+    return _from_payload(entry.payload)
+
+
+def update_session(session: WorkflowSession, *, now: datetime) -> WorkflowSession:
+    """Bump updated_at and persist; returns the updated copy."""
+
+    updated = replace(session, updated_at=now)
+    save_session(updated)
+    return updated
+
+
+def _to_payload(session: WorkflowSession) -> Mapping[str, Any]:
+    return {
+        "session_id": session.session_id,
+        "prompt": session.prompt,
+        "task_type": session.task_type,
+        "state": session.state.value,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "role_sequence": list(session.role_sequence),
+        "executor_role": session.executor_role,
+        "executor_runner": session.executor_runner,
+        "references_user": list(session.references_user),
+        "references_suggested": list(session.references_suggested),
+        "references_used": [dict(item) for item in session.references_used],
+        "progress_notes": list(session.progress_notes),
+        "summary": session.summary,
+        "rejection_reason": session.rejection_reason,
+        "channel_id": session.channel_id,
+        "user_id": session.user_id,
+        "thread_id": session.thread_id,
+        "write_requested": session.write_requested,
+        "write_blocked_reason": session.write_blocked_reason,
+        "extra": dict(session.extra),
+    }
+
+
+def _from_payload(payload: Mapping[str, Any]) -> WorkflowSession:
+    return WorkflowSession(
+        session_id=str(payload["session_id"]),
+        prompt=str(payload.get("prompt", "")),
+        task_type=str(payload.get("task_type", "unknown")),
+        state=WorkflowState(str(payload.get("state", WorkflowState.INTAKE.value))),
+        created_at=datetime.fromisoformat(str(payload["created_at"])),
+        updated_at=datetime.fromisoformat(str(payload["updated_at"])),
+        role_sequence=tuple(str(item) for item in payload.get("role_sequence", [])),
+        executor_role=_optional_str(payload.get("executor_role")),
+        executor_runner=_optional_str(payload.get("executor_runner")),
+        references_user=tuple(str(item) for item in payload.get("references_user", [])),
+        references_suggested=tuple(str(item) for item in payload.get("references_suggested", [])),
+        references_used=tuple(
+            dict(item) if isinstance(item, dict) else {"title": str(item)}
+            for item in payload.get("references_used", [])
+        ),
+        progress_notes=tuple(str(item) for item in payload.get("progress_notes", [])),
+        summary=_optional_str(payload.get("summary")),
+        rejection_reason=_optional_str(payload.get("rejection_reason")),
+        channel_id=_optional_int(payload.get("channel_id")),
+        user_id=_optional_int(payload.get("user_id")),
+        thread_id=_optional_int(payload.get("thread_id")),
+        write_requested=bool(payload.get("write_requested", False)),
+        write_blocked_reason=_optional_str(payload.get("write_blocked_reason")),
+        extra=dict(payload.get("extra") or {}),
+    )
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

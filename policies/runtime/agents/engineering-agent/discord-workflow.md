@@ -1,0 +1,112 @@
+# Engineering Agent Discord Workflow (v0)
+
+이 문서는 Discord 안에서 engineering-agent에게 작업을 위임하는 **접수(intake) → 승인(approve) → 진행(progress) → 완료(complete)** 흐름의 정책 기준선이다. 코드 진실 소스는 `src/yule_orchestrator/agents/workflow.py` + `workflow_state.py`, CLI는 `yule engineer`, Discord 슬래시 커맨드는 `commands.py`의 `engineer_intake` / `engineer_show`.
+
+## 1. 접수 채널 규칙
+
+- **CONVERSATION 채널**에서만 접수한다. DAILY 채널은 broadcast 전용으로 잠겨 있다 (DAILY 채널 정책과 동일).
+- 슬래시 커맨드 `/engineer_intake` 사용을 권장한다.
+  - `prompt`: 자연어 작업 요청 (필수).
+  - `task_type`: 명시 분류 (선택, 생략 시 키워드 분류).
+  - `write_requested`: 코드/문서 쓰기 요청 여부.
+- 향후 멤버 봇 분리(Phase 2) 시 부서 게이트웨이 봇만 접수한다. 멤버 봇은 외부와 직접 대화하지 않는다 (engineering-agent CLAUDE.md 규약).
+- 작업 단위가 길어지면 게이트웨이가 thread를 만들어 진행 보고/완료 보고를 같은 thread에 묶는 운영을 권장한다 (thread 자동 생성은 후속 마일스톤).
+
+## 2. 승인 게이트
+
+- `write_requested=True`로 접수된 세션은 `intake → approved` 전이 전까지 **어떤 write도 시작하지 않는다**.
+- 승인 방법:
+  - **CLI**: `yule engineer approve --session <id>`.
+  - **Discord** (예정): 접수 메시지의 ✅ 반응 → 게이트웨이가 reaction을 감지해 승인. 본 마일스톤에서는 슬래시 커맨드 `/engineer_show`로 상태만 확인 가능, 승인은 CLI에서 진행한다. reaction 핸들러는 후속 이슈에서 추가.
+- 거절은 `yule engineer reject --session <id> --reason "..."`. 거절된 세션은 progress/complete가 모두 차단된다.
+- write 게이트는 dispatcher의 `write_block_reason`을 그대로 받아 표시한다 (dispatcher.md §6).
+
+## 3. 메시지 포맷
+
+### 3.1 접수 메시지 (`format_intake_message`)
+표준 섹션:
+1. 헤더: `**[engineering-agent] 새 작업 접수**`, 세션 ID, 분류, 역할 순서, 실행자, 어드바이저.
+2. **참고 레퍼런스 (제안)**:
+   - 사용자 제공 (1순위): prompt 안의 URL을 추출해 노출 (`extract_urls`).
+   - task_type 추천 카테고리: dispatcher가 매핑한 소스 이름.
+   - 둘 다 없으면 "이 task_type에는 시각 reference를 강제하지 않습니다" 명시.
+3. **승인 필요** 섹션: write 게이트 차단 시 사유 + 승인 명령 안내.
+
+### 3.2 진행 메시지 (`format_progress_message`)
+- 상태, 실행자, 최근 메모 5건 (FIFO 누적).
+- 메모는 짧게(한 줄). 자세한 내용은 thread 또는 PR 링크로 풀어쓴다.
+
+### 3.3 완료 메시지 (`format_completion_message`)
+- 분류, 실행자, **요약**, **반영한 레퍼런스**.
+- 반영한 레퍼런스는 `{title, source, url, rationale}` 키 4종을 가진 객체 배열. rationale은 "차용한 패턴 + 어떻게 재구성했는지" 한 줄.
+- 제안된 reference가 있었지만 실제 인용이 없으면 `- (없음 — 본 작업은 reference를 직접 인용하지 않았습니다)`로 명시 (감추지 않는다).
+
+## 4. Reference 정책
+
+### 4.1 우선순위
+1. **사용자 제공 링크/스크린샷** — prompt 안의 URL을 자동 추출. 슬래시 커맨드 인자에 없어도 prompt 본문에 붙어 있으면 1순위로 인식.
+2. **task_type 추천 카테고리** — dispatcher의 `reference_sources` (landing-page / onboarding-flow / visual-polish / email-campaign 4종).
+3. (이번 단계는 자동 fetch 없음. 후속 마일스톤에서 `REFERENCE_*` env 슬롯이 채워졌을 때만 동작.)
+
+### 4.2 산출 양식
+완료 보고에 반영한 레퍼런스는 `reference-pack.md`의 4가지 명문화 항목 중 적어도 `차용 패턴(rationale)`을 포함해야 한다. 단순 복제는 금지(공통 정책).
+
+### 4.3 자동 수집 민감 소스
+- Notefolio, Behance, Mobbin, Page Flows, Awwwards 등은 약관상 자동 수집 금지. 사용자 제공 링크 또는 운영자 수동 참고로만 사용한다.
+- env-strategy.md §7 슬롯이 채워지더라도 위 소스는 fetcher 대상에서 제외된다.
+
+## 5. 상태 모델 (`WorkflowState`)
+
+```
+intake ──approve──▶ approved ──progress──▶ in_progress ──complete──▶ completed
+   │                    │                       │
+   │                    └─reject─▶ rejected     └─reject─▶ rejected (open notes 보존)
+   └─reject─▶ rejected
+```
+
+규약
+- `progress` / `complete`는 `intake` 상태에서 직접 호출 불가 — 승인 단계를 강제한다.
+- `completed` / `rejected`는 종료 상태. 재접수가 필요하면 새 세션을 만든다.
+- 세션은 SQLite JSON 캐시(`engineering-agent-workflow` 네임스페이스)에 저장되며 30일 보존.
+
+## 6. CLI 사용 예 (운영자 e2e 검증)
+
+```bash
+# 접수
+yule engineer intake \
+  --prompt "우리 새 랜딩페이지 hero 섹션 다시 짜야 해 — https://stripe.com/pricing" \
+  --write
+# stderr에 session_id=<sid>가 출력됨
+
+yule engineer approve --session <sid>
+yule engineer progress --session <sid> --note "designer 시안 1차 정리"
+yule engineer complete --session <sid> \
+  --summary "hero 카피 + CTA 색 정리, 모바일 반응형 보정" \
+  --references-used /tmp/refs.json
+yule engineer show --session <sid>     # JSON 상태
+```
+
+`refs.json` 예:
+```json
+[
+  {"title": "Stripe Pricing", "source": "Mobbin", "url": "https://example.com/stripe", "rationale": "step copy + CTA 강조 패턴 차용"},
+  {"title": "Wix Templates 6선", "source": "Wix Templates", "rationale": "히어로 grid 분해 참고"}
+]
+```
+
+## 7. Discord 사용 (Phase 2 토큰 활성 후)
+
+```
+/engineer_intake prompt:"우리 랜딩 hero..." write_requested:true
+/engineer_show session_id:<sid>
+```
+
+승인은 본 마일스톤에서 CLI 전용. reaction-기반 승인은 후속 이슈에서 추가한다.
+
+## 8. 후속 작업
+
+1. **승인 reaction 핸들러** — 접수 메시지의 ✅ 반응으로 승인, ❌로 거절.
+2. **Thread 자동 생성** — 작업 단위가 긴 경우 접수 시 thread를 만들어 progress/complete를 묶는다.
+3. **멤버 봇 IPC 연결** — approve된 세션이 dispatcher의 executor_role 멤버 봇 큐에 흘러들어가 실제 실행. write 게이트는 실행 시점에서 한 번 더 검사.
+4. **Reference fetcher** — `REFERENCE_*` env 슬롯이 채워졌을 때만 동작. fetch 결과를 references_suggested에 채운다.
+5. **PR 본문 자동 생성** — 완료 메시지 포맷을 그대로 PR description으로 옮기는 헬퍼 (reference-pack.md §산출 양식과 일치).

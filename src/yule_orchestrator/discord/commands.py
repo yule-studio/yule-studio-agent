@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import date, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
+from ..agents import (
+    Dispatcher,
+    TaskType,
+    WorkflowError,
+    WorkflowOrchestrator,
+    build_participants_pool,
+)
 from .formatter import (
     format_checkpoints_message,
     format_plan_today_message,
@@ -88,6 +97,94 @@ def register_discord_commands(
             discord_module=discord,
         )
 
+    @bot.tree.command(
+        name="engineer_intake",
+        description="engineering-agent에게 작업을 위임합니다 (접수 메시지를 채널에 게시).",
+        guild=guild,
+    )
+    @app_commands.describe(
+        prompt="자연어 작업 요청.",
+        task_type="명시 task type (생략 시 키워드 분류).",
+        write_requested="이 작업이 코드/문서 쓰기를 요구하는지 여부.",
+    )
+    async def engineer_intake(
+        interaction: "discord.Interaction",
+        prompt: str,
+        task_type: Optional[str] = None,
+        write_requested: bool = False,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            result = await asyncio.to_thread(
+                _run_engineer_intake,
+                prompt=prompt,
+                task_type=task_type,
+                write_requested=write_requested,
+                channel_id=interaction.channel_id,
+                user_id=interaction.user.id,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer intake 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            result.message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
+    @bot.tree.command(
+        name="engineer_show",
+        description="engineering-agent 워크플로 세션 상태를 조회합니다.",
+        guild=guild,
+    )
+    @app_commands.describe(session_id="조회할 워크플로 세션 id.")
+    async def engineer_show(
+        interaction: "discord.Interaction",
+        session_id: str,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            session = await asyncio.to_thread(_load_engineer_session, session_id=session_id)
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer show 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        if session is None:
+            await _send_message_chunks(
+                interaction,
+                f"session `{session_id}` 을 찾을 수 없습니다.",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        summary = (
+            f"**[engineering-agent] 세션 상태**\n"
+            f"세션 ID: `{session.session_id}`\n"
+            f"상태: {session.state.value}\n"
+            f"분류: {session.task_type}\n"
+            f"실행자: {session.executor_role} ({session.executor_runner or '?'})"
+        )
+        if session.write_blocked_reason:
+            summary += f"\n승인 대기: {session.write_blocked_reason}"
+        await _send_message_chunks(
+            interaction,
+            summary,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
     @bot.tree.command(name="checkpoints_now", description="지금 기준으로 다가오는 체크포인트를 보여줍니다.", guild=guild)
     @app_commands.describe(window_minutes="몇 분 앞까지 확인할지 설정합니다.")
     async def checkpoints_now(
@@ -113,6 +210,43 @@ def register_discord_commands(
             allowed_mentions=allowed_mentions,
             discord_module=discord,
         )
+
+
+def _engineer_orchestrator() -> WorkflowOrchestrator:
+    repo_root = Path(os.environ.get("YULE_REPO_ROOT", ".")).resolve()
+    pool = build_participants_pool(repo_root, "engineering-agent")
+    return WorkflowOrchestrator(Dispatcher(pool))
+
+
+def _run_engineer_intake(
+    *,
+    prompt: str,
+    task_type: Optional[str],
+    write_requested: bool,
+    channel_id: Optional[int],
+    user_id: Optional[int],
+):
+    parsed: Optional[TaskType] = None
+    if task_type:
+        try:
+            parsed = TaskType(task_type)
+        except ValueError as exc:
+            raise ValueError(
+                f"task_type must be one of {[t.value for t in TaskType]}, got {task_type!r}"
+            ) from exc
+    orchestrator = _engineer_orchestrator()
+    return orchestrator.intake(
+        prompt=prompt,
+        task_type=parsed,
+        write_requested=write_requested,
+        channel_id=channel_id,
+        user_id=user_id,
+    )
+
+
+def _load_engineer_session(*, session_id: str):
+    orchestrator = _engineer_orchestrator()
+    return orchestrator.get(session_id)
 
 
 def _bind_discord_runtime_globals(*, discord_module: Any, app_commands_module: Any) -> None:
