@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 from typing import Callable, Optional, Sequence
 from urllib import error, request
@@ -116,7 +117,8 @@ def generate_ollama_text(
             last_error = str(exc)
             print(
                 f"warning: ollama {request_label} attempt {attempt}/{primary_attempts} "
-                f"on model={model} failed: {exc}"
+                f"on model={model} failed: {exc}",
+                file=sys.stderr,
             )
             continue
 
@@ -128,13 +130,15 @@ def generate_ollama_text(
         last_error = f"validation failed: {violation}"
         print(
             f"warning: ollama {request_label} attempt {attempt}/{primary_attempts} "
-            f"on model={model} validation failed: {violation}"
+            f"on model={model} validation failed: {violation}",
+            file=sys.stderr,
         )
 
     if fallback_model and fallback_model != model:
         print(
             f"info: ollama {request_label} falling back from model={model} "
-            f"to model={fallback_model}"
+            f"to model={fallback_model}",
+            file=sys.stderr,
         )
         try:
             content = _ollama_request_once(
@@ -157,7 +161,8 @@ def generate_ollama_text(
             if violation is not None:
                 print(
                     f"warning: ollama {request_label} fallback model={fallback_model} "
-                    f"validation still failed: {violation}; returning content anyway"
+                    f"validation still failed: {violation}; returning content anyway",
+                    file=sys.stderr,
                 )
         return content
 
