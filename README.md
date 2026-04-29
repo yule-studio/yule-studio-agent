@@ -114,16 +114,23 @@ NAVER_APP_PASSWORD=
 # NAVER_CALDAV_CACHE_SECONDS=300
 # NAVER_CALDAV_INCLUDE_ALL_TODOS=false
 YULE_NAVER_CATEGORY_POLICY_FILE=policies/runtime/agents/planning-agent/naver-category-policy.json
+# YULE_NAVER_CATEGORY_POLICY_JSON=
+# YULE_GITHUB_LABEL_POLICY_FILE=policies/runtime/agents/planning-agent/github-label-policy.json
+# YULE_GITHUB_LABEL_POLICY_JSON=
 # YULE_SQLITE_BUSY_TIMEOUT_MS=30000
 # PLANNING_DAILY_SNAPSHOT_SECONDS=21600
 # OLLAMA_PLANNING_ENABLED=false
 # OLLAMA_ENDPOINT=http://localhost:11434
 # OLLAMA_MODEL=gemma3:latest
 # OLLAMA_TIMEOUT_SECONDS=20
+# OLLAMA_FALLBACK_MODEL=
+# OLLAMA_RETRY_COUNT=1
 # OLLAMA_DISCORD_ENABLED=false
 # OLLAMA_DISCORD_ENDPOINT=http://localhost:11434
 # OLLAMA_DISCORD_MODEL=gemma3:latest
 # OLLAMA_DISCORD_TIMEOUT_SECONDS=20
+# OLLAMA_DISCORD_FALLBACK_MODEL=
+# OLLAMA_DISCORD_RETRY_COUNT=1
 # YULE_WAKE_TIME=06:00
 # YULE_WORK_START_TIME=09:00
 # YULE_COMMUTE_MINUTES=45
@@ -164,12 +171,15 @@ DISCORD_GUILD_ID=
 - 원격 fetch가 `network`, `query`, `unknown` 성격의 오류로 실패하면 오래된 stale cache를 임시 fallback 으로 사용할 수 있습니다.
 - 같은 SQLite 안에 캘린더 항목 상태(`calendar_item_states`)도 함께 동기화합니다.
 - `YULE_NAVER_CATEGORY_POLICY_FILE`로 네이버 범주 색상별 Planning 우선순위 정책을 지정할 수 있습니다.
+- `YULE_NAVER_CATEGORY_POLICY_JSON`을 설정하면 파일을 읽지 않고 환경 변수에 담긴 JSON 본문을 바로 정책으로 사용합니다. CI나 컨테이너 환경처럼 파일을 두기 어려울 때 사용합니다.
 - `YULE_SQLITE_BUSY_TIMEOUT_MS`로 Discord Bot, warmup, snapshot이 같은 SQLite를 만질 때 잠금 대기 시간을 조정할 수 있습니다. 기본값은 30000ms입니다.
 - `PLANNING_DAILY_SNAPSHOT_SECONDS`로 daily-plan snapshot 유효 시간을 조정할 수 있습니다. 기본값은 6시간입니다.
 - `OLLAMA_PLANNING_ENABLED=true`를 설정하면 `planning daily`, `planning snapshot`, `daily warmup`에서 Ollama가 아침 브리핑 문장을 다듬습니다.
 - `OLLAMA_ENDPOINT`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`로 로컬 또는 서버 Ollama 연결 정보를 조정할 수 있습니다.
+- `OLLAMA_FALLBACK_MODEL`을 지정하면 Planning Ollama 호출이 실패하거나 응답 검증에 실패했을 때 fallback 모델로 한 번 더 시도합니다.
+- `OLLAMA_RETRY_COUNT`로 Planning Ollama 호출의 재시도 횟수를 조정할 수 있습니다. 기본값은 1입니다.
 - `OLLAMA_DISCORD_ENABLED=true`를 설정하면 Discord 대화형 응답도 snapshot 기반으로 Ollama를 사용합니다.
-- `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트로 분리할 수 있습니다.
+- `OLLAMA_DISCORD_ENDPOINT`, `OLLAMA_DISCORD_MODEL`, `OLLAMA_DISCORD_TIMEOUT_SECONDS`, `OLLAMA_DISCORD_FALLBACK_MODEL`, `OLLAMA_DISCORD_RETRY_COUNT`를 따로 넣으면 Discord 대화형 응답만 다른 Ollama 모델/엔드포인트/재시도 정책으로 분리할 수 있습니다. 미지정 시 Planning 측 설정을 그대로 따릅니다.
 - Ollama 응답은 모델이 단일 줄바꿈으로 문단을 끊어도 Discord 표시용으로 문단 사이 빈 줄을 자동 보장합니다.
 - CLI에서 일회성으로 켜고 끄려면 `--use-ollama`, `--no-ollama`를 사용합니다.
 - `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME`, `YULE_COMMUTE_MINUTES`, `YULE_DEPARTURE_BUFFER_MINUTES`로 Planning Agent의 하루 리듬과 브리핑 시각 기준을 조정할 수 있습니다.
@@ -178,6 +188,8 @@ DISCORD_GUILD_ID=
 - `YULE_LUNCH_DURATION_MINUTES`는 점심 시간 길이(분)입니다. 기본값은 60이며, `YULE_LUNCH_START_TIME`부터 이 길이만큼은 가상의 차단 블록으로 처리되어 어떤 focus block도 배치되지 않습니다. 점심에 매번 산책처럼 고정 활동이 있어 일정 잡지 않고 비워두고 싶을 때 사용합니다.
 - `YULE_TIMEZONE`은 Planning Agent와 Discord 자동 브리핑이 사용할 IANA 타임존 이름입니다(`Asia/Seoul`, `America/New_York` 등). 비워두면 시스템 로컬 타임존을 그대로 사용합니다. 여행이나 원격 근무로 시스템 타임존이 바뀌어도 브리핑 시간을 한국 기준에 고정하고 싶을 때 사용합니다.
 - GitHub 이슈는 제목에 도메인/엔티티/스키마/마이그레이션/infrastructure 같은 기반 키워드가 있으면 우선순위가 추가로 올라가고, ui/디자인/댓글/색상 같은 표면 키워드가 있으면 낮아집니다. 실제 개발 순서(예: 도메인 모델 → 회원가입 기능 → UI)에 맞춰 자동으로 정렬되도록 돕는 휴리스틱입니다.
+- GitHub 이슈에 라벨이 붙어 있으면 `policies/runtime/agents/planning-agent/github-label-policy.json` 정책에 따라 추가 우선순위 보정이 적용됩니다. 기본 매핑은 `infrastructure: +30`, `domain: +25`, `bug: +25`, `feature: +10`, `chore: -5`, `ui: -10` 등이며, `YULE_GITHUB_LABEL_POLICY_FILE` 또는 `YULE_GITHUB_LABEL_POLICY_JSON`으로 정책을 덮어쓸 수 있습니다.
+- GitHub 이슈는 fetch 시 라벨, 본문(body), 담당자, 마지막 갱신 시각까지 함께 가져와 캐시에 저장되며, 정책 기반 우선순위와 향후 확장(라벨 그룹별 알림 등)에 활용됩니다.
 - 네이버 카테고리 정책에 `"flexible": true`를 추가하면 해당 색상 코드가 붙은 todo는 시간 블록에 자동 배정되지 않고 추천 작업 목록에만 노출됩니다. mail-mail 정리 같이 정해진 시간 없이 자유롭게 처리하는 상시 작업 분류용입니다.
 - 기본 동작은 요청한 날짜 범위 안의 일정과 할 일만 읽습니다.
 - 할 일 캘린더는 전체 캘린더 목록에서 `할 일`, `todo`, `task`가 들어간 이름을 자동 탐지합니다.
@@ -206,6 +218,8 @@ DISCORD_GUILD_ID=
 - `DISCORD_DAILY_CHANNEL_NAME`만 넣어도 자동 브리핑 채널로 사용할 수 있습니다.
 - `DISCORD_NOTIFY_USER_ID`를 넣으면 브리핑과 체크포인트 메시지 앞에 해당 사용자 멘션을 붙입니다.
 - Discord 대화형 MVP는 현재 브리핑 재요청, 우선순위 추천, 체크포인트 조회, 일정 조정 proposal 응답을 지원합니다.
+- 체크포인트 알림은 응답 안내 푸터를 함께 보내며, 사용자가 같은 채널에서 `완료/yes/네/응` 또는 `건너뛰기/skip/아니/ㄴㄴ`처럼 답하면 해당 체크포인트는 done/skipped 상태로 닫혀 다시 알리지 않습니다. 한국어 정중/반말, 영어 변형, 채팅 자모(ㅇㅇ/ㄴㄴ)까지 인식하며, 좌우 공백과 끝 문장부호는 자동으로 정규화합니다.
+- 닫힌 응답은 SQLite `task_completion_events` 테이블에 누적 저장되어, 같은 종류의 작업을 자주 미루거나 빠르게 끝내는 패턴을 다음 우선순위/소요 시간 추정에 자동 반영합니다(skip 비율 ≥ 50% 면 우선순위 -최대 15, done 비율 ≥ 70% 면 +5, 평균 block_minutes 가 기본값과 15분 이상 차이나면 estimated_minutes 교체).
 - snapshot이 없을 때 동작은 모든 경로(`/plan_today`, 자동 브리핑, 채팅)에서 동일하게 처리됩니다. 즉시 "브리핑 데이터를 준비하고 있습니다" ack를 보낸 뒤, 백그라운드에서 캘린더 sync, GitHub 이슈, planning snapshot을 자동으로 만들고 follow-up 메시지로 실제 브리핑을 이어 보냅니다.
 - 같은 날짜에 동시 요청이 들어와도 per-date 잠금 덕분에 자동 재생성 파이프라인은 한 번만 실행됩니다.
 - 일정/상태 변경 요청은 아직 실제로 실행하지 않고 proposal 형태로만 답합니다.
@@ -325,6 +339,8 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
 - snapshot이 없으면 `/plan_today`도 채팅 경로와 동일하게 즉시 "브리핑 데이터를 준비하고 있습니다" 안내 후 백그라운드에서 snapshot을 만들고 followup으로 브리핑을 이어 보냅니다.
 - snapshot이 만료된 상태면 "마지막 동기화 기준 브리핑입니다" 문구를 붙입니다.
+- `/plan_today` 응답과 자동 브리핑 메시지 상단에는 표시 시점의 실제 현재 시각(`_지금 YYYY-MM-DD HH:MM 기준_`)이 자동으로 추가되어, 6시간 캐시된 snapshot을 한참 뒤에 보더라도 사용자가 보는 시각과 메시지의 "지금" 표기가 어긋나지 않습니다.
+- 옛 snapshot에 남아 있을 수 있는 "현재 X시 Y분입니다" 형태의 환각 시각 줄은 표시 직전에 자동으로 제거됩니다.
 - 자동 브리핑 전송 시간은 `runtime-metrics`에 `discord_send` 단계로 저장됩니다.
 
 ```bash
