@@ -2,9 +2,9 @@
   "id": "frontend-engineer",
   "name": "Frontend Engineer",
   "type": "role",
-  "department": "coding-agent",
+  "department": "engineering-agent",
   "description": "UI 컴포넌트, 사용자 흐름, 접근성과 상호작용을 구현하는 부서 멤버. 백엔드 계약(API 응답 모양)과 디자인 가이드를 입력으로 받아 컴포넌트 단위 작업을 수행한다.",
-  "instruction_entry": "agents/coding-agent/frontend-engineer/CLAUDE.md",
+  "instruction_entry": "agents/engineering-agent/frontend-engineer/CLAUDE.md",
   "runner": null,
   "responsibilities": [
     "사용자에게 노출되는 UI 컴포넌트와 화면 흐름 구현",

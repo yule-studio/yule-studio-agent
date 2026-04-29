@@ -1,8 +1,8 @@
 # Coding Workflow Policy
 
 ## Purpose
-This policy defines the default workflow for Coding Agent implementation tasks.  
-(이 정책은 Coding Agent 구현 작업의 기본 흐름을 정의한다)
+This policy defines the default workflow for Engineering Agent implementation tasks.  
+(이 정책은 Engineering Agent 구현 작업의 기본 흐름을 정의한다)
 
 ## Workflow
 - Clarify the task, target repository, and expected outcome before implementation.  

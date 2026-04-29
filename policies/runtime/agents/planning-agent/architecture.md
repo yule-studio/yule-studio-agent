@@ -19,7 +19,7 @@ This means the Planning Agent can already:
 - parse timed sub-blocks from event descriptions
 - generate pre-end checkpoints for those sub-blocks
 - produce a Discord-ready summary
-- choose Coding Agent handoff candidates
+- choose Engineering Agent handoff candidates
 
 ## Data Flow
 1. **Input collection**
@@ -43,7 +43,7 @@ This means the Planning Agent can already:
    - text rendering
    - Discord briefing text
    - execution checkpoints
-   - Coding Agent handoff candidates
+   - Engineering Agent handoff candidates
 
 ## AI Role Coordination
 
@@ -74,7 +74,7 @@ This means the Planning Agent can already:
 - useful for:
   - validating planning logic structure
   - checking schema consistency
-  - reviewing Coding Agent handoff shape
+  - reviewing Engineering Agent handoff shape
 
 ## Recommended Orchestration
 
@@ -94,14 +94,14 @@ This means the Planning Agent can already:
 
 ### Phase 3: Multi-agent review
 - Claude or Gemini may review the generated plan
-- Codex may review handoff formatting for Coding Agent
+- Codex may review handoff formatting for Engineering Agent
 
 ### Phase 4: Operational channel delivery
 - Discord receives the final briefing
 - user approves one or more coding tasks
-- approved tasks are transformed into Coding Agent input
+- approved tasks are transformed into Engineering Agent input
 
 ## Boundaries
 - Planning Agent recommends work; it does not execute code changes.
-- Planning Agent may mark Coding Agent candidates, but it does not modify repositories.
+- Planning Agent may mark Engineering Agent candidates, but it does not modify repositories.
 - Reminder scheduling logic is intentionally outside this MVP.

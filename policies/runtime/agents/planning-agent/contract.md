@@ -11,7 +11,7 @@ This contract is the basis for:
 - review/reminder items
 - daily-plan
 - Discord briefing
-- Coding Agent handoff
+- Engineering Agent handoff
 
 ## Input Contract
 
@@ -125,7 +125,7 @@ This contract is the basis for:
   - `prompt`
 
 ### `coding_agent_handoff`
-- top coding-related tasks to pass to Coding Agent
+- top coding-related tasks to pass to Engineering Agent
 
 ### `discord_briefing`
 - short text payload for Discord reporting
@@ -275,7 +275,7 @@ This contract is the basis for:
         "coding_candidate": true
       }
     ],
-    "discord_briefing": "오늘은 고정 일정 1건, 우선 작업 3건이 있습니다. 먼저 오늘 해야 할 업무를 처리하고, 이후 Planning Agent 포맷 정의 이슈를 Coding Agent 후보로 넘기는 흐름을 추천합니다.",
+    "discord_briefing": "오늘은 고정 일정 1건, 우선 작업 3건이 있습니다. 먼저 오늘 해야 할 업무를 처리하고, 이후 Planning Agent 포맷 정의 이슈를 Engineering Agent 후보로 넘기는 흐름을 추천합니다.",
     "briefing_source": "rules"
   }
 }

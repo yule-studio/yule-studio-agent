@@ -1,25 +1,27 @@
 {
-  "id": "coding-agent",
-  "name": "Coding Agent (Engineering Department)",
+  "id": "engineering-agent",
+  "name": "Engineering Agent (Engineering Department)",
   "type": "department",
-  "description": "Engineering department gateway. Receives coding requests from upstream agents (planning-agent, orchestrator) and delegates to its role members (frontend-engineer, backend-engineer, designer, qa-engineer, tech-lead). Members share the participants/integrations pool defined here so any role can be backed by Claude, Codex, Gemini, Ollama, or GitHub Copilot depending on the task.",
+  "description": "Engineering department gateway under the future CTO organization. Receives requests from upstream agents (planning-agent, orchestrator, eventually cto-agent) and delegates to its role members (tech-lead, backend-engineer, frontend-engineer, product-designer, qa-engineer). Members share the participants/integrations pool defined here so any role can be backed by Claude, Codex, Gemini, Ollama, or GitHub Copilot depending on the task.",
   "members": [
-    "frontend-engineer",
+    "tech-lead",
     "backend-engineer",
-    "designer",
-    "qa-engineer",
-    "tech-lead"
+    "frontend-engineer",
+    "product-designer",
+    "qa-engineer"
   ],
   "execution_mode": "single_executor_multi_advisor",
   "default_executor": "claude",
-  "instruction_entry": "agents/coding-agent/CLAUDE.md",
+  "instruction_entry": "agents/engineering-agent/CLAUDE.md",
   "policies": [
     "policies/runtime/common/safety.md",
     "policies/runtime/common/context-loading.md",
-    "policies/runtime/agents/coding-agent/team-structure.md",
-    "policies/runtime/agents/coding-agent/version-control.md",
-    "policies/runtime/agents/coding-agent/workflow.md",
-    "policies/runtime/agents/coding-agent/testing.md"
+    "policies/runtime/agents/engineering-agent/team-structure.md",
+    "policies/runtime/agents/engineering-agent/mvp-scope.md",
+    "policies/runtime/agents/engineering-agent/role-weights-v0.md",
+    "policies/runtime/agents/engineering-agent/version-control.md",
+    "policies/runtime/agents/engineering-agent/workflow.md",
+    "policies/runtime/agents/engineering-agent/testing.md"
   ],
   "write_policy": {
     "max_write_executors_per_run": 1,

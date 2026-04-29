@@ -21,7 +21,7 @@ class DoctorCheck:
     hint: Optional[str] = None
 
 
-def run_doctor(repo_root: Path, agent_id: str = "coding-agent") -> Sequence[DoctorCheck]:
+def run_doctor(repo_root: Path, agent_id: str = "engineering-agent") -> Sequence[DoctorCheck]:
     checks: List[DoctorCheck] = []
     checks.extend(_check_commands(["claude", "codex", "gemini", "ollama", "gh", "copilot"]))
     checks.append(_check_github_auth())
@@ -139,7 +139,7 @@ def _load_manifest_for_agent(repo_root: Path, agent_id: str, checks: List[Doctor
                 name="agent context",
                 status="FAIL",
                 detail=str(exc),
-                hint="Run `yule context coding-agent` for more detail.",
+                hint="Run `yule context engineering-agent` for more detail.",
             )
         )
         return {}

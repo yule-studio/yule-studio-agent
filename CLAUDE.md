@@ -5,8 +5,8 @@ This repository is a personal agent platform for managing the user's GitHub proj
 (이 레포지토리는 여러 GitHub 프로젝트의 이슈, 문서, 작업 흐름을 관리하기 위한 개인 에이전트 플랫폼이다)
 
 Current priority:
-- Build the `coding-agent` MVP.  
-  (현재는 `coding-agent` MVP 개발에만 집중한다)
+- Build the `engineering-agent` MVP.  
+  (현재는 `engineering-agent` MVP 개발에만 집중한다)
 
 ## Platform Direction
 - This repository will host multiple specialized agents.  

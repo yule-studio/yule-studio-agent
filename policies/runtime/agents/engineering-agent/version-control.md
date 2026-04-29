@@ -1,8 +1,8 @@
 # Coding Version Control Policy
 
 ## Purpose
-This policy defines how Coding Agent should handle branches, commits, pull requests, and repository naming rules.
-(이 정책은 Coding Agent가 브랜치, 커밋, Pull Request, 저장소 네이밍 규칙을 어떻게 다뤄야 하는지 정의한다)
+This policy defines how Engineering Agent should handle branches, commits, pull requests, and repository naming rules.
+(이 정책은 Engineering Agent가 브랜치, 커밋, Pull Request, 저장소 네이밍 규칙을 어떻게 다뤄야 하는지 정의한다)
 
 ## Rules
 - Follow the repository branch strategy documented in `policies/reference/BRANCH_STRATEGY.md` when that document exists.
