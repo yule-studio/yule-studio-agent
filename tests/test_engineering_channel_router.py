@@ -15,6 +15,7 @@ except ModuleNotFoundError:
 
 from yule_orchestrator.discord.engineering_channel_router import (
     EngineeringConversationOutcome,
+    EngineeringResearchLoopReport,
     EngineeringRouteContext,
     EngineeringRouteResult,
     EngineeringThreadKickoff,
@@ -496,6 +497,156 @@ class RouteEngineeringMessageTests(unittest.TestCase):
         )
         self.assertFalse(result.handled)
         self.send_chunks.assert_not_awaited()
+
+
+class _MessageWithAttachments(_Message):
+    def __init__(
+        self,
+        *,
+        content: str,
+        channel: _Channel,
+        attachments: list[Any] | None = None,
+        author_id: int = 4242,
+    ) -> None:
+        super().__init__(content=content, channel=channel, author_id=author_id)
+        self.attachments = attachments or []
+
+
+class RouteEngineeringMessageWithResearchLoopTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.context = EngineeringRouteContext(intake_channel_id=111)
+        self.send_chunks = AsyncMock()
+
+    def _confirmed_outcome(self) -> EngineeringConversationOutcome:
+        return EngineeringConversationOutcome(
+            content="요약은 이렇습니다.",
+            confirmed=True,
+            intake_prompt="onboarding step 2 정리",
+            write_requested=False,
+            thread_topic="engineer-feature-abc",
+        )
+
+    def _intake_fn(self):
+        return AsyncMock(
+            return_value=_FakeIntakeResult(
+                session=_FakeSession(session_id="abc", task_type="onboarding-flow"),
+                plan=_FakePlan(),
+                message="**[engineering-agent] 새 작업 접수** ...",
+            )
+        )
+
+    def _kickoff_fn(self):
+        return AsyncMock(
+            return_value=EngineeringThreadKickoff(thread_id=4242, message="kickoff!")
+        )
+
+    def _route(
+        self,
+        *,
+        message: _Message,
+        research_loop_fn,
+        conversation_outcome=None,
+    ) -> EngineeringRouteResult:
+        outcome = conversation_outcome or self._confirmed_outcome()
+        return _run(
+            route_engineering_message(
+                message=message,
+                bot_user=object(),
+                route_context=self.context,
+                extract_prompt=_extract_prompt,
+                conversation_fn=lambda **_: outcome,
+                intake_fn=self._intake_fn(),
+                thread_kickoff_fn=self._kickoff_fn(),
+                send_chunks=self.send_chunks,
+                research_loop_fn=research_loop_fn,
+            )
+        )
+
+    def test_research_loop_status_message_is_sent(self) -> None:
+        message = _MessageWithAttachments(
+            content="이대로 진행해 주세요",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+            attachments=[{"filename": "hero.png"}],
+        )
+
+        captured: dict[str, Any] = {}
+
+        async def loop_fn(**kwargs):
+            captured.update(kwargs)
+            return EngineeringResearchLoopReport(
+                forum_status_message="✅ 운영-리서치 forum 게시: thread #777",
+                forum_thread_id=777,
+                forum_thread_url="https://discord.com/threads/777",
+            )
+
+        result = self._route(message=message, research_loop_fn=loop_fn)
+
+        self.assertTrue(result.handled)
+        self.assertIsNotNone(result.research_loop_report)
+        self.assertEqual(result.research_loop_report.forum_thread_id, 777)
+        self.assertEqual(captured.get("session").session_id, "abc")
+        self.assertEqual(captured.get("message_text"), "onboarding step 2 정리")
+        self.assertEqual(len(captured.get("attachments") or ()), 1)
+
+        sent = [call.args[1] for call in self.send_chunks.await_args_list]
+        self.assertIn("✅ 운영-리서치 forum 게시: thread #777", sent)
+
+    def test_insufficient_research_followup_is_sent(self) -> None:
+        message = _MessageWithAttachments(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+
+        async def loop_fn(**_):
+            return EngineeringResearchLoopReport(
+                follow_up_message="자료가 부족합니다. 참고 링크를 올려주세요.",
+                insufficient=True,
+            )
+
+        result = self._route(message=message, research_loop_fn=loop_fn)
+        self.assertTrue(result.research_loop_report.insufficient)
+        sent = [call.args[1] for call in self.send_chunks.await_args_list]
+        self.assertTrue(
+            any(s.startswith("자료가 부족합니다") for s in sent),
+            f"follow-up not sent. Got: {sent!r}",
+        )
+
+    def test_research_loop_failure_is_non_fatal(self) -> None:
+        message = _MessageWithAttachments(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+
+        async def loop_fn(**_):
+            raise RuntimeError("forum API down")
+
+        result = self._route(message=message, research_loop_fn=loop_fn)
+        self.assertTrue(result.handled)  # intake + kickoff still landed
+        self.assertEqual(result.session_id, "abc")
+        self.assertEqual(result.thread_id, 4242)
+        self.assertIsNotNone(result.research_loop_report)
+        self.assertIn("forum API down", result.research_loop_report.error or "")
+        sent = [call.args[1] for call in self.send_chunks.await_args_list]
+        self.assertTrue(
+            any("research loop 실패" in s for s in sent),
+            f"warning not sent. Got: {sent!r}",
+        )
+
+    def test_research_loop_skipped_when_no_confirmation(self) -> None:
+        message = _Message(
+            content="이번 작업 우선순위 좀 정리해줘",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        loop_fn = AsyncMock(side_effect=AssertionError("loop should not run"))
+        outcome = EngineeringConversationOutcome(content="우선순위 정리 안내")
+        result = self._route(
+            message=message,
+            research_loop_fn=loop_fn,
+            conversation_outcome=outcome,
+        )
+        self.assertTrue(result.handled)
+        self.assertIsNone(result.research_loop_report)
+        loop_fn.assert_not_awaited()
 
 
 class ExtractMessageAttachmentsTests(unittest.TestCase):

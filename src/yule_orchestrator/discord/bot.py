@@ -8,6 +8,7 @@ import time as time_module
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any, Optional
 
 from ..agents import (
     Dispatcher,
@@ -33,9 +34,15 @@ from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
 from .engineering_channel_router import (
     EngineeringConversationOutcome,
+    EngineeringResearchLoopReport,
     EngineeringRouteContext,
     EngineeringThreadKickoff,
     route_engineering_message,
+)
+from .research_forum import ResearchForumContext
+from ..agents.research_loop import (
+    publish_research_loop_to_forum,
+    run_research_loop,
 )
 from .engineering_team_runtime import kickoff_directive
 from .formatter import (
@@ -84,6 +91,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 command_prefix=commands.when_mentioned,
                 intents=intents,
             )
+            _set_active_discord_bot(self)
 
         async def setup_hook(self) -> None:
             actual_application_id = self.application_id
@@ -149,6 +157,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     intake_fn=_default_engineering_intake_fn,
                     thread_kickoff_fn=_make_default_thread_kickoff_fn(discord),
                     send_chunks=send_chunks,
+                    research_loop_fn=_make_default_engineering_research_loop_fn(discord),
                 )
                 if engineering_result.handled:
                     return
@@ -1596,6 +1605,223 @@ def _default_engineering_thread_topic(session) -> str:
     session_id = getattr(session, "session_id", None) or "?"
     task_type = getattr(session, "task_type", None) or "task"
     return f"engineer-{task_type}-{session_id}"[:90]
+
+
+def _make_default_engineering_research_loop_fn(discord_module: "discord"):
+    """Build the research_loop hook injected into the engineering router.
+
+    Returned coroutine signature mirrors ``ResearchLoopFn`` from the
+    router. On each call we:
+
+      1. Run :func:`run_research_loop` (sync, no I/O).
+      2. If insufficient, surface the Korean follow-up prompt and stop.
+      3. Otherwise publish via :func:`publish_research_loop_to_forum`
+         using a discord.py-backed thread/post pair.
+    """
+
+    forum_ctx = ResearchForumContext.from_env()
+
+    async def _hook(*, session, message_text, attachments, channel, **_):
+        try:
+            outcome = await asyncio.to_thread(
+                run_research_loop,
+                session=session,
+                message_text=message_text,
+                attachments=tuple(attachments or ()),
+            )
+        except Exception as exc:  # noqa: BLE001 - non-fatal; reported by router
+            return EngineeringResearchLoopReport(
+                error=f"research loop 실패: {exc}",
+            )
+
+        if outcome.insufficient:
+            return EngineeringResearchLoopReport(
+                follow_up_message=outcome.follow_up_prompt
+                or "자료가 부족합니다. 참고 링크나 이미지를 올려주세요.",
+                insufficient=True,
+            )
+
+        if not forum_ctx.configured:
+            # Forum disabled — still tell the operator the deliberation
+            # ran so they can pull `outcome.assignments` from logs/CLI.
+            return EngineeringResearchLoopReport(
+                forum_status_message=_format_research_forum_disabled_status(outcome),
+            )
+
+        try:
+            publish = await publish_research_loop_to_forum(
+                outcome,
+                forum_context=forum_ctx,
+                create_thread_fn=_make_default_research_forum_create_thread_fn(discord_module),
+                post_message_fn=_make_default_research_forum_post_message_fn(discord_module),
+                posted_by="bot:engineering-agent",
+            )
+        except Exception as exc:  # noqa: BLE001 - reported through router
+            return EngineeringResearchLoopReport(
+                error=f"forum publish 실패: {exc}",
+            )
+
+        return _research_loop_report_from_publish(outcome, publish)
+
+    return _hook
+
+
+def _format_research_forum_disabled_status(outcome) -> str:
+    """Status line we show when ResearchForumContext is unconfigured.
+
+    The deliberation already ran, so the operator gets the synthesis +
+    assignment count without forum publication.
+    """
+
+    assignments = list(outcome.assignments)
+    parts = [
+        "ℹ️ 운영-리서치 forum env 미설정 — deliberation 결과는 로컬에 보존됩니다.",
+        f"역할 배정 {len(assignments)}건"
+        + (f" · 실행자 `{outcome.session.executor_role}`" if outcome.session.executor_role else ""),
+    ]
+    return "\n".join(parts)
+
+
+def _research_loop_report_from_publish(
+    outcome, publish
+) -> EngineeringResearchLoopReport:
+    if publish.skipped_reason:
+        return EngineeringResearchLoopReport(
+            forum_status_message=f"ℹ️ forum 게시 생략 — {publish.skipped_reason}",
+        )
+
+    thread = publish.thread
+    if thread is None:
+        return EngineeringResearchLoopReport(
+            error="forum thread 생성 결과가 비어 있습니다.",
+        )
+
+    if not thread.posted:
+        fallback_text = thread.fallback_markdown or thread.error or "forum 게시 실패"
+        return EngineeringResearchLoopReport(
+            forum_status_message=f"⚠️ 운영-리서치 forum 게시 실패 — fallback markdown:\n{fallback_text}",
+            error=thread.error,
+        )
+
+    role_count = len(publish.role_comments)
+    decision_ok = bool(publish.decision_comment and publish.decision_comment.posted)
+    lines = ["✅ 운영-리서치 forum 게시 완료"]
+    if thread.thread_url:
+        lines.append(f"thread: {thread.thread_url}")
+    elif thread.thread_id:
+        lines.append(f"thread id: {thread.thread_id}")
+    lines.append(
+        f"역할별 댓글 {role_count}건 · tech-lead 종합 {'기록' if decision_ok else '미기록'}"
+    )
+    if outcome.assignments:
+        executor = next((a for a in outcome.assignments if a.is_executor), None)
+        if executor:
+            lines.append(
+                f"실행자 `{executor.role}` 작업 {len(executor.actions)}건 배정 완료"
+            )
+
+    return EngineeringResearchLoopReport(
+        forum_status_message="\n".join(lines),
+        forum_thread_id=thread.thread_id,
+        forum_thread_url=thread.thread_url,
+    )
+
+
+def _make_default_research_forum_create_thread_fn(discord_module: "discord"):
+    """Wrap discord.py forum-channel thread creation for research_forum."""
+
+    async def _create(*, channel_id, channel_name, name, content, **_):
+        bot = _resolve_active_bot()
+        if bot is None:
+            raise RuntimeError("discord bot client not ready")
+        channel = await _resolve_research_forum_channel(
+            bot=bot,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            discord_module=discord_module,
+        )
+        if channel is None:
+            raise RuntimeError(
+                f"research forum channel not found (id={channel_id}, name={channel_name})"
+            )
+        create_thread = getattr(channel, "create_thread", None)
+        if not callable(create_thread):
+            raise RuntimeError("research forum channel does not support create_thread")
+        thread_result = await create_thread(name=name, content=content)
+        # discord.py returns ``ThreadWithMessage`` for forums; pull the thread.
+        thread = getattr(thread_result, "thread", thread_result)
+        return {
+            "id": getattr(thread, "id", None),
+            "url": getattr(thread, "jump_url", None) or getattr(thread, "url", None),
+        }
+
+    return _create
+
+
+def _make_default_research_forum_post_message_fn(discord_module: "discord"):
+    """Wrap discord.py thread-message send for research_forum comments."""
+
+    async def _post(*, thread_id, content, **_):
+        bot = _resolve_active_bot()
+        if bot is None:
+            raise RuntimeError("discord bot client not ready")
+        thread = bot.get_channel(int(thread_id))
+        if thread is None:
+            try:
+                thread = await bot.fetch_channel(int(thread_id))
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"thread {thread_id} not reachable: {exc}") from exc
+        message = await thread.send(content)
+        return {"id": getattr(message, "id", None)}
+
+    return _post
+
+
+_ACTIVE_DISCORD_BOT: Any = None
+
+
+def _set_active_discord_bot(bot: Any) -> None:
+    """Register the running bot so research_forum wrappers can find it.
+
+    ``run_discord_bot`` is the only caller that constructs a real bot,
+    and it does so once per process; we keep the slot at module level so
+    the deeply-nested research_loop hooks can fetch it without weaving the
+    bot reference through every closure.
+    """
+
+    global _ACTIVE_DISCORD_BOT
+    _ACTIVE_DISCORD_BOT = bot
+
+
+def _resolve_active_bot() -> Any:
+    return _ACTIVE_DISCORD_BOT
+
+
+async def _resolve_research_forum_channel(
+    *,
+    bot: Any,
+    channel_id: Optional[int],
+    channel_name: Optional[str],
+    discord_module: "discord",
+):
+    """Find the configured forum channel by id, then by name fallback."""
+
+    if channel_id is not None:
+        channel = bot.get_channel(int(channel_id))
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(int(channel_id))
+            except Exception:  # noqa: BLE001
+                channel = None
+        if channel is not None:
+            return channel
+    if channel_name:
+        target = str(channel_name).strip().lstrip("#").lower()
+        for guild in bot.guilds:
+            for ch in getattr(guild, "channels", []):
+                if str(getattr(ch, "name", "")).strip().lower() == target:
+                    return ch
+    return None
 
 
 def _format_engineering_kickoff_message(session, plan) -> str:

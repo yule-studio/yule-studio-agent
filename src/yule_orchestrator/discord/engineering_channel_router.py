@@ -101,6 +101,26 @@ class EngineeringThreadKickoff:
 
 
 @dataclass(frozen=True)
+class EngineeringResearchLoopReport:
+    """What the research loop hook reported back to the router.
+
+    ``follow_up_message`` is sent to the user when the loop decided the
+    research pack is too thin (e.g. no URL, no attachment for a
+    landing-page task). ``forum_status_message`` is the operator-facing
+    summary line ("운영-리서치 forum thread 게시: …") posted after a
+    successful publish. ``error`` is filled when the hook itself raised;
+    callers display it as a `⚠️` line and continue.
+    """
+
+    follow_up_message: Optional[str] = None
+    forum_status_message: Optional[str] = None
+    forum_thread_id: Optional[int] = None
+    forum_thread_url: Optional[str] = None
+    insufficient: bool = False
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class EngineeringRouteResult:
     """What the router did with one Discord message.
 
@@ -116,6 +136,7 @@ class EngineeringRouteResult:
     kickoff_message: Optional[str] = None
     session_id: Optional[str] = None
     thread_id: Optional[int] = None
+    research_loop_report: Optional[EngineeringResearchLoopReport] = None
     error: Optional[str] = None
 
 
@@ -129,6 +150,10 @@ ConversationFn = Callable[..., Union[
 ]]
 IntakeFn = Callable[..., Any]
 ThreadKickoffFn = Callable[..., Awaitable[EngineeringThreadKickoff]]
+ResearchLoopFn = Callable[..., Union[
+    EngineeringResearchLoopReport,
+    Awaitable[EngineeringResearchLoopReport],
+]]
 
 
 def is_engineering_channel(
@@ -189,6 +214,7 @@ async def route_engineering_message(
     intake_fn: IntakeFn,
     thread_kickoff_fn: ThreadKickoffFn,
     send_chunks: SendChunksFn,
+    research_loop_fn: Optional[ResearchLoopFn] = None,
 ) -> EngineeringRouteResult:
     """Drive the engineering channel response.
 
@@ -198,6 +224,10 @@ async def route_engineering_message(
       3. If the conversation (or fallback heuristic) says the user just
          confirmed, call ``intake_fn`` to create a workflow session.
       4. Post the intake summary, then kick off a thread.
+      5. If ``research_loop_fn`` is provided, run it after kickoff and
+         surface its follow-up / forum status message back to the user.
+         Failures in the research loop are *non-fatal*: intake + kickoff
+         already landed, so we report a `⚠️` line and return.
     """
 
     if not is_engineering_channel(message=message, route_context=route_context):
@@ -275,6 +305,16 @@ async def route_engineering_message(
             thread_id = kickoff.thread_id
             kickoff_message = kickoff.message
 
+    research_loop_report: Optional[EngineeringResearchLoopReport] = None
+    if research_loop_fn is not None and session is not None:
+        research_loop_report = await _run_research_loop_hook(
+            research_loop_fn=research_loop_fn,
+            message=message,
+            session=session,
+            prompt_text=intake_prompt,
+            send_chunks=send_chunks,
+        )
+
     return EngineeringRouteResult(
         handled=True,
         conversation_message=outcome.content or None,
@@ -282,8 +322,82 @@ async def route_engineering_message(
         kickoff_message=kickoff_message,
         session_id=session_id,
         thread_id=thread_id,
+        research_loop_report=research_loop_report,
         error=kickoff_error,
     )
+
+
+async def _run_research_loop_hook(
+    *,
+    research_loop_fn: ResearchLoopFn,
+    message: Any,
+    session: Any,
+    prompt_text: str,
+    send_chunks: SendChunksFn,
+) -> EngineeringResearchLoopReport:
+    """Call *research_loop_fn* with the message context and surface its result.
+
+    Errors are caught and reported via a ``⚠️`` chat line so a research
+    loop failure does not undo the intake + kickoff that already landed.
+    """
+
+    attachments = extract_message_attachments(message)
+    try:
+        raw = await _maybe_await(
+            research_loop_fn(
+                session=session,
+                message_text=prompt_text,
+                attachments=attachments,
+                channel=message.channel,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - non-fatal; report and return
+        report = EngineeringResearchLoopReport(error=str(exc))
+        await send_chunks(
+            message.channel,
+            f"⚠️ research loop 실패: {exc}",
+        )
+        return report
+
+    report = _coerce_research_loop_report(raw)
+    if report.follow_up_message:
+        await send_chunks(message.channel, report.follow_up_message)
+    if report.forum_status_message:
+        await send_chunks(message.channel, report.forum_status_message)
+    if report.error and not report.follow_up_message and not report.forum_status_message:
+        await send_chunks(message.channel, f"⚠️ research loop: {report.error}")
+    return report
+
+
+def _coerce_research_loop_report(raw: Any) -> EngineeringResearchLoopReport:
+    if isinstance(raw, EngineeringResearchLoopReport):
+        return raw
+    if raw is None:
+        return EngineeringResearchLoopReport()
+    return EngineeringResearchLoopReport(
+        follow_up_message=_optional_str(getattr(raw, "follow_up_message", None)),
+        forum_status_message=_optional_str(getattr(raw, "forum_status_message", None)),
+        forum_thread_id=_safe_int(getattr(raw, "forum_thread_id", None)),
+        forum_thread_url=_optional_str(getattr(raw, "forum_thread_url", None)),
+        insufficient=bool(getattr(raw, "insufficient", False)),
+        error=_optional_str(getattr(raw, "error", None)),
+    )
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _coerce_outcome(
