@@ -60,10 +60,63 @@
 | kickoff 마커에 role 미지정 시 여러 봇이 동시 답변 | role-less 마커는 plan 에 든 모든 활성 봇이 응답 가능 | 운영 규약: 게이트웨이는 항상 role 지정 directive 를 게시한다 (`kickoff_directive` 가 자동으로 해줌) |
 | thread 가 없는 세션에 chain 시도 | dispatcher 만 끝나고 thread 가 아직 생성되지 않은 상태 | `build_turn_plan` 이 `ValueError` 로 차단; 게이트웨이가 thread 생성 → `session.thread_id` 기입 후 재시도 |
 
-## 6. 다음 마일스톤
+## 6. Deliberation 확장 (`agents/deliberation.py`)
+
+§4의 한 줄 템플릿이 thread 시작용이라면, **deliberation loop**는 같은 thread 안에서 ResearchPack과 이전 turn을 입력받아 **구조화된 역할별 take + tech-lead 종합**을 생산하는 상위 계층이다. 진실 소스: `src/yule_orchestrator/agents/deliberation.py`. 진입점은 `discord/engineering_team_runtime.deliberation_role_turn` / `synthesize_thread`.
+
+### 6.1 역할별 take 데이터클래스
+
+| 역할 | dataclass | 핵심 필드 |
+|---|---|---|
+| tech-lead (opening) | `TechLeadOpening` | `task_breakdown`, `dependencies`, `decisions_needed` |
+| product-designer | `ProductDesignerTake` | `reference_summary`, `ux_direction`, `visual_direction`, `risks` |
+| backend-engineer | `BackendEngineerTake` | `data_impact`, `api_impact`, `storage_impact`, `risks` |
+| frontend-engineer | `FrontendEngineerTake` | `ui_components`, `state_strategy`, `user_flow`, `risks` |
+| qa-engineer | `QaEngineerTake` | `acceptance_criteria`, `risks`, `regression_targets` |
+
+알 수 없는 role은 generic `TechLeadOpening`-shaped take로 fallback해 호출자가 항상 무언가 렌더링할 수 있게 한다.
+
+### 6.2 tech-lead 종합 (`TechLeadSynthesis`)
+
+thread 마지막에 tech-lead가 게시하는 dataclass. 필드:
+
+- `consensus: str` — 합의안 한 줄.
+- `todos: tuple[str, ...]` — 각 역할 take에서 추출한 후속 작업.
+- `open_research: tuple[str, ...]` — 더 조사할 것 (reference 부족·갭 자동 인지).
+- `user_decisions_needed: tuple[str, ...]` — tech-lead가 명시한 결정 항목.
+- `approval_required: bool` + `approval_reason: str?` — `WorkflowSession.write_requested` && 승인 전이면 yes.
+
+### 6.3 LLM runner 주입
+
+`run_role_deliberation(context, runner_fn=...)`가 핵심 API. *runner_fn*이 `RoleTake` 데이터클래스를 반환하면 그대로 사용하고, None을 반환하거나 예외가 발생하면 **deterministic fallback**을 사용한다. 그래서 백엔드가 죽어도 thread는 멈추지 않고 계속 흐른다.
+
+```python
+from yule_orchestrator.discord.engineering_team_runtime import (
+    deliberation_role_turn, synthesize_thread,
+)
+
+# 한 역할의 turn
+take, text = deliberation_role_turn(
+    session,
+    "engineering-agent/qa-engineer",
+    research_pack=pack,
+    previous_turns=collected_takes,
+    runner_fn=optional_llm_callable,
+)
+
+# 모든 turn이 끝난 뒤 합의
+synth, synth_text = synthesize_thread(session, all_takes, research_pack=pack)
+```
+
+### 6.4 호환성
+
+- 기존 `format_role_turn_text` / `build_turn_plan` / `handle_team_turn_message` 시그니처는 그대로 유지된다. deliberation 진입점은 추가 함수일 뿐 기존 sequential MVP를 깨지 않는다.
+- 기존 turn 메시지를 deliberation 출력으로 교체할지 결정은 게이트웨이가 한다 — ResearchPack이 있는 세션은 deliberation, 없는 세션은 기존 templated turn.
+
+## 7. 다음 마일스톤
 
 1. **자유 회신** — 각 role 이 다른 role 의 발화에 멘션 응답. 본 MVP 완료 후 도입.
-2. **runner 통합** — turn 본문을 templated 문자열 대신 실제 runner 출력(요약 1단락)으로 교체. role × runner 매트릭스는 `role-weights-v0.md`.
+2. **runner 통합** — turn 본문을 templated 문자열 대신 실제 runner 출력(요약 1단락)으로 교체. role × runner 매트릭스는 `role-weights-v0.md`. deliberation의 runner_fn 주입 슬롯이 통합 진입점.
 3. **재진입** — 같은 thread 에 review 피드백이 들어오면 `played_roles` 를 reset 하고 chain 재시작 (review-loop.md 와 합치기).
 4. **IPC** — 현재는 Discord 본문에 마커를 박아 흐르지만, 같은 호스트 안에서 zmq/queue 로 직접 dispatch 하는 채널을 추가해 latency 개선.
 

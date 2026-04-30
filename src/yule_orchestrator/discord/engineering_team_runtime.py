@@ -30,6 +30,16 @@ import re
 from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
+from ..agents.deliberation import (
+    DeliberationContext,
+    RoleTake,
+    TechLeadSynthesis,
+    render_role_take,
+    render_synthesis,
+    run_role_deliberation,
+    synthesize,
+)
+from ..agents.research_pack import ResearchPack
 from ..agents.workflow_state import WorkflowSession, load_session
 
 
@@ -400,6 +410,50 @@ def _next_unplayed_after(
         if turn.role not in played:
             return turn
     return None
+
+
+# ---------------------------------------------------------------------------
+# Deliberation-aware extension (pack-driven structured turns)
+# ---------------------------------------------------------------------------
+
+
+def deliberation_role_turn(
+    session: WorkflowSession,
+    role: str,
+    *,
+    research_pack: Optional[ResearchPack] = None,
+    previous_turns: Sequence[RoleTake] = (),
+    runner_fn=None,
+) -> Tuple[RoleTake, str]:
+    """Produce a structured role take + rendered Discord text.
+
+    Sits next to ``format_role_turn_text`` for callers that have a
+    ``ResearchPack`` (e.g. forum-driven sessions) and want the richer
+    contract instead of the bare templated line. ``runner_fn`` is the
+    optional LLM hook; when None or when it raises, the deterministic
+    fallback inside ``run_role_deliberation`` handles the response.
+    """
+
+    context = DeliberationContext(
+        session=session,
+        role=role,
+        research_pack=research_pack,
+        previous_turns=tuple(previous_turns),
+    )
+    take = run_role_deliberation(context, runner_fn=runner_fn)
+    return take, render_role_take(take)
+
+
+def synthesize_thread(
+    session: WorkflowSession,
+    role_takes: Sequence[RoleTake],
+    *,
+    research_pack: Optional[ResearchPack] = None,
+) -> Tuple[TechLeadSynthesis, str]:
+    """Run tech-lead synthesis and return both the dataclass and rendered text."""
+
+    synth = synthesize(session, role_takes, research_pack=research_pack)
+    return synth, render_synthesis(synth)
 
 
 def closing_message(session: WorkflowSession) -> str:
