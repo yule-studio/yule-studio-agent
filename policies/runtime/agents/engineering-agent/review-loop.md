@@ -137,9 +137,39 @@ PR 리뷰 코멘트, GitHub Copilot 코멘트, 외부 에이전트 의견을 다
 - Write 게이트: review-loop은 write_blocked_reason을 만지지 않는다. 재작업이 새로 write를 요구하면 `approve()` 흐름을 다시 타야 한다.
 - Reference 자동 수집 금지 정책: 소스 이름만 추천, 실제 페치는 사용자/후속 마일스톤.
 
+## Discord 진입점
+
+`/engineer_review` 와 `/engineer_review_reply` 두 슬래시 명령으로 thread에서 직접 루프를 돌릴 수 있다.
+
+### `/engineer_review`
+
+| 파라미터 | 필수 | 설명 |
+| --- | --- | --- |
+| `session_id` | ✅ | 피드백을 연결할 워크플로 세션 ID |
+| `summary` | ✅ | 한 줄 요약 (라우팅에 사용) |
+| `body` | ⏵ | 피드백 본문 |
+| `severity` | ⏵ | `blocking`/`high`/`medium`/`low`/`nit` (기본 medium) |
+| `categories` | ⏵ | 쉼표로 구분 (예: `ui, copy`) |
+| `source` | ⏵ | `github_pr_review`/`github_copilot`/`external_agent`/`user` (기본 user) |
+| `file_paths` | ⏵ | 쉼표로 구분한 영향 파일 경로 |
+
+실행 결과로 인테이크 메시지와 함께 자동 생성된 `feedback_id`(예: `fb-1a2b3c4d`)를 표시한다. 이 ID를 다음 회신에 사용한다.
+
+### `/engineer_review_reply`
+
+| 파라미터 | 필수 | 설명 |
+| --- | --- | --- |
+| `session_id` | ✅ | 회신 대상 세션 |
+| `feedback_id` | ✅ | 인테이크 시 받은 ID |
+| `applied` | ✅ | 적용한 수정 (개행 또는 `;` 분리, `-`/`•` 글머리 자동 제거) |
+| `proposed` | ⏵ | 추가 제안 |
+| `remaining` | ⏵ | 남은 이슈 |
+
+회신 메시지가 thread에 게시되고 session.progress_notes에 회차 메모가 누적된다.
+
 ## 후속 마일스톤
 
-- 피드백 자동 수집: GitHub PR review API / Copilot 코멘트 fetch → ReviewFeedback 변환기.
-- Discord 슬래시 명령: `/engineer-review` 로 thread에 직접 리뷰 입력.
+- 피드백 자동 수집: GitHub PR review API / Copilot 코멘트 fetch → ReviewFeedback 변환기 (webhook 또는 polling).
 - 자동 reference_collector 연동: reference_needed=True인 피드백은 실제 사이트에서 추천 카드 가져오기 (약관 검토 후).
 - Multi-feedback batching: 같은 PR에 여러 코멘트가 동시에 들어올 때 묶어서 한 번에 라우팅.
+- 라벨 사전 표준화: `categories`를 자유 라벨에서 정해진 사전으로 좁혀 라우팅 정확도 향상.

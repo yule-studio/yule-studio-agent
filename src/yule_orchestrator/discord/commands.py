@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..agents import (
     Dispatcher,
@@ -12,6 +13,11 @@ from ..agents import (
     WorkflowError,
     WorkflowOrchestrator,
     build_participants_pool,
+)
+from ..agents.review_loop import (
+    ReviewFeedback,
+    ReviewSeverity,
+    ReviewSource,
 )
 from .formatter import (
     format_checkpoints_message,
@@ -185,6 +191,108 @@ def register_discord_commands(
             discord_module=discord,
         )
 
+    @bot.tree.command(
+        name="engineer_review",
+        description="기존 세션에 PR 리뷰/Copilot/외부 피드백을 입력합니다.",
+        guild=guild,
+    )
+    @app_commands.describe(
+        session_id="피드백을 연결할 워크플로 세션 ID.",
+        summary="한 줄 요약 (라우팅에 사용).",
+        body="피드백 본문 (선택).",
+        severity="blocking / high / medium / low / nit (기본: medium).",
+        categories="쉼표로 구분한 카테고리 라벨 (예: ui, copy).",
+        source="github_pr_review / github_copilot / external_agent / user (기본: user).",
+        file_paths="쉼표로 구분한 영향 파일 경로 (선택).",
+    )
+    async def engineer_review(
+        interaction: "discord.Interaction",
+        session_id: str,
+        summary: str,
+        body: Optional[str] = None,
+        severity: Optional[str] = None,
+        categories: Optional[str] = None,
+        source: Optional[str] = None,
+        file_paths: Optional[str] = None,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            result = await asyncio.to_thread(
+                _run_engineer_review,
+                session_id=session_id,
+                summary=summary,
+                body=body,
+                severity=severity,
+                categories=categories,
+                source=source,
+                file_paths=file_paths,
+                channel_id=interaction.channel_id,
+                thread_id=getattr(interaction.channel, "id", None),
+                user_id=interaction.user.id,
+                author_name=str(interaction.user),
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer review 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            result.message + f"\n\n_피드백 ID_: `{result.feedback.feedback_id}`",
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
+    @bot.tree.command(
+        name="engineer_review_reply",
+        description="리뷰 피드백에 적용/제안/남은 이슈 회신을 게시합니다.",
+        guild=guild,
+    )
+    @app_commands.describe(
+        session_id="회신 대상 워크플로 세션 ID.",
+        feedback_id="회신 대상 feedback ID.",
+        applied="적용한 수정 (개행 또는 ; 으로 분리).",
+        proposed="추가 제안 (선택, 개행 또는 ; 분리).",
+        remaining="남은 이슈 (선택, 개행 또는 ; 분리).",
+    )
+    async def engineer_review_reply(
+        interaction: "discord.Interaction",
+        session_id: str,
+        feedback_id: str,
+        applied: str,
+        proposed: Optional[str] = None,
+        remaining: Optional[str] = None,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            result = await asyncio.to_thread(
+                _run_engineer_review_reply,
+                session_id=session_id,
+                feedback_id=feedback_id,
+                applied=applied,
+                proposed=proposed,
+                remaining=remaining,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer review reply 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            result.message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
     @bot.tree.command(name="checkpoints_now", description="지금 기준으로 다가오는 체크포인트를 보여줍니다.", guild=guild)
     @app_commands.describe(window_minutes="몇 분 앞까지 확인할지 설정합니다.")
     async def checkpoints_now(
@@ -247,6 +355,109 @@ def _run_engineer_intake(
 def _load_engineer_session(*, session_id: str):
     orchestrator = _engineer_orchestrator()
     return orchestrator.get(session_id)
+
+
+def _run_engineer_review(
+    *,
+    session_id: str,
+    summary: str,
+    body: Optional[str],
+    severity: Optional[str],
+    categories: Optional[str],
+    source: Optional[str],
+    file_paths: Optional[str],
+    channel_id: Optional[int],
+    thread_id: Optional[int],
+    user_id: Optional[int],
+    author_name: Optional[str],
+):
+    if not summary or not summary.strip():
+        raise ValueError("summary must not be empty")
+
+    parsed_severity = _parse_review_severity(severity)
+    parsed_source = _parse_review_source(source)
+
+    feedback = ReviewFeedback(
+        feedback_id=_generate_feedback_id(),
+        source=parsed_source,
+        submitted_at=datetime.now(),
+        summary=summary.strip(),
+        body=(body or "").strip(),
+        target_session_id=session_id,
+        target_thread_id=thread_id,
+        file_paths=_split_csv(file_paths),
+        severity=parsed_severity,
+        categories=_split_csv(categories),
+        author=author_name,
+    )
+    orchestrator = _engineer_orchestrator()
+    return orchestrator.record_review_feedback(session_id, feedback)
+
+
+def _run_engineer_review_reply(
+    *,
+    session_id: str,
+    feedback_id: str,
+    applied: str,
+    proposed: Optional[str],
+    remaining: Optional[str],
+):
+    applied_items = _split_lines_or_semicolons(applied)
+    if not applied_items:
+        raise ValueError("applied must include at least one item")
+    proposed_items = _split_lines_or_semicolons(proposed)
+    remaining_items = _split_lines_or_semicolons(remaining)
+    orchestrator = _engineer_orchestrator()
+    return orchestrator.respond_to_review(
+        session_id,
+        feedback_id=feedback_id,
+        applied=applied_items,
+        proposed=proposed_items,
+        remaining=remaining_items,
+    )
+
+
+def _parse_review_severity(value: Optional[str]) -> ReviewSeverity:
+    if not value:
+        return ReviewSeverity.MEDIUM
+    try:
+        return ReviewSeverity(value.strip().lower())
+    except ValueError as exc:
+        raise ValueError(
+            f"severity must be one of {[s.value for s in ReviewSeverity]}, got {value!r}"
+        ) from exc
+
+
+def _parse_review_source(value: Optional[str]) -> ReviewSource:
+    if not value:
+        return ReviewSource.USER
+    try:
+        return ReviewSource(value.strip().lower())
+    except ValueError as exc:
+        raise ValueError(
+            f"source must be one of {[s.value for s in ReviewSource]}, got {value!r}"
+        ) from exc
+
+
+def _split_csv(value: Optional[str]) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _split_lines_or_semicolons(value: Optional[str]) -> tuple[str, ...]:
+    if not value:
+        return ()
+    parts: list[str] = []
+    for chunk in value.replace(";", "\n").splitlines():
+        stripped = chunk.strip().lstrip("-• ").strip()
+        if stripped:
+            parts.append(stripped)
+    return tuple(parts)
+
+
+def _generate_feedback_id() -> str:
+    return f"fb-{uuid.uuid4().hex[:8]}"
 
 
 def _bind_discord_runtime_globals(*, discord_module: Any, app_commands_module: Any) -> None:
