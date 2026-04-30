@@ -218,6 +218,11 @@ DISCORD_GUILD_ID=
   - `#실험실` (= `DISCORD_ENGINEERING_LAB_CHANNEL_*`) — 워크플로/프롬프트 테스트. 현재 예약 슬롯.
   - `#운영-리서치` Forum (= `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*`) — 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 현재 예약 슬롯이며 게시 규약/댓글 양식/Obsidian export contract는 `policies/runtime/agents/engineering-agent/research-forum.md` 참조.
 - intake 채널은 ID와 NAME 중 하나만 매치돼도 라우팅됩니다. 둘 다 비어 있으면 engineering 라우터가 비활성으로 떨어져 모든 메시지는 기존 planning 흐름으로 처리됩니다. 자세한 매트릭스는 `policies/runtime/agents/engineering-agent/discord-workflow.md` §1.1 참고.
+- `yule discord up`이 두 봇을 띄우면 **planning-bot과 engineering-agent gateway가 별도 프로세스**로 분리됩니다:
+  - planning-bot은 자식 프로세스에서 `DISCORD_ENGINEERING_INTAKE_CHANNEL_*`를 빈 값으로 덮어써 `#업무-접수`에 응답하지 않습니다.
+  - engineering-agent gateway는 `ENGINEERING_AGENT_BOT_GATEWAY_TOKEN`을 자기 토큰으로 들고 별도 프로세스로 기동되며, 자식 환경에서 `DISCORD_DAILY_*`/`DISCORD_CHECKPOINT_*`/`DISCORD_CONVERSATION_*`/`DISCORD_DEBUG_*`/`DISCORD_NOTIFY_USER_ID`를 비워 planning 채널 동작을 차단합니다 (`DISCORD_CONVERSATION_REPLY_MODE=disabled`).
+  - 결과: 두 봇이 같은 메시지에 동시에 응답하지 않고, 서로 자기 채널만 본다는 약속이 강제됩니다. 자세한 분리 동작은 `policies/runtime/agents/engineering-agent/launcher.md`와 supervisor의 `BOT_RUNNER_ENGINEERING_GATEWAY` 분기 참조.
+- engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화되고, kickoff 메시지 끝에 `[team-turn:<session_id> tech-lead]` directive가 자동 부착되어 멤버 봇 chain이 시작될 수 있습니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
 - 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.
