@@ -424,6 +424,56 @@ def build_role_query_hints(
     )
 
 
+def format_research_hints_block(
+    role_sequence: Sequence[str],
+    task_type: Optional[str] = None,
+    *,
+    topic: Optional[str] = None,
+    max_queries_per_role: int = 2,
+    max_references_per_role: int = 3,
+) -> str:
+    """Render a Discord-friendly per-role research hints block.
+
+    설계 의도: 사용자가 #업무-접수에서 메시지를 던지면, intake → kickoff →
+    forum 게시까지 도는 흐름의 마지막에 "역할별로 어떤 자료를 보면 좋을지"를
+    한 묶음으로 보여주려는 것. 각 역할의 ``RoleResearchProfile`` +
+    ``build_role_query_hints``가 반환하는 task_type 보정 가중치를 사람이
+    읽을 수 있는 형태로 압축한다.
+
+    알 수 없는 role은 조용히 건너뛴다 — supporting role이 늘어나거나 줄어들
+    때마다 본 함수를 깨뜨리지 않는다. role_sequence가 비어 있으면 빈 문자열을
+    반환해 호출자가 출력 자체를 생략할 수 있다.
+    """
+
+    if not role_sequence:
+        return ""
+
+    blocks: list[str] = ["**역할별 자료 가이드**"]
+    for role in role_sequence:
+        try:
+            hints = build_role_query_hints(role, task_type, topic=topic)
+        except ValueError:
+            continue
+        top_sources = [src for src, _w in hints.weighted_source_types[:3]]
+        queries = list(hints.suggested_queries[:max_queries_per_role])
+        references = list(hints.reference_categories[:max_references_per_role])
+
+        line = f"- `{role}`"
+        if top_sources:
+            line += f" · 우선 자료: {', '.join(top_sources)}"
+        blocks.append(line)
+
+        if queries:
+            blocks.append(f"  - 추천 쿼리: {' / '.join(queries)}")
+        if references:
+            blocks.append(f"  - 참고 소스: {', '.join(references)}")
+
+    if len(blocks) == 1:
+        # 모든 role이 unknown이라 실제 hint가 없는 경우.
+        return ""
+    return "\n".join(blocks)
+
+
 def replace_role_profile_for_tests(
     role: str,
     *,

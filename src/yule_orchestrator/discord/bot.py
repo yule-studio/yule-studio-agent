@@ -44,6 +44,7 @@ from ..agents.research_loop import (
     publish_research_loop_to_forum,
     run_research_loop,
 )
+from ..agents.research_profiles import format_research_hints_block
 from .engineering_team_runtime import kickoff_directive
 from .formatter import (
     format_checkpoints_message,
@@ -1679,7 +1680,29 @@ def _format_research_forum_disabled_status(outcome) -> str:
         f"역할 배정 {len(assignments)}건"
         + (f" · 실행자 `{outcome.session.executor_role}`" if outcome.session.executor_role else ""),
     ]
+    hints = _format_research_hints_for_outcome(outcome)
+    if hints:
+        parts.append(hints)
     return "\n".join(parts)
+
+
+def _format_research_hints_for_outcome(outcome) -> str:
+    """Format per-role research hints derived from research_profiles.
+
+    Glue between :mod:`agents.research_profiles` and the live engineering
+    research loop output. When the loop already knows the session role
+    sequence and task_type, we can show the operator which source types,
+    queries, and reference categories each role should pull next. Empty
+    string is returned when no role yields hints (unknown roles, no
+    sequence, ...) so callers can append it unconditionally.
+    """
+
+    session = getattr(outcome, "session", None)
+    if session is None:
+        return ""
+    role_sequence = tuple(getattr(session, "role_sequence", ()) or ())
+    task_type = getattr(session, "task_type", None)
+    return format_research_hints_block(role_sequence, task_type)
 
 
 def _research_loop_report_from_publish(
@@ -1719,6 +1742,10 @@ def _research_loop_report_from_publish(
             lines.append(
                 f"실행자 `{executor.role}` 작업 {len(executor.actions)}건 배정 완료"
             )
+
+    hints = _format_research_hints_for_outcome(outcome)
+    if hints:
+        lines.append(hints)
 
     return EngineeringResearchLoopReport(
         forum_status_message="\n".join(lines),

@@ -22,6 +22,7 @@ from yule_orchestrator.agents.research_profiles import (
     SOURCE_TYPE_OFFICIAL_DOCS,
     RoleResearchProfile,
     build_role_query_hints,
+    format_research_hints_block,
     get_role_profile,
     list_role_profiles,
     replace_role_profile_for_tests,
@@ -150,6 +151,46 @@ class BuildRoleQueryHintsTestCase(unittest.TestCase):
         hints = build_role_query_hints(ROLE_BACKEND_ENGINEER, "backend-feature")
         for _source, weight in hints.weighted_source_types:
             self.assertGreater(weight, 0)
+
+
+class FormatResearchHintsBlockTestCase(unittest.TestCase):
+    def test_blank_role_sequence_returns_empty(self) -> None:
+        self.assertEqual(format_research_hints_block((), "landing-page"), "")
+
+    def test_unknown_roles_only_returns_empty(self) -> None:
+        self.assertEqual(
+            format_research_hints_block(("totally-fake-role",), "landing-page"),
+            "",
+        )
+
+    def test_known_roles_render_block_with_label_and_sources(self) -> None:
+        block = format_research_hints_block(
+            (ROLE_PRODUCT_DESIGNER, ROLE_FRONTEND_ENGINEER),
+            task_type="landing-page",
+        )
+        self.assertIn("**역할별 자료 가이드**", block)
+        self.assertIn("`product-designer`", block)
+        self.assertIn("`frontend-engineer`", block)
+        self.assertIn("우선 자료:", block)
+        # design task → designer top source는 image_reference
+        self.assertIn("image_reference", block)
+
+    def test_topic_substituted_into_recommended_query(self) -> None:
+        block = format_research_hints_block(
+            (ROLE_BACKEND_ENGINEER,),
+            task_type="backend-feature",
+            topic="결제 API",
+        )
+        self.assertIn("결제 API", block)
+        self.assertNotIn("{topic}", block)
+
+    def test_unknown_roles_in_sequence_are_skipped_silently(self) -> None:
+        block = format_research_hints_block(
+            ("totally-fake-role", ROLE_QA_ENGINEER),
+            task_type="qa-test",
+        )
+        self.assertNotIn("totally-fake-role", block)
+        self.assertIn("`qa-engineer`", block)
 
 
 class ReplaceRoleProfileForTestsTestCase(unittest.TestCase):
