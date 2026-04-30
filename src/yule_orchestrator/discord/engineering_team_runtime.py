@@ -27,8 +27,8 @@ the session state) lives in the gateway. Member bots only need this module.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
-from typing import Callable, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 from ..agents.deliberation import (
     DeliberationContext,
@@ -466,4 +466,110 @@ def closing_message(session: WorkflowSession) -> str:
     return (
         "팀 합류 1차 의견 정리 완료. "
         f"세션 `{session.session_id}` thread에서 이어서 진행합니다."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deliberation loop (tech-lead → roles → tech-lead synthesis)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DeliberationTurnRecord:
+    """한 역할의 deliberation 결과를 thread-renderable 형태로 묶어 둔다."""
+
+    role: str
+    take: RoleTake
+    rendered: str
+
+
+@dataclass(frozen=True)
+class DeliberationLoopResult:
+    """tech-lead → 역할별 → tech-lead 종합 round-trip 결과.
+
+    runtime의 단일 진실 소스. 실제 Discord chain은 dispatch marker로 끊어 흘러도,
+    같은 입력을 한 곳에서 비결정적 부작용 없이 재현하는 entry point가 필요해
+    이 helper를 둔다 — 테스트 / 비-Discord 시뮬레이션 / replay 디버깅 용.
+    """
+
+    turns: Tuple[DeliberationTurnRecord, ...]
+    synthesis: TechLeadSynthesis
+    synthesis_text: str
+
+
+def deliberation_role_sequence(session: WorkflowSession) -> Tuple[str, ...]:
+    """``WorkflowSession.role_sequence`` 를 deliberation 진입용으로 정규화한다.
+
+    role_sequence가 비어 있으면 표준 순서(tech-lead → product-designer →
+    backend-engineer → frontend-engineer → qa-engineer)를 default로 사용한다.
+    이미 ``engineering-agent/<short>`` 형태로 prefix가 붙어 있으면 그대로 둔다.
+    """
+
+    raw_sequence = tuple(session.role_sequence or ())
+    if not raw_sequence:
+        raw_sequence = (
+            "tech-lead",
+            "product-designer",
+            "backend-engineer",
+            "frontend-engineer",
+            "qa-engineer",
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_sequence:
+        role = str(raw).strip()
+        if not role:
+            continue
+        if "/" not in role:
+            role = f"engineering-agent/{role}"
+        if role in seen:
+            continue
+        seen.add(role)
+        normalized.append(role)
+    if "engineering-agent/tech-lead" not in normalized:
+        normalized.insert(0, "engineering-agent/tech-lead")
+    return tuple(normalized)
+
+
+def run_deliberation_loop(
+    session: WorkflowSession,
+    *,
+    research_pack: Optional[ResearchPack] = None,
+    runner_fn: Optional[Callable[[DeliberationContext], Any]] = None,
+    role_sequence: Optional[Sequence[str]] = None,
+) -> DeliberationLoopResult:
+    """역할 순서대로 deliberation 을 흘려 보낸 뒤 tech-lead 종합까지 만든다.
+
+    각 turn은 직전 turn까지의 ``previous_turns`` 를 컨텍스트로 받아 자기
+    역할 관점으로 이어 발화한다. ``runner_fn`` 이 있으면 LLM 응답을 사용하고,
+    없거나 실패하면 deterministic fallback 으로 대체된다 — 외부 네트워크 없이
+    테스트가 항상 통과하도록 보장.
+    """
+
+    sequence = tuple(role_sequence) if role_sequence else deliberation_role_sequence(session)
+    accumulated: list[RoleTake] = []
+    records: list[DeliberationTurnRecord] = []
+
+    for role in sequence:
+        take, rendered = deliberation_role_turn(
+            session,
+            role,
+            research_pack=research_pack,
+            previous_turns=tuple(accumulated),
+            runner_fn=runner_fn,
+        )
+        accumulated.append(take)
+        records.append(
+            DeliberationTurnRecord(role=role, take=take, rendered=rendered)
+        )
+
+    synthesis, synthesis_text = synthesize_thread(
+        session,
+        tuple(accumulated),
+        research_pack=research_pack,
+    )
+    return DeliberationLoopResult(
+        turns=tuple(records),
+        synthesis=synthesis,
+        synthesis_text=synthesis_text,
     )

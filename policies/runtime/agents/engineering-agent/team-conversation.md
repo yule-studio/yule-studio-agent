@@ -66,15 +66,58 @@
 
 ### 6.1 역할별 take 데이터클래스
 
-| 역할 | dataclass | 핵심 필드 |
+모든 role take는 공통 4-section 계약을 따른다:
+
+- `perspective: str?` — **관점**. 이 역할이 작업을 어떻게 보는지 한 줄.
+- `evidence: tuple[str, ...]` — **근거**. ResearchPack에서 본인 역할 우선 source 를 인용. 형식: `[<source_type>] <title> — <url|attachment_id> · <why_relevant>`.
+- `risks: tuple[str, ...]` — **리스크**. 역할 관점에서 보이는 위험.
+- `next_actions: tuple[str, ...]` — **다음 행동**. 본인 또는 실행자가 즉시 해야 할 일. previous_turns 에 따라 동적으로 추가됨 (예: backend-engineer 가 designer 의 ux_direction 을 받아 정합성 점검 항목 추가).
+
+위 4-section 외에 역할별 구조화 필드는 다음과 같다:
+
+| 역할 | dataclass | 역할 고유 필드 |
 |---|---|---|
-| tech-lead (opening) | `TechLeadOpening` | `task_breakdown`, `dependencies`, `decisions_needed` |
-| product-designer | `ProductDesignerTake` | `reference_summary`, `ux_direction`, `visual_direction`, `risks` |
-| backend-engineer | `BackendEngineerTake` | `data_impact`, `api_impact`, `storage_impact`, `risks` |
-| frontend-engineer | `FrontendEngineerTake` | `ui_components`, `state_strategy`, `user_flow`, `risks` |
-| qa-engineer | `QaEngineerTake` | `acceptance_criteria`, `risks`, `regression_targets` |
+| tech-lead (opening) | `TechLeadOpening` | `task_breakdown`, `dependencies`, `decisions_needed`, `notes` |
+| product-designer | `ProductDesignerTake` | `reference_summary`, `ux_direction`, `visual_direction` |
+| backend-engineer | `BackendEngineerTake` | `data_impact`, `api_impact`, `storage_impact` |
+| frontend-engineer | `FrontendEngineerTake` | `ui_components`, `state_strategy`, `user_flow` |
+| qa-engineer | `QaEngineerTake` | `acceptance_criteria`, `regression_targets` |
 
 알 수 없는 role은 generic `TechLeadOpening`-shaped take로 fallback해 호출자가 항상 무언가 렌더링할 수 있게 한다.
+
+### 6.1.1 ResearchPack source 메타데이터
+
+ResearchPack 안 각 `ResearchSource` 는 (`research_pack.py`) 다음 메타데이터를 표현해야 한다. 표현은 dataclass 표준 필드 + `source.extra` 자유 필드 조합으로 한다 (research_pack 모듈은 본 정책의 소유 영역이 아니므로 deliberation 측 helper `source_meta()` 가 통일된 dict 로 노출한다):
+
+| 키 | 입력 | 비고 |
+|---|---|---|
+| `title` | `ResearchSource.title` | 표시명 |
+| `url` 또는 `attachment_id` | `ResearchSource.source_url` 또는 첫 번째 attachment URL | URL 이 없을 때 첨부 ID 로 대체 |
+| `source_type` | `ResearchSource.extra["source_type"]` (없으면 attachment kind / URL host 로 추정) | §6.1.2 카탈로그 |
+| `collected_by_role` | `ResearchSource.extra["collected_by_role"]` (없으면 `author_role`) | 어떤 역할이 수집했는가 |
+| `summary` | `ResearchSource.summary` | 본문 요약 |
+| `why_relevant` | `ResearchSource.extra["why_relevant"]` | 왜 이 작업과 관련 있는가 |
+| `risk_or_limit` | `ResearchSource.extra["risk_or_limit"]` | 자료 자체의 한계 (예: 공식 문서 v18 한정) |
+| `collected_at` | `ResearchSource.posted_at` | 시점 |
+| `confidence` | `ResearchSource.extra["confidence"]` | 0.0–1.0 (자동으로 clamp) |
+
+### 6.1.2 source_type 카탈로그 (`KNOWN_SOURCE_TYPES`)
+
+`user_message`, `url`, `web_result`, `image_reference`, `file_attachment`, `github_issue`, `github_pr`, `code_context`, `official_docs`, `community_signal`, `design_reference`.
+
+### 6.1.3 역할별 Research Profile (`ROLE_RESEARCH_PROFILES`)
+
+역할별로 우선 검토할 source_type 의 순서를 명시한다. `filter_pack_for_role(pack, role)` 가 이 순서대로 source 를 정렬하고, `evidence_lines_for_role` 가 이를 사용해 근거 라인을 생성한다.
+
+| 역할 | 우선순위 (앞 3개) |
+|---|---|
+| tech-lead | user_message → url → official_docs |
+| product-designer | image_reference → design_reference → file_attachment |
+| backend-engineer | official_docs → code_context → github_pr |
+| frontend-engineer | official_docs → design_reference → code_context |
+| qa-engineer | github_issue → community_signal → official_docs |
+
+profile 에 없는 source_type 도 뒤로 밀려나 표시될 뿐 숨기지는 않는다.
 
 ### 6.2 tech-lead 종합 (`TechLeadSynthesis`)
 
@@ -88,14 +131,14 @@ thread 마지막에 tech-lead가 게시하는 dataclass. 필드:
 
 ### 6.3 LLM runner 주입
 
-`run_role_deliberation(context, runner_fn=...)`가 핵심 API. *runner_fn*이 `RoleTake` 데이터클래스를 반환하면 그대로 사용하고, None을 반환하거나 예외가 발생하면 **deterministic fallback**을 사용한다. 그래서 백엔드가 죽어도 thread는 멈추지 않고 계속 흐른다.
+`run_role_deliberation(context, runner_fn=...)`가 핵심 API. *runner_fn*이 `RoleTake` 데이터클래스를 반환하면 그대로 사용하고, None을 반환하거나 예외가 발생하면 **deterministic fallback**을 사용한다. fallback 은 (a) 역할 프로필 순서로 `evidence_lines_for_role` 을 채우고 (b) `previous_turns` 의 핵심 필드 (`ux_direction`, `api_impact`, `data_impact`, `user_flow` 등) 를 인용해 next_actions 를 만든다 — 같은 thread 에서 역할들이 서로의 말을 이어받아 토의하는 모양이 외부 호출 없이도 나온다. 그래서 백엔드가 죽어도 thread는 멈추지 않는다.
 
 ```python
 from yule_orchestrator.discord.engineering_team_runtime import (
     deliberation_role_turn, synthesize_thread,
 )
 
-# 한 역할의 turn
+# 한 역할의 turn (Discord member 봇이 자기 마커를 받았을 때 사용)
 take, text = deliberation_role_turn(
     session,
     "engineering-agent/qa-engineer",
@@ -108,10 +151,46 @@ take, text = deliberation_role_turn(
 synth, synth_text = synthesize_thread(session, all_takes, research_pack=pack)
 ```
 
+### 6.3.1 표준 토의 순서와 round-trip 헬퍼
+
+deliberation 의 표준 순서는 다음과 같으며, 비-Discord round-trip 시뮬레이션 (테스트 / replay / 디버깅) 은 `run_deliberation_loop` 한 번 호출로 끝난다:
+
+1. **tech-lead** — 문제 정의 / 작업 분해 / 역할별 조사 지시.
+2. **product-designer** — UX 흐름 / UI 시각 톤 / 이미지·디자인 reference.
+3. **backend-engineer** — 데이터 / API / 저장소 / 인증·권한 / 확장성.
+4. **frontend-engineer** — UI 구현 / 상태 / 접근성 / 반응형.
+5. **qa-engineer** — 수용 기준 / 회귀 영향 / 위험 시나리오.
+6. **tech-lead 종합** — `synthesize()` → `TechLeadSynthesis` (합의안 / 작업 배정 / 승인 필요 여부).
+
+```python
+from yule_orchestrator.discord.engineering_team_runtime import run_deliberation_loop
+
+result = run_deliberation_loop(
+    session,
+    research_pack=pack,
+    runner_fn=optional_llm_callable,  # None 이면 deterministic fallback
+)
+for record in result.turns:
+    post_to_thread(record.role, record.rendered)
+post_to_thread("engineering-agent/tech-lead", result.synthesis_text)
+```
+
+`deliberation_role_sequence(session)` 가 `WorkflowSession.role_sequence` 를 정규화한다 — 비어 있으면 위 1–5 default 를 사용하고, prefix 가 없는 역할에는 `engineering-agent/` 를 붙이고, tech-lead 가 빠져 있으면 맨 앞에 끼워넣는다. Discord member 봇 모드에서는 여전히 `handle_team_turn_message` 가 turn 단위로 dispatch 하지만, `run_deliberation_loop` 는 같은 입력으로 재현 가능한 진실 소스를 제공한다.
+
 ### 6.4 호환성
 
 - 기존 `format_role_turn_text` / `build_turn_plan` / `handle_team_turn_message` 시그니처는 그대로 유지된다. deliberation 진입점은 추가 함수일 뿐 기존 sequential MVP를 깨지 않는다.
 - 기존 turn 메시지를 deliberation 출력으로 교체할지 결정은 게이트웨이가 한다 — ResearchPack이 있는 세션은 deliberation, 없는 세션은 기존 templated turn.
+- 4-section 필드는 모두 default 가 비어 있는 형태로 추가되었기 때문에, deliberation 데이터클래스를 직접 인스턴스화하던 기존 호출자(테스트 포함)는 그대로 동작한다.
+
+### 6.5 Synthesis 가 자동으로 잡는 후속 항목
+
+`synthesize(session, role_takes, research_pack=...)` 는 단순 종합이 아니라 후속 작업을 자동으로 추가한다:
+
+- 각 role take 의 `next_actions` 항목을 `[<role>] <action>` 형태로 `todos` 에 누적.
+- ResearchPack 이 비어 있거나 url 이 3건 미만이면 `open_research` 에 보강 권고 추가.
+- ResearchPack 이 있더라도 *어느 역할의 profile 최우선 source_type 이 비어 있으면* `<role> 우선 자료 유형(<type>)이 비어 있음 — 보강 권장` 을 `open_research` 에 추가. 이 규칙 덕분에 디자이너 자료(이미지) 만 모인 세션이라도 백엔드 관점의 공식 문서 결손이 자동 노출된다.
+- `WorkflowSession.write_requested` 가 True 이고 아직 승인 전이면 `approval_required=True`. 이유는 `write_blocked_reason` 을 그대로 사용한다 (없으면 기본 문구).
 
 ## 7. 다음 마일스톤
 
@@ -119,9 +198,10 @@ synth, synth_text = synthesize_thread(session, all_takes, research_pack=pack)
 2. **runner 통합** — turn 본문을 templated 문자열 대신 실제 runner 출력(요약 1단락)으로 교체. role × runner 매트릭스는 `role-weights-v0.md`. deliberation의 runner_fn 주입 슬롯이 통합 진입점.
 3. **재진입** — 같은 thread 에 review 피드백이 들어오면 `played_roles` 를 reset 하고 chain 재시작 (review-loop.md 와 합치기).
 4. **IPC** — 현재는 Discord 본문에 마커를 박아 흐르지만, 같은 호스트 안에서 zmq/queue 로 직접 dispatch 하는 채널을 추가해 latency 개선.
+5. **자동 자료 수집** — 현재는 운영-리서치 forum 또는 사용자 입력으로 ResearchPack 을 채우지만, 추후 fetcher 가 source_type 별로 자동 수집하도록 확장. 자동 수집 금지 소스(Notefolio / Mobbin 등) 는 `discord-workflow.md` §4.3 참조.
 
-## 7. 참고
+## 8. 참고
 
-- 코드 진실 소스: `src/yule_orchestrator/discord/engineering_team_runtime.py` (TeamTurn / TeamTurnOutcome / handle_team_turn_message).
-- 테스트: `tests/test_engineering_team_runtime.py`.
-- 관련 정책: `discord-workflow.md` §7, `multi-bot-launcher.md` §1, `dispatcher.md` (role_sequence/executor_role 결정).
+- 코드 진실 소스: `src/yule_orchestrator/discord/engineering_team_runtime.py` (TeamTurn / TeamTurnOutcome / handle_team_turn_message / `run_deliberation_loop` / `deliberation_role_sequence`), `src/yule_orchestrator/agents/deliberation.py` (RoleTake / TechLeadSynthesis / source_type / filter_pack_for_role / evidence_lines_for_role / `KNOWN_SOURCE_TYPES` / `ROLE_RESEARCH_PROFILES`).
+- 테스트: `tests/test_engineering_team_runtime.py`, `tests/test_engineering_deliberation.py`.
+- 관련 정책: `discord-workflow.md` §7, `multi-bot-launcher.md` §1, `dispatcher.md` (role_sequence/executor_role 결정), `research-forum.md` (forum publisher).
