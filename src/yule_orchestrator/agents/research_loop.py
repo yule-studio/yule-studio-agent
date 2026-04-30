@@ -110,7 +110,7 @@ class ResearchLoopOutcome:
     """
 
     session: WorkflowSession
-    collection: ResearchCollectionResult
+    collection: Any
     insufficient: bool
     follow_up_prompt: Optional[str]
     research_pack: Optional[ResearchPack]
@@ -127,6 +127,9 @@ class ForumPublicationOutcome:
 
     ``thread`` is the create_research_post outcome (or None when skipped).
     ``role_comments`` is per-role comment outcomes keyed by role.
+    ``kickoff_comment`` is set in ``member-bots`` mode when the gateway
+    posts only the first research-turn directive instead of impersonating
+    every role.
     ``decision_comment`` is the tech-lead synthesis comment outcome.
     ``skipped_reason`` is filled when publication was skipped (e.g.
     insufficient research, no thread id from the create call).
@@ -134,6 +137,7 @@ class ForumPublicationOutcome:
 
     thread: Optional[ForumPostOutcome]
     role_comments: Mapping[str, ForumCommentOutcome] = field(default_factory=dict)
+    kickoff_comment: Optional[ForumCommentOutcome] = None
     decision_comment: Optional[ForumCommentOutcome] = None
     skipped_reason: Optional[str] = None
 
@@ -158,6 +162,8 @@ def run_research_loop(
     pack_title: Optional[str] = None,
     pack_tags: Sequence[str] = (),
     author_role: str = "tech-lead",
+    research_pack: Optional[ResearchPack] = None,
+    collection: Optional[Any] = None,
 ) -> ResearchLoopOutcome:
     """Run collection → deliberation → synthesis for one Discord message.
 
@@ -165,7 +171,22 @@ def run_research_loop(
     :func:`publish_research_loop_to_forum`; this function never touches
     the network. *role_sequence* falls back to ``session.role_sequence``;
     when both are empty we default to the canonical engineering quintet.
+
+    When *research_pack* is provided, collection is skipped and the loop
+    deliberates directly over that pack. This is the production path for
+    the autonomous collector: the conversation layer already gathered
+    role-aware search results, so the forum/deliberation layer must not
+    throw that context away and re-collect from the raw Discord message.
     """
+
+    if research_pack is not None:
+        return _run_pack_deliberation_loop(
+            session=session,
+            pack=research_pack,
+            collection=collection,
+            role_sequence=role_sequence,
+            runner_fn=runner_fn,
+        )
 
     collection = collect_research_candidates_from_message(
         message_text,
@@ -244,6 +265,10 @@ async def publish_research_loop_to_forum(
     post_message_fn: PostMessageFn,
     posted_by: Optional[str] = None,
     thread_prefix: Optional[str] = None,
+    collection_outcome: Optional[Any] = None,
+    collection_role: Optional[str] = None,
+    collection_next_steps: Sequence[str] = (),
+    comment_mode: Optional[str] = None,
 ) -> ForumPublicationOutcome:
     """Post the loop outcome into the operations-research forum.
 
@@ -267,12 +292,30 @@ async def publish_research_loop_to_forum(
         create_thread_fn=create_thread_fn,
         posted_by=posted_by,
         prefix=thread_prefix or _default_thread_prefix(outcome.research_pack),
+        collection_outcome=collection_outcome,
+        collection_role=collection_role,
+        collection_next_steps=collection_next_steps,
     )
 
     role_comments: dict[str, ForumCommentOutcome] = {}
+    kickoff_comment: Optional[ForumCommentOutcome] = None
     decision_comment: Optional[ForumCommentOutcome] = None
 
     if thread_outcome.posted and thread_outcome.thread_id is not None:
+        if _resolve_publication_comment_mode(comment_mode) == "member-bots":
+            kickoff_comment = await _post_research_kickoff_comment(
+                thread_id=thread_outcome.thread_id,
+                session=outcome.session,
+                post_message_fn=post_message_fn,
+            )
+            return ForumPublicationOutcome(
+                thread=thread_outcome,
+                role_comments={},
+                kickoff_comment=kickoff_comment,
+                decision_comment=None,
+                skipped_reason=None,
+            )
+
         for role_output in outcome.role_outputs:
             comment = await post_agent_comment(
                 thread_id=thread_outcome.thread_id,
@@ -293,6 +336,7 @@ async def publish_research_loop_to_forum(
     return ForumPublicationOutcome(
         thread=thread_outcome,
         role_comments=role_comments,
+        kickoff_comment=kickoff_comment,
         decision_comment=decision_comment,
         skipped_reason=None,
     )
@@ -303,8 +347,93 @@ async def publish_research_loop_to_forum(
 # ---------------------------------------------------------------------------
 
 
+def _run_pack_deliberation_loop(
+    *,
+    session: WorkflowSession,
+    pack: ResearchPack,
+    collection: Optional[Any],
+    role_sequence: Optional[Sequence[str]],
+    runner_fn: Optional[RunnerFn],
+) -> ResearchLoopOutcome:
+    """Run deliberation over an already-collected ResearchPack."""
+
+    sequence = _resolve_role_sequence(session, role_sequence)
+    role_outputs = _run_per_role_deliberation(
+        session=session,
+        role_sequence=sequence,
+        pack=pack,
+        runner_fn=runner_fn,
+    )
+    takes = tuple(output.take for output in role_outputs)
+    synth = synthesize(session, takes, research_pack=pack)
+    synth_text = render_synthesis(synth)
+    assignments = _assignments_from_outputs(role_outputs, executor_role=session.executor_role)
+    role_research_gaps = suggest_role_research_assignments(
+        task_type=session.task_type,
+        collected_source_types=tuple(source.source_type for source in pack.sources),
+    )
+
+    return ResearchLoopOutcome(
+        session=session,
+        collection=collection,
+        insufficient=False,
+        follow_up_prompt=None,
+        research_pack=pack,
+        role_outputs=tuple(role_outputs),
+        synthesis=synth,
+        synthesis_text=synth_text,
+        assignments=tuple(assignments),
+        role_research_gaps=dict(role_research_gaps),
+    )
+
+
+async def _post_research_kickoff_comment(
+    *,
+    thread_id: int,
+    session: WorkflowSession,
+    post_message_fn: PostMessageFn,
+) -> ForumCommentOutcome:
+    try:
+        from ..discord.engineering_team_runtime import research_kickoff_directive
+    except Exception as exc:  # noqa: BLE001
+        return ForumCommentOutcome(
+            posted=False,
+            error=str(exc),
+            body=None,
+        )
+
+    try:
+        directive = research_kickoff_directive(session)
+    except Exception as exc:  # noqa: BLE001
+        return ForumCommentOutcome(
+            posted=False,
+            error=str(exc),
+            body=None,
+        )
+
+    body = (
+        "자료 수집을 마쳤어요. 이제 각 역할이 차례대로 자기 관점으로 검토합니다.\n\n"
+        f"{directive}"
+    )
+    try:
+        await post_message_fn(thread_id=thread_id, content=body)
+    except Exception as exc:  # noqa: BLE001
+        return ForumCommentOutcome(posted=False, error=str(exc), body=body)
+    return ForumCommentOutcome(posted=True, body=body)
+
+
+def _resolve_publication_comment_mode(value: Optional[str]) -> str:
+    """Keep low-level publisher backwards-compatible unless caller opts in."""
+
+    raw = (value or "gateway").strip().lower()
+    if raw in {"member-bots", "gateway"}:
+        return raw
+    return "gateway"
+
+
 _DEFAULT_ROLE_SEQUENCE: Tuple[str, ...] = (
     "engineering-agent/tech-lead",
+    "engineering-agent/ai-engineer",
     "engineering-agent/product-designer",
     "engineering-agent/backend-engineer",
     "engineering-agent/frontend-engineer",

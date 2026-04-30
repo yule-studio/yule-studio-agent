@@ -316,6 +316,68 @@ class PublishResearchLoopToForumTestCase(unittest.TestCase):
         thread_call = captured["threads"][0]
         self.assertTrue(thread_call["name"].startswith(f"{PREFIX_REFERENCE} "))
 
+    def test_member_bots_mode_posts_only_research_kickoff(self) -> None:
+        captured: dict = {}
+        result = _run(
+            publish_research_loop_to_forum(
+                self.outcome,
+                forum_context=ResearchForumContext(channel_id=42),
+                create_thread_fn=self._stub_thread_fn(captured),
+                post_message_fn=self._stub_post_fn(captured),
+                comment_mode="member-bots",
+            )
+        )
+
+        self.assertTrue(result.posted)
+        self.assertEqual(result.role_comments, {})
+        self.assertIsNone(result.decision_comment)
+        self.assertIsNotNone(result.kickoff_comment)
+        self.assertTrue(result.kickoff_comment.posted)
+        posts = captured.get("posts", [])
+        self.assertEqual(len(posts), 1)
+        self.assertIn("[research-turn:sid-1 tech-lead]", posts[0]["content"])
+
+    def test_publish_includes_collection_summary_when_provided(self) -> None:
+        captured: dict = {}
+        collection = SimpleNamespace(
+            collector_name="mock",
+            query="온보딩 UX reference",
+            auto_collected_count=2,
+        )
+        _run(
+            publish_research_loop_to_forum(
+                self.outcome,
+                forum_context=ResearchForumContext(channel_id=42),
+                create_thread_fn=self._stub_thread_fn(captured),
+                post_message_fn=self._stub_post_fn(captured),
+                collection_outcome=collection,
+                collection_role="engineering-agent/product-designer",
+            )
+        )
+
+        thread_call = captured["threads"][0]
+        self.assertIn("1차 자료 정리", thread_call["content"])
+        self.assertIn("기본 검색(mock)", thread_call["content"])
+
+    def test_run_research_loop_can_reuse_precollected_pack(self) -> None:
+        collection = SimpleNamespace(
+            collector_name="mock",
+            query="precollected",
+            auto_collected_count=3,
+        )
+
+        outcome = run_research_loop(
+            session=self.session,
+            message_text="짧",
+            research_pack=self.outcome.research_pack,
+            collection=collection,
+        )
+
+        self.assertFalse(outcome.insufficient)
+        self.assertIs(outcome.research_pack, self.outcome.research_pack)
+        self.assertIs(outcome.collection, collection)
+        self.assertGreater(len(outcome.role_outputs), 0)
+
     def test_skipped_when_outcome_insufficient(self) -> None:
         thin = run_research_loop(
             session=_session(),

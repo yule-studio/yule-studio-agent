@@ -44,6 +44,8 @@ from ..agents.research_loop import (
     publish_research_loop_to_forum,
     run_research_loop,
 )
+from ..agents.research_collector import resolve_forum_comment_mode
+from ..agents.research_pack import pack_to_dict
 from ..agents.research_profiles import format_research_hints_block
 from .engineering_team_runtime import kickoff_directive
 from .formatter import (
@@ -1638,13 +1640,22 @@ def _make_default_engineering_research_loop_fn(discord_module: "discord"):
 
     forum_ctx = ResearchForumContext.from_env()
 
-    async def _hook(*, session, message_text, attachments, channel, **_):
+    async def _hook(*, session, message_text, attachments, channel, **kwargs):
+        collection_outcome = kwargs.get("collection_outcome")
+        incoming_pack = kwargs.get("research_pack") or getattr(
+            collection_outcome, "pack", None
+        )
+        role_for_research = kwargs.get("role_for_research")
+        forum_comment_mode = resolve_forum_comment_mode()
+
         try:
             outcome = await asyncio.to_thread(
                 run_research_loop,
                 session=session,
                 message_text=message_text,
                 attachments=tuple(attachments or ()),
+                research_pack=incoming_pack,
+                collection=collection_outcome,
             )
         except Exception as exc:  # noqa: BLE001 - non-fatal; reported by router
             return EngineeringResearchLoopReport(
@@ -1657,6 +1668,14 @@ def _make_default_engineering_research_loop_fn(discord_module: "discord"):
                 or "자료가 부족합니다. 참고 링크나 이미지를 올려주세요.",
                 insufficient=True,
             )
+
+        persisted_session = _persist_research_pack_for_member_bots(
+            outcome.session,
+            outcome.research_pack,
+            collection_outcome=collection_outcome,
+        )
+        if persisted_session is not outcome.session:
+            outcome = replace(outcome, session=persisted_session)
 
         if not forum_ctx.configured:
             # Forum disabled — still tell the operator the deliberation
@@ -1672,6 +1691,14 @@ def _make_default_engineering_research_loop_fn(discord_module: "discord"):
                 create_thread_fn=_make_default_research_forum_create_thread_fn(discord_module),
                 post_message_fn=_make_default_research_forum_post_message_fn(discord_module),
                 posted_by="bot:engineering-agent",
+                collection_outcome=collection_outcome,
+                collection_role=role_for_research,
+                collection_next_steps=(
+                    "tech-lead가 문제 정의와 조사 범위를 먼저 정리합니다.",
+                    "각 역할 봇이 forum thread에서 순서대로 자기 관점의 검토를 남깁니다.",
+                    "마지막 tech-lead가 합의안과 다음 행동을 종합합니다.",
+                ),
+                comment_mode=forum_comment_mode,
             )
         except Exception as exc:  # noqa: BLE001 - reported through router
             return EngineeringResearchLoopReport(
@@ -1681,6 +1708,37 @@ def _make_default_engineering_research_loop_fn(discord_module: "discord"):
         return _research_loop_report_from_publish(outcome, publish)
 
     return _hook
+
+
+def _persist_research_pack_for_member_bots(
+    session,
+    pack,
+    *,
+    collection_outcome=None,
+):
+    """Persist the collected pack so member bots can restore shared evidence."""
+
+    if session is None or pack is None:
+        return session
+    try:
+        extra = dict(getattr(session, "extra", None) or {})
+        extra["research_pack"] = pack_to_dict(pack)
+        if collection_outcome is not None:
+            mode = getattr(collection_outcome, "mode", None)
+            mode_value = getattr(mode, "value", mode)
+            extra["research_collection"] = {
+                "mode": str(mode_value) if mode_value is not None else None,
+                "collector_name": getattr(collection_outcome, "collector_name", None),
+                "query": getattr(collection_outcome, "query", None),
+                "auto_collected_count": getattr(
+                    collection_outcome, "auto_collected_count", None
+                ),
+            }
+        updated = replace(session, extra=extra)
+        return update_session(updated, now=datetime.now().astimezone())
+    except Exception as exc:  # noqa: BLE001 - forum loop can continue without persisted context
+        print(f"warning: research pack persistence failed: {exc}")
+        return session
 
 
 def _format_research_forum_disabled_status(outcome) -> str:
