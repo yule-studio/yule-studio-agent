@@ -3,10 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import time as time_module
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from ..agents import (
+    Dispatcher,
+    WorkflowOrchestrator,
+    build_participants_pool,
+)
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
@@ -23,6 +29,12 @@ from .checkpoint_state import (
 from .commands import register_discord_commands
 from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
+from .engineering_channel_router import (
+    EngineeringConversationOutcome,
+    EngineeringRouteContext,
+    EngineeringThreadKickoff,
+    route_engineering_message,
+)
 from .formatter import (
     format_checkpoints_message,
     format_plan_today_message,
@@ -117,6 +129,27 @@ def run_discord_bot(repo_root: Path) -> None:
                 return
             if self.user is None:
                 return
+
+            content_text = str(getattr(message, "content", "") or "").strip()
+            if content_text.startswith("/"):
+                return
+
+            engineering_context = EngineeringRouteContext.from_env()
+            if engineering_context.configured:
+                send_chunks = _make_engineering_send_chunks(discord)
+                engineering_result = await route_engineering_message(
+                    message=message,
+                    bot_user=self.user,
+                    route_context=engineering_context,
+                    extract_prompt=_extract_conversation_prompt,
+                    conversation_fn=_default_engineering_conversation_fn,
+                    intake_fn=_default_engineering_intake_fn,
+                    thread_kickoff_fn=_make_default_thread_kickoff_fn(discord),
+                    send_chunks=send_chunks,
+                )
+                if engineering_result.handled:
+                    return
+
             if not _should_handle_message(
                 message=message,
                 bot_user=self.user,
@@ -1346,6 +1379,208 @@ def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentio
         everyone=False,
         replied_user=False,
     )
+
+
+def _make_engineering_send_chunks(discord_module: "discord"):
+    allowed_mentions = _build_allowed_mentions(discord_module)
+
+    async def _send(channel, text: str) -> None:
+        if not text:
+            return
+        await _send_channel_message_chunks(
+            channel,
+            text,
+            allowed_mentions=allowed_mentions,
+        )
+
+    return _send
+
+
+_ENGINEERING_LAST_PROPOSED: dict[int, str] = {}
+
+
+def _default_engineering_conversation_fn(
+    *,
+    message_text: str,
+    author_user_id: int | None,
+    channel_id: int | None,
+    bot_user: object,
+):
+    """Bridge to the engineering free-conversation layer.
+
+    The conversation module is being landed in parallel; if it is not yet
+    importable we degrade to a short fallback that points the user at the
+    manual ``/engineer_intake`` slash command instead of crashing.
+    """
+
+    try:
+        from . import engineering_conversation  # type: ignore
+    except ImportError:
+        return EngineeringConversationOutcome(
+            content=(
+                "엔지니어링 자유 대화 레이어가 아직 준비되지 않았습니다.\n"
+                "지금은 `/engineer_intake` 슬래시 명령으로 작업을 등록해주세요."
+            ),
+        )
+
+    builder = getattr(
+        engineering_conversation,
+        "build_engineering_conversation_response",
+        None,
+    )
+    if builder is None:
+        return EngineeringConversationOutcome(
+            content=(
+                "엔지니어링 대화 모듈이 응답 빌더를 노출하지 않았습니다.\n"
+                "지금은 `/engineer_intake` 로 작업을 등록해주세요."
+            ),
+        )
+
+    last_proposed = (
+        _ENGINEERING_LAST_PROPOSED.get(channel_id) if channel_id is not None else None
+    )
+    response = builder(
+        message_text,
+        author_user_id=author_user_id,
+        mention_user=author_user_id is not None,
+        last_proposed_prompt=last_proposed,
+    )
+
+    intent_id = getattr(response, "intent_id", "")
+    intake_prompt = getattr(response, "intake_prompt", None)
+    ready_to_intake = bool(getattr(response, "ready_to_intake", False))
+    if channel_id is not None:
+        if ready_to_intake:
+            _ENGINEERING_LAST_PROPOSED.pop(channel_id, None)
+        elif intent_id in {
+            "task_intake_candidate",
+            "split_task_proposal",
+            "needs_clarification",
+        } and intake_prompt:
+            _ENGINEERING_LAST_PROPOSED[channel_id] = str(intake_prompt)
+
+    return EngineeringConversationOutcome(
+        content=str(getattr(response, "content", "") or ""),
+        confirmed=ready_to_intake,
+        intake_prompt=str(intake_prompt) if intake_prompt else None,
+        write_requested=bool(getattr(response, "write_likely", False)),
+    )
+
+
+def _default_engineering_intake_fn(
+    *,
+    prompt: str,
+    write_requested: bool,
+    channel_id: int | None,
+    user_id: int | None,
+):
+    repo_root = Path(os.environ.get("YULE_REPO_ROOT", ".")).resolve()
+    pool = build_participants_pool(repo_root, "engineering-agent")
+    orchestrator = WorkflowOrchestrator(Dispatcher(pool))
+    return orchestrator.intake(
+        prompt=prompt,
+        write_requested=write_requested,
+        channel_id=channel_id,
+        user_id=user_id,
+    )
+
+
+def _make_default_thread_kickoff_fn(discord_module: "discord"):
+    async def _kickoff(*, channel, session, plan, topic):
+        kickoff_text = _format_engineering_kickoff_message(session, plan)
+        thread_topic = (topic or "").strip() or _default_engineering_thread_topic(session)
+
+        thread_cls = getattr(discord_module, "Thread", None)
+        if thread_cls is not None and isinstance(channel, thread_cls):
+            await channel.send(kickoff_text)
+            return EngineeringThreadKickoff(
+                thread_id=getattr(channel, "id", None),
+                message=kickoff_text,
+            )
+
+        thread = await _create_engineering_thread(
+            channel=channel,
+            name=thread_topic,
+            discord_module=discord_module,
+        )
+        if thread is None:
+            await channel.send(kickoff_text)
+            return EngineeringThreadKickoff(thread_id=None, message=kickoff_text)
+
+        try:
+            await thread.send(kickoff_text)
+        except Exception as exc:  # noqa: BLE001 - report and continue
+            print(f"warning: engineering thread kickoff send failed: {exc}")
+
+        return EngineeringThreadKickoff(
+            thread_id=getattr(thread, "id", None),
+            message=kickoff_text,
+        )
+
+    return _kickoff
+
+
+async def _create_engineering_thread(
+    *,
+    channel,
+    name: str,
+    discord_module: "discord",
+):
+    create_thread = getattr(channel, "create_thread", None)
+    if not callable(create_thread):
+        return None
+
+    channel_type = getattr(discord_module, "ChannelType", None)
+    public_thread_type = getattr(channel_type, "public_thread", None) if channel_type else None
+    auto_archive_minutes = 60 * 24
+
+    try:
+        if public_thread_type is not None:
+            return await create_thread(
+                name=name,
+                type=public_thread_type,
+                auto_archive_duration=auto_archive_minutes,
+            )
+        return await create_thread(name=name, auto_archive_duration=auto_archive_minutes)
+    except TypeError:
+        try:
+            return await create_thread(name=name)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warning: engineering thread creation failed: {exc}")
+            return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: engineering thread creation failed: {exc}")
+        return None
+
+
+def _default_engineering_thread_topic(session) -> str:
+    if session is None:
+        return "engineering-agent 작업"
+    session_id = getattr(session, "session_id", None) or "?"
+    task_type = getattr(session, "task_type", None) or "task"
+    return f"engineer-{task_type}-{session_id}"[:90]
+
+
+def _format_engineering_kickoff_message(session, plan) -> str:
+    lines: list[str] = ["**[engineering-agent] 작업 thread 시작**"]
+    if session is not None:
+        session_id = getattr(session, "session_id", None)
+        if session_id:
+            lines.append(f"세션 ID: `{session_id}`")
+        task_type = getattr(session, "task_type", None)
+        if task_type:
+            lines.append(f"분류: {task_type}")
+        executor_role = getattr(session, "executor_role", None)
+        executor_runner = getattr(session, "executor_runner", None)
+        if executor_role:
+            lines.append(f"실행자: {executor_role} ({executor_runner or '?'})")
+    if plan is not None:
+        role_sequence = getattr(plan, "role_sequence", None)
+        if role_sequence:
+            lines.append(f"역할 순서: {' → '.join(role_sequence)}")
+    lines.append("")
+    lines.append("이 thread에서 진행 메모와 결과 회신을 이어 가겠습니다.")
+    return "\n".join(lines)
 
 
 def _checkpoint_window_minutes(window_start: datetime, window_end: datetime) -> int:
