@@ -1,6 +1,7 @@
 # Local agent runtime/state
 .claude/plans/
 .claude/settings.local.json
+.claude/*.lock
 .codex/
 .gemini/
 runs/*
