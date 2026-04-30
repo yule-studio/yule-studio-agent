@@ -106,8 +106,12 @@ class ResponseEnvelopeTestCase(unittest.TestCase):
         self.assertIsNone(envelope.intake_prompt)
 
     def test_intake_candidate_envelope(self) -> None:
+        # Isolate envelope-shape assertions from the auto-collector wire-up
+        # by disabling auto_collect — the legacy intake question always
+        # ends with the "이대로 진행" prompt.
         envelope = build_engineering_conversation_response(
-            "새 랜딩페이지 hero 섹션을 다시 짜야 해"
+            "새 랜딩페이지 hero 섹션을 다시 짜야 해",
+            auto_collect=False,
         )
         self.assertEqual(envelope.intent_id, TASK_INTAKE_CANDIDATE)
         self.assertEqual(envelope.suggested_task_type, "landing-page")
@@ -117,11 +121,15 @@ class ResponseEnvelopeTestCase(unittest.TestCase):
         self.assertIn("이대로 진행", envelope.content)
 
     def test_needs_clarification_envelope(self) -> None:
-        envelope = build_engineering_conversation_response("도와줘")
+        envelope = build_engineering_conversation_response(
+            "도와줘",
+            auto_collect=False,
+        )
         self.assertEqual(envelope.intent_id, NEEDS_CLARIFICATION)
         self.assertTrue(envelope.needs_clarification)
         self.assertFalse(envelope.ready_to_intake)
-        self.assertIn("작업 범위", envelope.content)
+        # New conversational clarification opener
+        self.assertIn("어디부터 봐야 할지", envelope.content)
 
     def test_split_proposal_envelope(self) -> None:
         envelope = build_engineering_conversation_response(
@@ -557,8 +565,15 @@ class AutoCollectWireUpTestCase(unittest.TestCase):
         self.assertIsNotNone(response.collection_outcome)
         self.assertEqual(response.collection_outcome.mode.value, "auto_collected")
         self.assertGreaterEqual(response.collection_outcome.auto_collected_count, 1)
-        self.assertIn("1차 자료를", response.content)
+        # New conversational greeting + key phrasing
+        self.assertIn("좋아요. 먼저 1차 자료를 모아볼게요", response.content)
         self.assertIn("운영-리서치", response.content)
+        # Friendly meta tail uses translated provider label (not raw "mock")
+        self.assertIn("수집 방식: 기본 검색(mock)", response.content)
+        # Internal jargon should not leak into the user-facing body
+        self.assertNotIn("collector:", response.content)
+        self.assertNotIn("deliberation", response.content)
+        self.assertNotIn("forum", response.content)
 
     def test_disabling_auto_collect_keeps_legacy_response(self) -> None:
         from yule_orchestrator.discord.engineering_conversation import (
@@ -599,7 +614,8 @@ class AutoCollectWireUpTestCase(unittest.TestCase):
         )
         self.assertIsNotNone(response.collection_outcome)
         self.assertEqual(response.collection_outcome.mode.value, "user_provided")
-        self.assertIn("사용자 제공 자료", response.content)
+        # Conversational greeting for user-provided mode
+        self.assertIn("보내주신 자료를 1순위", response.content)
 
     def test_unknown_role_falls_through_to_needs_user_input(self) -> None:
         from yule_orchestrator.agents.research_collector import (
@@ -625,6 +641,50 @@ class AutoCollectWireUpTestCase(unittest.TestCase):
         )
         self.assertEqual(response.collection_outcome.mode.value, "needs_user_input")
         self.assertIn("자동 수집이 비어 있어", response.content)
+        # No "이대로 진행" prompt — we're waiting for user input.
+        self.assertNotIn("`이대로 진행`", response.content)
+
+    def test_topic_is_summarized_when_prompt_is_long(self) -> None:
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+        )
+
+        long_prompt = (
+            "오늘은 Obsidian을 이용해서 에이전트들의 지식 저장 구조를 설계하고 싶어. "
+            "각 역할이 필요한 자료를 먼저 수집하고, 운영-리서치에 정리한 뒤 토의해줘. "
+            "지금은 Obsidian 저장까지는 하지 말고 설계만 해줘."
+        )
+        response = build_engineering_conversation_response(
+            long_prompt,
+            role_for_research="engineering-agent/tech-lead",
+            collector_config=self._enabled_cfg(),
+        )
+        # The full prompt body should not be echoed back verbatim — only
+        # the first sentence (cut at the period) lives in the topic line.
+        self.assertNotIn("Obsidian 저장까지는 하지 말고", response.content)
+        self.assertNotIn("운영-리서치에 정리한 뒤 토의해줘", response.content)
+        # But the topic phrase itself appears.
+        self.assertIn("이번 요청은", response.content)
+
+    def test_response_has_paragraph_structure(self) -> None:
+        """Spec says 2~4 sentences per paragraph and short paragraphs."""
+
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+        )
+
+        response = build_engineering_conversation_response(
+            "새 랜딩페이지 hero 정리해줘",
+            role_for_research="engineering-agent/product-designer",
+            collector_config=self._enabled_cfg(),
+        )
+        body = response.content
+        # Paragraphs separated by double newlines — at least 4 paragraphs:
+        # greeting, understanding, action, meta, confirm.
+        paragraphs = [p for p in body.split("\n\n") if p.strip()]
+        self.assertGreaterEqual(len(paragraphs), 4)
+        # First paragraph (greeting) is short — single sentence.
+        self.assertLessEqual(len(paragraphs[0].splitlines()), 2)
 
     def test_collector_failure_does_not_break_response(self) -> None:
         from yule_orchestrator.agents.research_collector import ResearchCollector

@@ -1327,22 +1327,83 @@ def _format_user_input_request(
 ) -> str:
     short = short_role(role)
     role_hint = {
-        "product-designer": "참고할 화면 / 무드보드 / Mobbin·Behance 링크",
-        "frontend-engineer": "참고할 컴포넌트 사례 / MDN·web.dev 문서 / 디자인 시스템 캡처",
-        "backend-engineer": "관련 공식 문서 / API 스펙 / 보안 정책 링크",
-        "qa-engineer": "기존 회귀 사례 / 테스트 시나리오 / GitHub issue 링크",
+        "product-designer": "참고할 화면이나 무드보드, Mobbin·Behance 링크",
+        "frontend-engineer": "참고할 컴포넌트 사례나 MDN·web.dev 문서",
+        "backend-engineer": "관련 공식 문서나 API 스펙, 보안 정책 링크",
+        "qa-engineer": "기존 회귀 사례, 테스트 시나리오, GitHub 이슈 링크",
         "tech-lead": "관련 ADR / RFC / 의사결정 기록 또는 GitHub PR",
     }.get(short, "관련 자료")
-    task_hint = f" ({task_type})" if task_type else ""
+    if task_type:
+        return (
+            f"{role_hint} 한두 개를 붙여 주시면, 그걸 1차 자료로 두고 "
+            f"{task_type} 흐름으로 정리해 드릴게요."
+        )
     return (
-        "아직 자동으로 수집된 자료가 없습니다."
-        f" {role_hint}을(를) 한두 개 붙여 주시면 1차 reference로 사용할게요{task_hint}."
+        f"{role_hint} 한두 개를 붙여 주시면, 그걸 1차 자료로 두고 진행해 볼게요."
     )
 
 
 # ---------------------------------------------------------------------------
 # Forum-friendly summary (for #운영-리서치 게시 시 호출자가 사용)
 # ---------------------------------------------------------------------------
+
+
+_SOURCE_TYPE_LABELS: Mapping[str, str] = {
+    "user_message": "사용자 요청",
+    "url": "사용자 링크",
+    "web_result": "웹 검색",
+    "image_reference": "이미지 레퍼런스",
+    "file_attachment": "첨부 파일",
+    "github_issue": "GitHub 이슈",
+    "github_pr": "GitHub PR",
+    "code_context": "코드 맥락",
+    "official_docs": "공식 문서",
+    "community_signal": "커뮤니티 글",
+    "design_reference": "디자인 레퍼런스",
+    "unknown": "기타",
+}
+
+
+_PROVIDER_LABELS_FOR_SUMMARY: Mapping[str, str] = {
+    "mock": "기본 검색(mock)",
+    "tavily": "Tavily 검색",
+    "brave": "Brave 검색",
+    "noop": "비활성",
+}
+
+
+def _pretty_source_type(source_type: SourceType) -> str:
+    value = (
+        source_type.value
+        if isinstance(source_type, SourceType)
+        else str(source_type)
+    )
+    return _SOURCE_TYPE_LABELS.get(value, value)
+
+
+def _pretty_confidence(value: Optional[str]) -> str:
+    label = (value or "medium").lower()
+    return {
+        CONFIDENCE_HIGH: "신뢰도 높음",
+        CONFIDENCE_MEDIUM: "신뢰도 보통",
+        CONFIDENCE_LOW: "신뢰도 낮음",
+    }.get(label, "신뢰도 보통")
+
+
+def _pretty_provider_summary(name: Optional[str]) -> str:
+    if not name:
+        return "알 수 없음"
+    return _PROVIDER_LABELS_FOR_SUMMARY.get(name, name)
+
+
+def _summarize_topic_for_summary(text: Optional[str], max_chars: int = 60) -> str:
+    cleaned = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    head = cleaned[0] if cleaned else ""
+    if not head:
+        return "(요청 본문 없음)"
+    if len(head) <= max_chars:
+        return head
+    return head[: max(1, max_chars - 1)].rstrip() + "…"
 
 
 def format_collection_summary(
@@ -1353,83 +1414,98 @@ def format_collection_summary(
     role: str,
     next_steps: Sequence[str] = (),
 ) -> str:
-    """Produce a Markdown summary block surfacing the collection result.
+    """Render the autonomous-collection block in the team-lead voice.
 
-    Layout (designed to drop into ``format_research_post_body``):
+    Designed to be dropped into ``format_research_post_body``. Internal
+    jargon (collector / query / source_type values) is translated into
+    human-friendly Korean labels. The raw user prompt is summarised to a
+    short topic so it doesn't bloat the forum thread.
 
-    - 수집 주제 (request topic / role / query)
-    - 수집된 출처 목록 (per-source provenance + source_type + domain)
-    - 역할별 활용 가능성 (why_relevant)
-    - 수집 한계 (risk_or_limit + budget note)
-    - 다음 토의 단계 (deliberation 진입 안내)
+    Sections (each keeps 2~4 sentences):
+    - 1차 자료 정리 — <역할 한국어>
+    - 참고 자료 (count): per-source 짧은 라벨 + URL
+    - 활용 방향: why_relevant 모음
+    - 유의 사항: risk_or_limit + budget note
+    - 다음 단계: 역할별 검토 흐름 안내
+    - 수집 정보: 수집 방식 / 수집 자료
     """
 
     short = short_role(role)
     request_topic = (
         getattr(pack.request, "topic", None) if pack.request is not None else None
     ) or pack.title
+    topic = _summarize_topic_for_summary(request_topic)
 
-    lines: list[str] = []
-
-    # 수집 주제
-    lines.append(f"**1차 자료 수집 — {short}**")
-    lines.append(f"- 수집 주제: {request_topic}")
-    lines.append(
-        f"- collector: `{collector_name}` · query: `{query or '(empty)'}` · 자료 {len(pack.sources)}건"
+    body_count = sum(
+        1 for s in pack.sources if s.source_type != SourceType.USER_MESSAGE
     )
 
-    # 수집된 출처 목록 + 역할별 활용 가능성
-    body_count = 0
-    risks: list[str] = []
+    lines: list[str] = []
+    lines.append(f"**📚 1차 자료 정리 — {short}**")
     lines.append("")
-    lines.append("**수집된 출처**")
-    for source in pack.sources:
-        if source.source_type == SourceType.USER_MESSAGE:
-            continue
-        body_count += 1
-        domain = (source.extra or {}).get("domain") or extract_domain(source.source_url)
-        title = source.title or "(no title)"
-        type_value = (
-            source.source_type.value
-            if isinstance(source.source_type, SourceType)
-            else str(source.source_type)
-        )
-        confidence_label = (source.confidence or "medium").lower()
-        bits = [f"- **{title}** [{type_value} · {confidence_label}]"]
-        if domain:
-            bits.append(f" · `{domain}`")
-        if source.source_url:
-            bits.append(f" — {source.source_url}")
-        lines.append("".join(bits))
-        if source.why_relevant:
-            lines.append(f"  ↪ 활용 가능성: {source.why_relevant}")
-        if source.risk_or_limit:
-            risks.append(f"{title}: {source.risk_or_limit}")
-    if body_count == 0:
-        lines.append("- (수집된 외부 자료 없음 — 사용자에게 자료를 요청하거나 다른 query로 재시도)")
+    lines.append(f"이번 정리는 “{topic}”에 대한 검토예요.")
 
-    # 수집 한계
+    # 참고 자료
+    lines.append("")
+    lines.append(f"**참고 자료** ({body_count}건)")
+    risks: list[str] = []
+    why_relevants: list[str] = []
+    if body_count == 0:
+        lines.append(
+            "- 아직 자동 수집된 자료가 없어요. 사용자에게 자료를 요청한 뒤 다시 정리할게요."
+        )
+    else:
+        for source in pack.sources:
+            if source.source_type == SourceType.USER_MESSAGE:
+                continue
+            domain = (source.extra or {}).get("domain") or extract_domain(source.source_url)
+            title = source.title or "(제목 없음)"
+            type_label = _pretty_source_type(source.source_type)
+            confidence_label = _pretty_confidence(source.confidence)
+            head_bits = [f"- **{title}** · {type_label} · {confidence_label}"]
+            if domain:
+                head_bits.append(f" · `{domain}`")
+            lines.append("".join(head_bits))
+            if source.source_url:
+                lines.append(f"  ↪ {source.source_url}")
+            if source.why_relevant:
+                why_relevants.append(f"{title}: {source.why_relevant}")
+            if source.risk_or_limit:
+                risks.append(f"{title}: {source.risk_or_limit}")
+
+    # 활용 방향
+    if why_relevants:
+        lines.append("")
+        lines.append("**활용 방향**")
+        for item in why_relevants:
+            lines.append(f"- {item}")
+
+    # 유의 사항
     budget_note = (pack.extra or {}).get("budget_note") if pack.extra else None
     if risks or budget_note:
         lines.append("")
-        lines.append("**수집 한계**")
+        lines.append("**유의 사항**")
         for risk in risks:
-            lines.append(f"- ⚠ {risk}")
+            lines.append(f"- {risk}")
         if budget_note:
-            lines.append(f"- ⚠ {budget_note}")
+            lines.append(f"- {budget_note}")
 
-    # 다음 토의 단계
+    # 다음 단계
     lines.append("")
-    lines.append("**다음 토의 단계**")
+    lines.append("**다음 단계**")
     if next_steps:
         for step in next_steps:
             lines.append(f"- {step}")
     elif body_count > 0:
-        lines.append(
-            "- 위 자료를 바탕으로 역할별 deliberation 진행 → tech-lead synthesis로 합의안 도출"
-        )
+        lines.append("- 각 역할이 자기 관점으로 검토 → tech-lead가 합의안 정리")
     else:
-        lines.append("- 사용자에게 추가 자료 요청 후 재수집 시도")
+        lines.append("- 사용자에게 추가 자료를 요청한 뒤 재수집")
+
+    # 수집 정보 (메타)
+    lines.append("")
+    lines.append("수집 정보:")
+    lines.append(f"- 수집 방식: {_pretty_provider_summary(collector_name)}")
+    lines.append(f"- 수집 자료: {body_count}건")
 
     return "\n".join(lines)
 

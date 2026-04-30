@@ -472,7 +472,7 @@ class OutcomeFlowTestCase(unittest.TestCase):
 
 
 class FormatCollectionSummaryTestCase(unittest.TestCase):
-    def test_summary_includes_role_and_why_relevant(self) -> None:
+    def test_summary_includes_role_and_natural_sections(self) -> None:
         outcome = auto_collect_or_request_more_input(
             role="engineering-agent/product-designer",
             prompt="새 hero",
@@ -485,10 +485,13 @@ class FormatCollectionSummaryTestCase(unittest.TestCase):
             query=outcome.query,
             role="engineering-agent/product-designer",
         )
-        self.assertIn("1차 자료 수집 — product-designer", summary)
-        self.assertIn("collector: `mock`", summary)
-        # at least one why_relevant shows
-        self.assertIn("활용 가능성", summary)
+        # New conversational headers
+        self.assertIn("1차 자료 정리 — product-designer", summary)
+        self.assertIn("**참고 자료**", summary)
+        self.assertIn("**활용 방향**", summary)
+        self.assertIn("**다음 단계**", summary)
+        # Friendly metadata tail rather than raw "collector: mock"
+        self.assertIn("수집 방식: 기본 검색(mock)", summary)
 
     def test_summary_skips_user_message_block(self) -> None:
         outcome = auto_collect_or_request_more_input(
@@ -504,6 +507,8 @@ class FormatCollectionSummaryTestCase(unittest.TestCase):
         )
         # user_message is not a "collected" source — its summary line shouldn't show
         self.assertNotIn("[user_message]", summary)
+        # New format never echoes raw source_type tags either
+        self.assertNotIn("[design_reference]", summary)
 
 
 # ---------------------------------------------------------------------------
@@ -865,15 +870,16 @@ class FormatCollectionSummarySectionsTestCase(unittest.TestCase):
             query=outcome.query,
             role="engineering-agent/product-designer",
         )
-        # 5 required sections per spec
-        self.assertIn("수집 주제:", summary)
-        self.assertIn("**수집된 출처**", summary)
-        self.assertIn("활용 가능성", summary)
-        self.assertIn("**다음 토의 단계**", summary)
-        # 한계 section appears only when there are risks/budget — confirm it shows
-        # for designer mock (Notefolio entry has risk_or_limit) OR budget note.
-        # Either condition should satisfy.
-        if "**수집 한계**" not in summary:
+        # New natural-language sections
+        self.assertIn("📚 1차 자료 정리 — product-designer", summary)
+        self.assertIn("이번 정리는", summary)  # topic line
+        self.assertIn("**참고 자료**", summary)
+        self.assertIn("**활용 방향**", summary)
+        self.assertIn("**다음 단계**", summary)
+        self.assertIn("수집 정보:", summary)
+        # 유의 사항 only appears when risks/budget exist; designer mock with
+        # Notefolio (risk_or_limit) or budget exhaustion should satisfy.
+        if "**유의 사항**" not in summary:
             self.assertIn("budget_note", outcome.pack.extra)
 
     def test_summary_includes_explicit_next_steps(self) -> None:
@@ -897,6 +903,58 @@ class FormatCollectionSummarySectionsTestCase(unittest.TestCase):
         )
         self.assertIn("- backend 검토", summary)
         self.assertIn("- frontend 검토", summary)
+
+    def test_summary_translates_internal_jargon(self) -> None:
+        """Make sure user-facing labels avoid raw enum/var names."""
+
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero",
+            task_type="landing-page",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        summary = format_collection_summary(
+            outcome.pack,
+            collector_name=outcome.collector_name,
+            query=outcome.query,
+            role="engineering-agent/product-designer",
+        )
+        # No raw "collector:" / "query:" / source_type enum value strings
+        self.assertNotIn("collector: `mock`", summary)
+        self.assertNotIn("[design_reference]", summary)
+        self.assertNotIn("query:", summary)
+        # Friendly equivalents
+        self.assertIn("디자인 레퍼런스", summary)
+        self.assertIn("신뢰도", summary)
+
+    def test_topic_line_truncates_long_request(self) -> None:
+        long_prompt = "오늘은 Obsidian을 이용해서 에이전트들의 지식 저장 구조를 설계하고 싶어. 각 역할이 필요한 자료를 먼저 수집하고, 운영-리서치에 정리한 뒤 토의해줘."
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/tech-lead",
+            prompt=long_prompt,
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        summary = format_collection_summary(
+            outcome.pack,
+            collector_name=outcome.collector_name,
+            query=outcome.query,
+            role="engineering-agent/tech-lead",
+        )
+        # Topic should not contain the full prompt verbatim — the second
+        # sentence "각 역할이 필요한 자료를 ..." should be trimmed off.
+        self.assertNotIn("운영-리서치에 정리한 뒤 토의해줘", summary)
 
 
 if __name__ == "__main__":

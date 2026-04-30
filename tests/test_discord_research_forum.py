@@ -400,14 +400,14 @@ class CollectionBlockInForumBodyTestCase(unittest.TestCase):
             posted_by="bot:designer",
             collection_outcome=outcome,
         )
-        self.assertIn("1차 자료 수집 — product-designer", body)
-        self.assertIn("**수집된 출처**", body)
-        self.assertIn("**다음 토의 단계**", body)
+        self.assertIn("1차 자료 정리 — product-designer", body)
+        self.assertIn("**참고 자료**", body)
+        self.assertIn("**다음 단계**", body)
 
     def test_block_omitted_when_no_outcome_passed(self) -> None:
         outcome = self._make_outcome()
         body = format_research_post_body(outcome.pack, posted_by="bot:designer")
-        self.assertNotIn("1차 자료 수집 —", body)
+        self.assertNotIn("1차 자료 정리 —", body)
 
     def test_explicit_next_steps_propagate(self) -> None:
         outcome = self._make_outcome()
@@ -426,7 +426,7 @@ class CollectionBlockInForumBodyTestCase(unittest.TestCase):
             collection_outcome=outcome,
             collection_role="engineering-agent/qa-engineer",
         )
-        self.assertIn("1차 자료 수집 — qa-engineer", body)
+        self.assertIn("1차 자료 정리 — qa-engineer", body)
 
 
 class CollectionBlockInFallbackTestCase(unittest.TestCase):
@@ -455,7 +455,7 @@ class CollectionBlockInFallbackTestCase(unittest.TestCase):
             collection_outcome=outcome,
         )
         self.assertIn("⚠️", text)
-        self.assertIn("1차 자료 수집 — product-designer", text)
+        self.assertIn("1차 자료 정리 — product-designer", text)
 
 
 class CreateResearchPostCollectionTestCase(unittest.TestCase):
@@ -505,7 +505,7 @@ class CreateResearchPostCollectionTestCase(unittest.TestCase):
             loop.close()
 
         self.assertTrue(result.posted)
-        self.assertIn("1차 자료 수집", captured.get("content", ""))
+        self.assertIn("1차 자료 정리", captured.get("content", ""))
 
 
 if __name__ == "__main__":
