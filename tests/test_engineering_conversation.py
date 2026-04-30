@@ -7,15 +7,33 @@ try:
 except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
+from datetime import datetime
+from types import SimpleNamespace
+
 from yule_orchestrator.discord.engineering_conversation import (
     CONFIRM_INTAKE,
     GENERAL_ENGINEERING_HELP,
     NEEDS_CLARIFICATION,
+    SOURCE_TYPE_COMMUNITY_SIGNAL,
+    SOURCE_TYPE_DESIGN_REFERENCE,
+    SOURCE_TYPE_FILE_ATTACHMENT,
+    SOURCE_TYPE_GITHUB_ISSUE,
+    SOURCE_TYPE_GITHUB_PR,
+    SOURCE_TYPE_IMAGE_REFERENCE,
+    SOURCE_TYPE_OFFICIAL_DOCS,
+    SOURCE_TYPE_URL,
+    SOURCE_TYPE_USER_MESSAGE,
     SPLIT_TASK_PROPOSAL,
     TASK_INTAKE_CANDIDATE,
     build_engineering_conversation_response,
+    build_research_pack_from_candidates,
+    classify_attachment,
+    classify_url,
+    collect_research_candidates_from_message,
     detect_engineering_intent,
+    format_insufficient_research_prompt,
     split_task_branches,
+    suggest_role_research_assignments,
 )
 
 
@@ -185,6 +203,322 @@ class TaskTypeHintTestCase(unittest.TestCase):
     def test_unknown_message_has_no_task_type(self) -> None:
         envelope = build_engineering_conversation_response("이 부분 좀 검토해줘")
         self.assertIsNone(envelope.suggested_task_type)
+
+
+class ClassifyAttachmentTestCase(unittest.TestCase):
+    def test_image_extensions_become_image_reference(self) -> None:
+        for filename in (
+            "hero.png",
+            "thumb.PNG",
+            "draft.jpg",
+            "draft.JPEG",
+            "promo.webp",
+            "anim.gif",
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    classify_attachment(filename=filename),
+                    SOURCE_TYPE_IMAGE_REFERENCE,
+                )
+
+    def test_image_content_type_when_extension_missing(self) -> None:
+        self.assertEqual(
+            classify_attachment(filename="screenshot", content_type="image/png"),
+            SOURCE_TYPE_IMAGE_REFERENCE,
+        )
+
+    def test_pdf_falls_back_to_file_attachment(self) -> None:
+        self.assertEqual(classify_attachment(filename="spec.pdf"), SOURCE_TYPE_FILE_ATTACHMENT)
+
+    def test_no_metadata_defaults_to_file_attachment(self) -> None:
+        self.assertEqual(classify_attachment(), SOURCE_TYPE_FILE_ATTACHMENT)
+
+
+class ClassifyUrlTestCase(unittest.TestCase):
+    def test_github_issue(self) -> None:
+        self.assertEqual(
+            classify_url("https://github.com/yule-studio/agent/issues/42"),
+            SOURCE_TYPE_GITHUB_ISSUE,
+        )
+
+    def test_github_pull_request(self) -> None:
+        self.assertEqual(
+            classify_url("https://github.com/yule-studio/agent/pull/7"),
+            SOURCE_TYPE_GITHUB_PR,
+        )
+
+    def test_github_repo_root_is_generic_url(self) -> None:
+        self.assertEqual(
+            classify_url("https://github.com/yule-studio/agent"),
+            SOURCE_TYPE_URL,
+        )
+
+    def test_design_reference_hosts(self) -> None:
+        for url in (
+            "https://www.pinterest.com/board/landing-hero",
+            "https://kr.pinterest.com/board/x",
+            "https://www.behance.net/gallery/abc",
+            "https://www.awwwards.com/sites/x",
+            "https://dribbble.com/shots/y",
+            "https://templates.wix.com/template/x",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(classify_url(url), SOURCE_TYPE_DESIGN_REFERENCE)
+
+    def test_official_docs_hosts(self) -> None:
+        for url in (
+            "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/img",
+            "https://react.dev/reference/react/useState",
+            "https://docs.python.org/3/library/asyncio.html",
+            "https://learn.microsoft.com/en-us/azure/something",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(classify_url(url), SOURCE_TYPE_OFFICIAL_DOCS)
+
+    def test_community_signal_hosts(self) -> None:
+        for url in (
+            "https://www.reddit.com/r/webdev/comments/abc",
+            "https://stackoverflow.com/questions/123",
+            "https://news.ycombinator.com/item?id=1",
+            "https://dev.to/author/post",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(classify_url(url), SOURCE_TYPE_COMMUNITY_SIGNAL)
+
+    def test_unknown_host_falls_back_to_url(self) -> None:
+        self.assertEqual(classify_url("https://example.com/landing"), SOURCE_TYPE_URL)
+
+    def test_blank_input_returns_url(self) -> None:
+        self.assertEqual(classify_url(""), SOURCE_TYPE_URL)
+
+
+class CollectResearchCandidatesTestCase(unittest.TestCase):
+    def test_user_message_only_long_enough_is_sufficient(self) -> None:
+        result = collect_research_candidates_from_message(
+            "users API에 email_verified 필드 추가해서 onboarding 단계 마지막에 검증 메일 발송하는 흐름 정리해줘",
+            author_role="tech-lead",
+        )
+        kinds = [c.source_type for c in result.candidates]
+        self.assertEqual(kinds, [SOURCE_TYPE_USER_MESSAGE])
+        self.assertFalse(result.insufficient)
+        self.assertIsNone(result.follow_up_prompt)
+
+    def test_short_user_message_only_marks_insufficient(self) -> None:
+        result = collect_research_candidates_from_message("도와줘")
+        self.assertTrue(result.insufficient)
+        assert result.follow_up_prompt is not None
+        self.assertTrue(result.follow_up_prompt.startswith("자료가 부족합니다."))
+
+    def test_empty_message_with_no_attachment_marks_insufficient(self) -> None:
+        result = collect_research_candidates_from_message("")
+        self.assertEqual(result.candidates, ())
+        self.assertTrue(result.insufficient)
+
+    def test_links_are_split_by_host_into_distinct_source_types(self) -> None:
+        text = (
+            "랜딩 hero 정리해줘. 참고 링크: "
+            "https://www.pinterest.com/board/x "
+            "https://github.com/yule-studio/agent/issues/12 "
+            "https://developer.mozilla.org/en-US/docs/Web/HTML"
+        )
+        result = collect_research_candidates_from_message(text, author_role="product-designer")
+        kinds = [c.source_type for c in result.candidates]
+        self.assertEqual(kinds[0], SOURCE_TYPE_USER_MESSAGE)
+        self.assertIn(SOURCE_TYPE_DESIGN_REFERENCE, kinds)
+        self.assertIn(SOURCE_TYPE_GITHUB_ISSUE, kinds)
+        self.assertIn(SOURCE_TYPE_OFFICIAL_DOCS, kinds)
+        self.assertFalse(result.insufficient)
+
+    def test_image_attachment_classified_as_image_reference(self) -> None:
+        attachment = SimpleNamespace(
+            filename="hero.png",
+            url="https://cdn.discordapp.com/attachments/1/1/hero.png",
+            content_type="image/png",
+            id=987,
+            size=12345,
+        )
+        result = collect_research_candidates_from_message(
+            "이렇게 가고 싶어",
+            attachments=[attachment],
+            author_role="product-designer",
+        )
+        kinds = [c.source_type for c in result.candidates]
+        self.assertIn(SOURCE_TYPE_IMAGE_REFERENCE, kinds)
+        image_candidate = next(c for c in result.candidates if c.source_type == SOURCE_TYPE_IMAGE_REFERENCE)
+        self.assertEqual(image_candidate.attachment_id, "987")
+        self.assertEqual(image_candidate.title, "hero.png")
+        self.assertIsNotNone(image_candidate.risk_or_limit)
+
+    def test_pdf_attachment_classified_as_file_attachment(self) -> None:
+        attachment = {
+            "filename": "spec.pdf",
+            "url": "https://cdn.discordapp.com/x/spec.pdf",
+            "content_type": "application/pdf",
+            "id": "555",
+            "size": 1024,
+        }
+        result = collect_research_candidates_from_message(
+            "여기 스펙 첨부합니다",
+            attachments=[attachment],
+            author_role="qa-engineer",
+        )
+        kinds = [c.source_type for c in result.candidates]
+        self.assertIn(SOURCE_TYPE_FILE_ATTACHMENT, kinds)
+        candidate = next(c for c in result.candidates if c.source_type == SOURCE_TYPE_FILE_ATTACHMENT)
+        self.assertEqual(candidate.attachment_id, "555")
+
+    def test_image_only_attachment_satisfies_landing_page_required_visual(self) -> None:
+        attachment = SimpleNamespace(
+            filename="hero.jpg",
+            url="https://cdn/hero.jpg",
+            content_type="image/jpeg",
+            id="333",
+        )
+        result = collect_research_candidates_from_message(
+            "랜딩 hero 다시 짜자",
+            attachments=[attachment],
+            task_type="landing-page",
+            author_role="product-designer",
+        )
+        self.assertFalse(result.insufficient)
+
+    def test_landing_page_without_visual_is_insufficient(self) -> None:
+        result = collect_research_candidates_from_message(
+            "랜딩 hero 다시 짜자. 빨리 가야 함. 일단 카피 위주로.",
+            task_type="landing-page",
+        )
+        self.assertTrue(result.insufficient)
+        assert result.insufficient_reason is not None
+        self.assertIn("시각 reference", result.insufficient_reason)
+
+    def test_backend_feature_without_docs_is_insufficient(self) -> None:
+        result = collect_research_candidates_from_message(
+            "users API에 email_verified 필드 추가하고 마이그레이션 같이 넣자",
+            task_type="backend-feature",
+        )
+        self.assertTrue(result.insufficient)
+        assert result.insufficient_reason is not None
+        self.assertIn("backend-feature", result.insufficient_reason)
+
+    def test_role_assignments_drop_already_collected_categories(self) -> None:
+        result = collect_research_candidates_from_message(
+            "랜딩 hero 다시 짜자. 참고 https://developer.mozilla.org/en-US/docs/Web",
+            attachments=[
+                SimpleNamespace(filename="hero.png", url="https://cdn/h.png", id="1"),
+            ],
+            task_type="landing-page",
+            author_role="product-designer",
+        )
+        designer = result.role_assignments.get("product-designer", ())
+        self.assertNotIn(SOURCE_TYPE_IMAGE_REFERENCE, designer)
+        self.assertNotIn(SOURCE_TYPE_OFFICIAL_DOCS, designer)
+        backend = result.role_assignments.get("backend-engineer", ())
+        self.assertNotIn(SOURCE_TYPE_OFFICIAL_DOCS, backend)
+        self.assertIn(SOURCE_TYPE_GITHUB_ISSUE, backend)
+
+    def test_url_strips_trailing_punctuation_when_extracting(self) -> None:
+        result = collect_research_candidates_from_message(
+            "참고: https://reddit.com/r/webdev/abc."
+        )
+        kinds = [c.source_type for c in result.candidates]
+        self.assertIn(SOURCE_TYPE_COMMUNITY_SIGNAL, kinds)
+        community = next(c for c in result.candidates if c.source_type == SOURCE_TYPE_COMMUNITY_SIGNAL)
+        self.assertFalse(community.url.endswith("."))
+
+    def test_collected_at_is_threaded_through_when_provided(self) -> None:
+        when = datetime(2026, 4, 30, 9, 0, 0)
+        result = collect_research_candidates_from_message(
+            "긴 설명이 들어가야 인지가 됩니다 이 작업은 onboarding 흐름 다시 보는 일",
+            posted_at=when,
+        )
+        self.assertEqual(result.candidates[0].collected_at, when)
+
+
+class FormatInsufficientResearchPromptTestCase(unittest.TestCase):
+    def test_starts_with_required_korean_phrase(self) -> None:
+        body = format_insufficient_research_prompt()
+        self.assertTrue(body.startswith("자료가 부족합니다."))
+        self.assertIn("참고할 링크나 이미지", body)
+
+    def test_includes_reason_when_provided(self) -> None:
+        body = format_insufficient_research_prompt("사유 메모")
+        self.assertIn("사유: 사유 메모", body)
+
+
+class SuggestRoleResearchAssignmentsTestCase(unittest.TestCase):
+    def test_designer_gets_visual_buckets_first_when_nothing_collected(self) -> None:
+        assignments = suggest_role_research_assignments(
+            task_type="landing-page",
+            collected_source_types=(SOURCE_TYPE_USER_MESSAGE,),
+        )
+        designer = assignments.get("product-designer", ())
+        self.assertTrue(designer)
+        self.assertEqual(designer[0], SOURCE_TYPE_IMAGE_REFERENCE)
+
+    def test_qa_gets_issue_first(self) -> None:
+        assignments = suggest_role_research_assignments(
+            task_type="qa-test",
+            collected_source_types=(SOURCE_TYPE_USER_MESSAGE,),
+        )
+        qa = assignments.get("qa-engineer", ())
+        self.assertEqual(qa[0], SOURCE_TYPE_GITHUB_ISSUE)
+
+    def test_role_omitted_when_nothing_left_to_recommend(self) -> None:
+        complete = (
+            SOURCE_TYPE_IMAGE_REFERENCE,
+            SOURCE_TYPE_DESIGN_REFERENCE,
+            SOURCE_TYPE_FILE_ATTACHMENT,
+            SOURCE_TYPE_URL,
+            SOURCE_TYPE_USER_MESSAGE,
+            SOURCE_TYPE_COMMUNITY_SIGNAL,
+        )
+        assignments = suggest_role_research_assignments(
+            task_type=None,
+            collected_source_types=complete,
+        )
+        self.assertNotIn("product-designer", assignments)
+
+    def test_required_categories_are_pulled_to_front(self) -> None:
+        assignments = suggest_role_research_assignments(
+            task_type="backend-feature",
+            collected_source_types=(),
+        )
+        backend = assignments.get("backend-engineer", ())
+        self.assertEqual(backend[0], SOURCE_TYPE_OFFICIAL_DOCS)
+
+
+class BuildResearchPackTestCase(unittest.TestCase):
+    def test_pack_keeps_engineering_metadata_in_source_extra(self) -> None:
+        result = collect_research_candidates_from_message(
+            "랜딩 hero 정리. 참고 https://github.com/y/r/issues/42",
+            attachments=[SimpleNamespace(filename="hero.png", url="https://cdn/h.png", id="1")],
+            task_type="landing-page",
+            author_role="product-designer",
+        )
+        pack = build_research_pack_from_candidates(
+            title="랜딩 hero 작업",
+            candidates=result.candidates,
+            channel_id=1498929862881054721,
+            thread_id=999,
+            message_id=1,
+        )
+        self.assertEqual(pack.title, "랜딩 hero 작업")
+        self.assertGreaterEqual(len(pack.sources), 3)
+        # primary_url is the first candidate URL we saw (issue link)
+        self.assertEqual(pack.primary_url, "https://github.com/y/r/issues/42")
+        # 각 source.extra 에 source_type 등 메타가 살아 있어야 deliberation 단계에서
+        # 역할 assignment 와 부족 판정에 다시 활용할 수 있다.
+        types = sorted(s.extra.get("source_type") for s in pack.sources)
+        self.assertIn(SOURCE_TYPE_USER_MESSAGE, types)
+        self.assertIn(SOURCE_TYPE_GITHUB_ISSUE, types)
+        self.assertIn(SOURCE_TYPE_IMAGE_REFERENCE, types)
+        # Image 첨부는 ResearchAttachment 로도 보존되어야 한다
+        attachment_kinds = {att.kind for att in pack.attachments}
+        self.assertIn("image", attachment_kinds)
+
+    def test_build_pack_requires_candidates(self) -> None:
+        with self.assertRaises(ValueError):
+            build_research_pack_from_candidates(title="x", candidates=())
 
 
 if __name__ == "__main__":

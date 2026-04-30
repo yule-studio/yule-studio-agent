@@ -19,6 +19,7 @@ from yule_orchestrator.discord.engineering_channel_router import (
     EngineeringRouteResult,
     EngineeringThreadKickoff,
     detect_confirmation_signal,
+    extract_message_attachments,
     is_engineering_channel,
     route_engineering_message,
 )
@@ -474,6 +475,69 @@ class RouteEngineeringMessageTests(unittest.TestCase):
         )
         self.assertFalse(result.handled)
         self.send_chunks.assert_not_awaited()
+
+    def test_planning_channel_message_falls_through_unhandled(self) -> None:
+        """Engineering router must not steal #일정-관리 / planning conversation messages.
+
+        ``handled=False`` lets the bot's planning conversation layer take over;
+        if this regressed, planning-bot users would see "engineer intake" replies.
+        """
+
+        message = _Message(
+            content="오늘 점심 브리핑 다시 보여줘",
+            channel=_Channel(channel_id=222, name="일정-관리"),
+        )
+        # _route's defaults raise AssertionError if intake_fn / thread_kickoff_fn
+        # are ever called, so a clean handled=False here also confirms planning
+        # messages never trip the engineering pipeline.
+        result = self._route(
+            message=message,
+            conversation_fn=lambda **_: EngineeringConversationOutcome(content="should not be sent"),
+        )
+        self.assertFalse(result.handled)
+        self.send_chunks.assert_not_awaited()
+
+
+class ExtractMessageAttachmentsTests(unittest.TestCase):
+    def test_returns_empty_tuple_when_attribute_missing(self) -> None:
+        message = object()
+        self.assertEqual(extract_message_attachments(message), ())
+
+    def test_returns_empty_when_explicit_none(self) -> None:
+        class _Msg:
+            attachments = None
+
+        self.assertEqual(extract_message_attachments(_Msg()), ())
+
+    def test_passes_through_list_attachments(self) -> None:
+        class _Msg:
+            attachments = [
+                {"filename": "hero.png"},
+                {"filename": "spec.pdf"},
+            ]
+
+        result = extract_message_attachments(_Msg())
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["filename"], "hero.png")
+
+    def test_drops_none_entries(self) -> None:
+        class _Msg:
+            attachments = [None, {"filename": "a.png"}, None]
+
+        result = extract_message_attachments(_Msg())
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["filename"], "a.png")
+
+    def test_accepts_iterable_attachments(self) -> None:
+        def _yield():
+            yield {"filename": "one.png"}
+            yield {"filename": "two.pdf"}
+
+        class _Msg:
+            attachments = _yield()
+
+        result = extract_message_attachments(_Msg())
+        self.assertEqual(len(result), 2)
 
 
 if __name__ == "__main__":

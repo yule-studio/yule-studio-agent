@@ -328,6 +328,26 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def extract_message_attachments(message: Any) -> tuple[Any, ...]:
+    """Return the message's attachments as a stable tuple, discord.py-agnostic.
+
+    discord.py exposes ``message.attachments`` as a list of ``Attachment``
+    objects, but tests pass plain dataclasses or dicts. We accept any iterable
+    and drop ``None`` entries so the engineering conversation layer can rely
+    on a clean sequence regardless of the Discord shape.
+    """
+
+    raw = getattr(message, "attachments", None)
+    if raw is None:
+        return ()
+    if isinstance(raw, (list, tuple)):
+        return tuple(item for item in raw if item is not None)
+    try:
+        return tuple(item for item in raw if item is not None)
+    except TypeError:
+        return ()
+
+
 def _normalize_channel_name(value: object | None) -> str:
     if value is None:
         return ""
