@@ -21,6 +21,7 @@ from .context import run_context_command
 from .daily import run_daily_warmup_command
 from .discord import run_discord_bot_command
 from .discord_member import run_discord_member_command
+from .discord_up import parse_agent_ids, run_discord_up_command
 from .engineer import (
     adapt_workflow_error,
     run_engineer_approve_command,
@@ -454,6 +455,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate env wiring and print the activation summary without contacting Discord.",
     )
 
+    discord_up_parser = discord_subparsers.add_parser(
+        "up",
+        help="Launch planning-bot + engineering-agent gateway/members in one shot.",
+    )
+    discord_up_parser.add_argument(
+        "--agents",
+        default=None,
+        help=(
+            "Comma-separated department agent ids whose gateway+members will be launched. "
+            "Defaults to engineering-agent."
+        ),
+    )
+    discord_up_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the launch inventory without contacting Discord.",
+    )
+
     engineer_parser = subparsers.add_parser(
         "engineer",
         help="Drive the engineering-agent Discord workflow (intake/approve/progress/complete).",
@@ -666,6 +685,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 repo_root,
                 args.agent,
                 args.role,
+                dry_run=args.dry_run,
+            )
+        if args.command == "discord" and args.discord_command == "up":
+            return run_discord_up_command(
+                repo_root,
+                agent_ids=parse_agent_ids(args.agents),
                 dry_run=args.dry_run,
             )
         if args.command == "engineer":
