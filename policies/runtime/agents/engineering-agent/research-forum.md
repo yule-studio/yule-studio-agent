@@ -51,19 +51,27 @@
 
 ### 4.1 역할별 검토 댓글
 
-각 멤버 봇이 자기 역할로 검토할 때 쓰는 표준 4줄 양식:
+각 멤버 봇이 자기 역할로 검토할 때 쓰는 표준 양식 (`역할 / 수집 자료 / 해석 / 리스크 / 다음 행동` + 신뢰도):
 
 ```
 [role:<role-id>]
-- 요점: <한 줄 요약>
-- 영향: <시스템·사용자·일정 영향 한 줄>
-- 다음 행동(권고): <옵션 1~2개>
+- 역할: <role-id>
+- 수집 자료:
+  1. [<source_type>] <title> — <url 또는 attachment 식별자>
+  2. ...
+- 해석: <자료를 종합한 역할별 판단 한~두 줄>
+- 리스크: <시스템·사용자·일정 리스크 한 줄>
+- 다음 행동:
+  1. <옵션 1>
+  2. <옵션 2>
 - 신뢰도: high|medium|low (이유 한 줄)
 ```
 
 규약
 - `<role-id>`는 `engineering-agent/backend-engineer` 식의 정식 주소(`message-protocol.md` §2와 동일)를 쓴다.
-- 4줄 모두 채운다. 정보 부족이면 `다음 행동`에 "추가 자료 요청 — <무엇>"으로 써서 thread를 멈추지 않고 다음 단계로 보낸다.
+- `수집 자료` 항목은 §5의 source_type 어휘(`user_message`, `url`, `web_result`, `image_reference`, `file_attachment`, `github_issue`, `github_pr`, `code_context`, `official_docs`, `community_signal`, `design_reference`)를 prefix로 붙여 한 줄로 표기한다.
+- 자료가 없으면 `수집된 자료 없음 — 추가 조사 필요`로 자동 채워, thread를 멈추지 않고 다음 단계로 넘긴다. `다음 행동`도 동일하게 fallback 라인을 둔다.
+- `해석`은 자료를 그대로 베끼는 대신 역할별 책임 범위에서 의미를 설명한다 (예: backend는 스키마·인증·인프라 영향, designer는 시각/패턴, qa는 회귀 가능성).
 
 ### 4.2 `[Decision]` 댓글 (tech-lead)
 
@@ -90,6 +98,32 @@
 ```
 
 본 댓글이 달린 thread만 향후 Obsidian export 후보로 잡는다. export 자동화는 후속 이슈에서 본 contract를 그대로 입력으로 사용한다.
+
+### 4.4 Source Type 어휘 (`수집 자료` prefix)
+
+`ResearchPack` 본문과 §4.1 댓글의 `수집 자료` 줄에 공통으로 사용한다. 각 항목은 `[source_type] title — url` 형태로 작성하면 후속 Obsidian export가 그대로 파싱한다.
+
+| source_type | 의미 | 누가 주로 수집 |
+|---|---|---|
+| `user_message` | 사용자가 직접 쓴 요구사항/요청 본문 | 게이트웨이가 capture, 모든 역할 참조 |
+| `url` | 사용자가 본문에 붙인 링크 (1차 출처) | 모든 역할 |
+| `web_result` | 검색을 통해 발견한 외부 자료 | 모든 역할 |
+| `image_reference` | 이미지·스크린샷·moodboard 캡처 | product-designer / frontend-engineer |
+| `file_attachment` | Discord 첨부 파일 | 모든 역할 |
+| `github_issue` | GitHub issue | 모든 역할 |
+| `github_pr` | GitHub Pull Request | 모든 역할 |
+| `code_context` | 현재 레포 코드/문서에서 찾은 맥락 | tech-lead / backend / frontend / qa |
+| `official_docs` | 외부 공식 문서·API 레퍼런스 | backend / frontend / qa |
+| `community_signal` | Reddit/forum/discussion 등 신호 | tech-lead / qa |
+| `design_reference` | Pinterest/Notefolio/Behance/Awwwards/Canva 등 디자인 참고 | product-designer / frontend-engineer |
+
+규약
+- 동일 thread 안에서 같은 url이 여러 역할에 의해 수집되면 각 역할이 자기 댓글에 자기 source_type으로 표기한다 (`url` vs `design_reference`처럼 의미가 갈리는 경우가 잦으므로 dedup하지 않는다).
+- 새 source_type을 도입하려면 본 표를 먼저 갱신하고, `agents/research_pack.py`의 모델 확장과 함께 PR로 같이 올린다.
+
+### 4.5 Forum 게시 실패 fallback
+
+`create_research_post`는 forum이 unconfigured거나 thread 생성 호출이 실패하면 `ForumPostOutcome.fallback_markdown`에 동일 본문을 H2 제목 + 경고 한 줄과 함께 담아 반환한다. 호출자는 이 markdown을 `#봇-상태` 또는 작업 origin 채널에 보내면 forum과 동일한 자료/출처가 일반 thread 형태로 보존된다. fallback markdown은 forum이 복구된 뒤에도 그대로 export contract v0와 호환된다.
 
 ## 5. Obsidian Export Contract (v0, 예약)
 
@@ -161,9 +195,10 @@ contract: research-forum-export/v0
 | `normalize_thread_title(title, prefix=...)` | pure | `[Research]/[Tool]/[Reference]` 중 하나가 앞에 오도록 보정. 댓글 prefix(`[Decision]`/`[Obsidian]`)를 title prefix로 잘못 넘기면 `[Research]`로 fallback. |
 | `detect_thread_prefix(title)` | pure | 알려진 prefix 5종 중 하나 또는 None. |
 | `format_research_post_body(pack, posted_by=...)` | pure | ResearchPack을 thread 본문(요약/자료 링크/첨부/태그/출처)으로 렌더링. |
-| `format_agent_comment(role, perspective, grounds, risks, next_actions, confidence, ...)` | pure | §4.1 4-line 양식 + 다음 행동 번호 목록 + 신뢰도 라벨로 렌더링. role 비면 `<unknown-role>`, confidence 비표준은 `medium`으로 fallback. |
-| `create_research_post(pack, *, forum_context, create_thread_fn, posted_by=..., prefix=...)` | async | thread 생성. `create_thread_fn`을 주입받아 production은 discord.py를 감싸고 테스트는 stub. 실패는 `ForumPostOutcome.error`로 surface. |
-| `post_agent_comment(*, thread_id, role, ..., post_message_fn)` | async | 댓글 게시. 본문은 `format_agent_comment` 결과 그대로. |
+| `format_agent_comment(role, collected_materials, interpretation, risks, next_actions, confidence, ...)` | pure | §4.1 양식(`역할/수집 자료/해석/리스크/다음 행동` + 신뢰도)으로 렌더링. role 비면 `<unknown-role>`, confidence 비표준은 `medium`, 자료/행동 비면 fallback 줄로 자동 채움. |
+| `format_thread_markdown_fallback(pack, *, title=..., posted_by=..., reason=...)` | pure | forum 게시 실패 시 일반 thread에 그대로 게시 가능한 markdown 한 덩이. H2 제목 + 경고 줄 + 본문(요약/자료/첨부/태그/출처) 구조. |
+| `create_research_post(pack, *, forum_context, create_thread_fn, posted_by=..., prefix=...)` | async | thread 생성. `create_thread_fn`을 주입받아 production은 discord.py를 감싸고 테스트는 stub. 실패/미설정은 `ForumPostOutcome.error`와 함께 `fallback_markdown`을 항상 채워 surface. |
+| `post_agent_comment(*, thread_id, role, collected_materials, interpretation, risks, next_actions, confidence, post_message_fn)` | async | 댓글 게시. 본문은 `format_agent_comment` 결과 그대로. |
 
 ### 8.2 사용 예 (production 배선 pseudocode)
 
@@ -182,8 +217,11 @@ else:
     await post_agent_comment(
         thread_id=outcome.thread_id,
         role="engineering-agent/qa-engineer",
-        perspective="회귀 위험 점검",
-        grounds="기존 e2e 미커버 영역",
+        collected_materials=(
+            "[github_issue] #144 onboarding step 2 불안정 — https://github.com/yule-studio/yule-studio-agent/issues/144",
+            "[code_context] tests/e2e/onboarding.spec.ts 결손",
+        ),
+        interpretation="회귀 위험 점검 — 기존 e2e가 onboarding step 2를 커버하지 않습니다.",
         risks="onboarding step 2 깨질 가능성",
         next_actions=("add e2e for step 2",),
         confidence="medium",
@@ -194,7 +232,7 @@ else:
 ### 8.3 규약
 
 - adapter는 ResearchPack 모델(`agents/research_pack.py`)에만 의존한다 — workflow / dispatcher / Ollama를 호출하지 않는다.
-- 게시 실패는 예외로 던지지 않고 `ForumPostOutcome.error` / `ForumCommentOutcome.error` 문자열로 호출자에 surface한다. 호출자가 `#봇-상태` 채널 broadcast 또는 retry 정책을 결정한다.
+- 게시 실패는 예외로 던지지 않고 `ForumPostOutcome.error` / `ForumCommentOutcome.error` 문자열로 호출자에 surface한다. forum 게시 실패 시 `ForumPostOutcome.fallback_markdown`에 일반 thread용 markdown이 같이 담겨 반환되므로, 호출자는 `#봇-상태` 또는 origin 채널에 그대로 보내 자료를 잃지 않는다.
 - prefix 5종(`PREFIX_RESEARCH/TOOL/REFERENCE/DECISION/OBSIDIAN`)은 모듈 상수로 export. 본 정책 §3 표를 바꾸면 모듈 상수도 같이 손본다.
 
 ## 9. 후속 작업

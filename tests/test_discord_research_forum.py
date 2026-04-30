@@ -31,6 +31,7 @@ from yule_orchestrator.discord.research_forum import (
     detect_thread_prefix,
     format_agent_comment,
     format_research_post_body,
+    format_thread_markdown_fallback,
     normalize_thread_title,
     post_agent_comment,
 )
@@ -157,56 +158,87 @@ class FormatAgentCommentTestCase(unittest.TestCase):
     def test_renders_all_blocks(self) -> None:
         comment = format_agent_comment(
             role="engineering-agent/backend-engineer",
-            perspective="현재 schema 변경 없이 처리 가능",
-            grounds="users 테이블에 verified column 이미 존재",
+            collected_materials=(
+                "[official_docs] PostgreSQL 14 indexes — https://www.postgresql.org/docs/14/indexes.html",
+                "[code_context] users 테이블 스키마 dump",
+            ),
+            interpretation="현재 schema 변경 없이 처리 가능 — verified column이 이미 존재합니다.",
             risks="migration 시 잠금 가능성 — off-peak 권장",
             next_actions=("verify column index", "draft migration"),
             confidence="high",
             confidence_reason="schema dump 직접 확인",
         )
         self.assertIn("[role:engineering-agent/backend-engineer]", comment)
-        self.assertIn("- 관점:", comment)
-        self.assertIn("- 근거:", comment)
+        self.assertIn("- 역할: engineering-agent/backend-engineer", comment)
+        self.assertIn("- 수집 자료:", comment)
+        self.assertIn("1. [official_docs] PostgreSQL 14 indexes", comment)
+        self.assertIn("2. [code_context] users 테이블 스키마 dump", comment)
+        self.assertIn("- 해석: 현재 schema 변경 없이", comment)
         self.assertIn("- 리스크:", comment)
         self.assertIn("- 다음 행동:", comment)
         self.assertIn("1. verify column index", comment)
         self.assertIn("2. draft migration", comment)
         self.assertIn("신뢰도: high — schema dump 직접 확인", comment)
 
+    def test_falls_back_when_materials_empty(self) -> None:
+        comment = format_agent_comment(
+            role="r",
+            interpretation="i",
+        )
+        self.assertIn("- 수집된 자료 없음 — 추가 조사 필요", comment)
+
     def test_falls_back_when_actions_empty(self) -> None:
         comment = format_agent_comment(
             role="r",
-            perspective="p",
-            grounds="g",
+            collected_materials=("source-1",),
+            interpretation="i",
         )
         self.assertIn("- 추가 행동 없음", comment)
 
     def test_falls_back_for_invalid_confidence(self) -> None:
         comment = format_agent_comment(
             role="r",
-            perspective="p",
-            grounds="g",
+            collected_materials=("source-1",),
+            interpretation="i",
             confidence="super-high",
         )
         self.assertIn("신뢰도: medium", comment)
 
     def test_falls_back_when_role_blank(self) -> None:
-        comment = format_agent_comment(role="  ", perspective="p", grounds="g")
+        comment = format_agent_comment(role="  ", interpretation="i")
         self.assertIn("[role:<unknown-role>]", comment)
+        self.assertIn("- 역할: <unknown-role>", comment)
+
+    def test_falls_back_when_interpretation_blank(self) -> None:
+        comment = format_agent_comment(
+            role="r",
+            collected_materials=("x",),
+        )
+        self.assertIn("- 해석: (해석 미기재)", comment)
 
 
 class CreateResearchPostTestCase(unittest.TestCase):
-    def test_returns_error_when_unconfigured(self) -> None:
+    def test_returns_error_with_fallback_when_unconfigured(self) -> None:
         ctx = ResearchForumContext()
         async def fn(**_):
             raise AssertionError("should not be called when unconfigured")
+        pack = pack_from_discord_message(
+            title="새 자료",
+            content="https://example.com/a",
+            channel_id=1,
+            message_id=2,
+        )
         outcome = _run(create_research_post(
-            ResearchPack(title="t"),
+            pack,
             forum_context=ctx,
             create_thread_fn=fn,
         ))
         self.assertFalse(outcome.posted)
         self.assertIn("not configured", outcome.error or "")
+        self.assertIsNotNone(outcome.fallback_markdown)
+        self.assertIn(f"## {PREFIX_RESEARCH} 새 자료", outcome.fallback_markdown or "")
+        self.assertIn("forum 게시에 실패", outcome.fallback_markdown or "")
+        self.assertIn("https://example.com/a", outcome.fallback_markdown or "")
 
     def test_calls_thread_fn_with_normalized_title_and_body(self) -> None:
         captured: dict = {}
@@ -235,13 +267,20 @@ class CreateResearchPostTestCase(unittest.TestCase):
         self.assertIn("https://example.com/a", captured["content"])
         self.assertEqual(captured["channel_id"], 999)
         self.assertEqual(captured["channel_name"], "운영-리서치")
+        self.assertIsNone(outcome.fallback_markdown)
 
-    def test_propagates_thread_fn_error(self) -> None:
+    def test_propagates_thread_fn_error_with_fallback(self) -> None:
         async def thread_fn(**_):
             raise RuntimeError("403 forbidden")
+        pack = pack_from_discord_message(
+            title="권한 실패 케이스",
+            content="https://example.com/locked",
+            channel_id=1,
+            message_id=2,
+        )
         ctx = ResearchForumContext(channel_id=1)
         outcome = _run(create_research_post(
-            ResearchPack(title="t"),
+            pack,
             forum_context=ctx,
             create_thread_fn=thread_fn,
         ))
@@ -249,6 +288,40 @@ class CreateResearchPostTestCase(unittest.TestCase):
         self.assertIn("403", outcome.error or "")
         self.assertIsNotNone(outcome.title)
         self.assertIsNotNone(outcome.body)
+        self.assertIsNotNone(outcome.fallback_markdown)
+        self.assertIn("403 forbidden", outcome.fallback_markdown or "")
+        self.assertIn("https://example.com/locked", outcome.fallback_markdown or "")
+
+
+class FormatThreadMarkdownFallbackTestCase(unittest.TestCase):
+    def test_includes_title_notice_and_body(self) -> None:
+        pack = pack_from_discord_message(
+            title="Stripe pricing",
+            content="https://stripe.com/pricing 참고",
+        )
+        markdown = format_thread_markdown_fallback(
+            pack,
+            posted_by="bot:designer",
+            reason="403 forbidden",
+        )
+        first_line = markdown.splitlines()[0]
+        self.assertTrue(first_line.startswith("## [Research] Stripe pricing"))
+        self.assertIn("forum 게시에 실패", markdown)
+        self.assertIn("403 forbidden", markdown)
+        self.assertIn("https://stripe.com/pricing", markdown)
+        self.assertIn("posted by", markdown)
+
+    def test_uses_existing_title_prefix(self) -> None:
+        pack = ResearchPack(title=f"{PREFIX_TOOL} resend.com")
+        markdown = format_thread_markdown_fallback(pack)
+        first_line = markdown.splitlines()[0]
+        self.assertEqual(first_line, f"## {PREFIX_TOOL} resend.com")
+
+    def test_omits_reason_when_blank(self) -> None:
+        pack = ResearchPack(title="t", summary="s")
+        markdown = format_thread_markdown_fallback(pack)
+        self.assertNotIn("사유:", markdown)
+        self.assertIn("forum 게시에 실패", markdown)
 
 
 class PostAgentCommentTestCase(unittest.TestCase):
@@ -262,8 +335,11 @@ class PostAgentCommentTestCase(unittest.TestCase):
         outcome = _run(post_agent_comment(
             thread_id=42,
             role="engineering-agent/qa-engineer",
-            perspective="회귀 시나리오 추가 필요",
-            grounds="현재 e2e 커버리지에 onboarding 빠짐",
+            collected_materials=(
+                "[github_issue] #144 onboarding step 2 불안정",
+                "[code_context] tests/e2e/onboarding.spec.ts 결손",
+            ),
+            interpretation="회귀 시나리오 보강이 필요합니다.",
             risks="없음",
             next_actions=("add e2e for step 2",),
             confidence="medium",
@@ -273,6 +349,9 @@ class PostAgentCommentTestCase(unittest.TestCase):
         self.assertEqual(outcome.message_id, 555)
         self.assertEqual(captured["thread_id"], 42)
         self.assertIn("[role:engineering-agent/qa-engineer]", captured["content"])
+        self.assertIn("- 수집 자료:", captured["content"])
+        self.assertIn("[github_issue] #144", captured["content"])
+        self.assertIn("- 해석:", captured["content"])
 
     def test_propagates_error(self) -> None:
         async def post_fn(**_):
@@ -281,8 +360,7 @@ class PostAgentCommentTestCase(unittest.TestCase):
         outcome = _run(post_agent_comment(
             thread_id=1,
             role="r",
-            perspective="p",
-            grounds="g",
+            interpretation="i",
             post_message_fn=post_fn,
         ))
         self.assertFalse(outcome.posted)

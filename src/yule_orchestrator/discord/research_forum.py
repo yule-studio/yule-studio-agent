@@ -137,8 +137,8 @@ def format_research_post_body(
 def format_agent_comment(
     *,
     role: str,
-    perspective: str,
-    grounds: str,
+    collected_materials: Iterable[str] = (),
+    interpretation: str = "",
     risks: str = "",
     next_actions: Iterable[str] = (),
     confidence: str = "medium",
@@ -146,36 +146,78 @@ def format_agent_comment(
 ) -> str:
     """Render the standard role-review comment.
 
-    Matches research-forum.md §4.1 (4-line role block) plus the structured
-    block this task asks for: 역할/관점/근거/리스크/다음 행동.
+    Layout follows research-forum.md §4.1:
+    ``역할 / 수집 자료 / 해석 / 리스크 / 다음 행동`` plus a trailing
+    confidence line.  ``collected_materials`` and ``next_actions`` are
+    rendered as numbered sub-lists; empty inputs degrade to a short
+    fallback so a comment is never silent.
     """
 
     safe_role = role.strip() or "<unknown-role>"
     safe_conf = (confidence or "medium").strip().lower()
     if safe_conf not in {"high", "medium", "low"}:
         safe_conf = "medium"
+
+    material_items = [m for m in (collected_materials or ()) if m and m.strip()]
+    material_lines = (
+        "\n".join(f"  {idx}. {item.strip()}" for idx, item in enumerate(material_items, start=1))
+        if material_items
+        else "  - 수집된 자료 없음 — 추가 조사 필요"
+    )
+
     actions = [a for a in (next_actions or ()) if a and a.strip()]
     action_lines = (
         "\n".join(f"  {idx}. {action.strip()}" for idx, action in enumerate(actions, start=1))
         if actions
         else "  - 추가 행동 없음"
     )
+
+    interpretation_text = interpretation.strip() or "(해석 미기재)"
     risk_text = risks.strip() or "특별한 리스크 없음"
-    grounds_text = grounds.strip() or "근거 미상 — 추가 자료 요청 필요"
-    perspective_text = perspective.strip() or "(관점 미기재)"
     confidence_line = (
         f"신뢰도: {safe_conf}"
         + (f" — {confidence_reason.strip()}" if confidence_reason.strip() else "")
     )
     return (
         f"[role:{safe_role}]\n"
-        f"- 관점: {perspective_text}\n"
-        f"- 근거: {grounds_text}\n"
+        f"- 역할: {safe_role}\n"
+        f"- 수집 자료:\n"
+        f"{material_lines}\n"
+        f"- 해석: {interpretation_text}\n"
         f"- 리스크: {risk_text}\n"
         f"- 다음 행동:\n"
         f"{action_lines}\n"
         f"- {confidence_line}"
     )
+
+
+def format_thread_markdown_fallback(
+    pack: ResearchPack,
+    *,
+    title: Optional[str] = None,
+    posted_by: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> str:
+    """Markdown blob for posting to a regular text channel when the
+    forum endpoint is unavailable (no token / 403 / unconfigured).
+
+    The shape mirrors a forum thread: H2 title, an optional warning
+    line explaining why we're falling back, and the same body the
+    forum thread would have carried.  Callers can pipe this directly
+    into ``channel.send`` (split if it exceeds 2000 chars).
+    """
+
+    final_title = normalize_thread_title(title or pack.title)
+    body = format_research_post_body(pack, posted_by=posted_by)
+    notice_bits = ["⚠️ 운영-리서치 forum 게시에 실패했습니다 — 일반 thread markdown fallback."]
+    if reason and reason.strip():
+        notice_bits.append(f"사유: {reason.strip()}")
+    notice = " ".join(notice_bits)
+
+    parts: list[str] = [f"## {final_title}", f"_{notice}_"]
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts).strip()
 
 
 def detect_thread_prefix(title: str) -> Optional[str]:
@@ -201,6 +243,7 @@ class ForumPostOutcome:
     error: Optional[str] = None
     title: Optional[str] = None
     body: Optional[str] = None
+    fallback_markdown: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -231,11 +274,23 @@ async def create_research_post(
     or a Mapping-shaped result.
     """
 
-    if not forum_context.configured:
-        return ForumPostOutcome(posted=False, error="forum channel not configured")
-
     title = normalize_thread_title(pack.title, prefix=prefix)
     body = format_research_post_body(pack, posted_by=posted_by)
+
+    if not forum_context.configured:
+        reason = "forum channel not configured"
+        return ForumPostOutcome(
+            posted=False,
+            error=reason,
+            title=title,
+            body=body,
+            fallback_markdown=format_thread_markdown_fallback(
+                pack,
+                title=title,
+                posted_by=posted_by,
+                reason=reason,
+            ),
+        )
 
     try:
         result = await _maybe_await(
@@ -247,7 +302,18 @@ async def create_research_post(
             )
         )
     except Exception as exc:  # noqa: BLE001 - surface to caller, do not crash
-        return ForumPostOutcome(posted=False, error=str(exc), title=title, body=body)
+        return ForumPostOutcome(
+            posted=False,
+            error=str(exc),
+            title=title,
+            body=body,
+            fallback_markdown=format_thread_markdown_fallback(
+                pack,
+                title=title,
+                posted_by=posted_by,
+                reason=str(exc),
+            ),
+        )
 
     thread_id = _extract_thread_id(result)
     thread_url = _extract_thread_url(result)
@@ -264,8 +330,8 @@ async def post_agent_comment(
     *,
     thread_id: int,
     role: str,
-    perspective: str,
-    grounds: str,
+    collected_materials: Iterable[str] = (),
+    interpretation: str = "",
     risks: str = "",
     next_actions: Iterable[str] = (),
     confidence: str = "medium",
@@ -276,8 +342,8 @@ async def post_agent_comment(
 
     body = format_agent_comment(
         role=role,
-        perspective=perspective,
-        grounds=grounds,
+        collected_materials=collected_materials,
+        interpretation=interpretation,
         risks=risks,
         next_actions=next_actions,
         confidence=confidence,
