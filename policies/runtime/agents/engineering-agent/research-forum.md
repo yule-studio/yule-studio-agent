@@ -149,9 +149,57 @@ contract: research-forum-export/v0
 - 댓글 양식(4줄/Decision/Obsidian)을 바꾸면 export contract v0가 영향을 받는다 — contract 버전을 같이 올리고 후속 export 코드의 호환 처리를 메모로 남긴다.
 - env 키 이름은 부서 비종속(`DISCORD_AGENT_RESEARCH_*`)을 유지한다. engineering 전용 prefix로 좁히면 다른 부서가 같은 forum을 공유할 수 없다.
 
-## 8. 후속 작업
+## 8. Adapter 계층 (`discord/research_forum.py`)
 
-1. forum publisher 코드 — env 키 활성화 후 멤버 봇이 thread를 만들고 댓글을 다는 진입점.
+본 정책 v0의 게시·댓글 규약을 코드로 옮긴 모듈. 진실 소스는 `src/yule_orchestrator/discord/research_forum.py`. 대부분이 순수 함수이고 Discord API와 닿는 면적은 `create_research_post` / `post_agent_comment` 두 함수뿐이다.
+
+### 8.1 공개 표면
+
+| 심볼 | 종류 | 역할 |
+|---|---|---|
+| `ResearchForumContext.from_env()` | classmethod | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID/NAME`을 읽어 라우팅 컨텍스트 생성. 둘 다 비면 `configured=False`. |
+| `normalize_thread_title(title, prefix=...)` | pure | `[Research]/[Tool]/[Reference]` 중 하나가 앞에 오도록 보정. 댓글 prefix(`[Decision]`/`[Obsidian]`)를 title prefix로 잘못 넘기면 `[Research]`로 fallback. |
+| `detect_thread_prefix(title)` | pure | 알려진 prefix 5종 중 하나 또는 None. |
+| `format_research_post_body(pack, posted_by=...)` | pure | ResearchPack을 thread 본문(요약/자료 링크/첨부/태그/출처)으로 렌더링. |
+| `format_agent_comment(role, perspective, grounds, risks, next_actions, confidence, ...)` | pure | §4.1 4-line 양식 + 다음 행동 번호 목록 + 신뢰도 라벨로 렌더링. role 비면 `<unknown-role>`, confidence 비표준은 `medium`으로 fallback. |
+| `create_research_post(pack, *, forum_context, create_thread_fn, posted_by=..., prefix=...)` | async | thread 생성. `create_thread_fn`을 주입받아 production은 discord.py를 감싸고 테스트는 stub. 실패는 `ForumPostOutcome.error`로 surface. |
+| `post_agent_comment(*, thread_id, role, ..., post_message_fn)` | async | 댓글 게시. 본문은 `format_agent_comment` 결과 그대로. |
+
+### 8.2 사용 예 (production 배선 pseudocode)
+
+```python
+ctx = ResearchForumContext.from_env()
+outcome = await create_research_post(
+    pack,
+    forum_context=ctx,
+    create_thread_fn=discord_create_forum_thread,  # discord.py wrapper
+    posted_by="bot:engineering-agent/product-designer",
+    prefix=PREFIX_REFERENCE,
+)
+if not outcome.posted:
+    log.warning("forum post skipped: %s", outcome.error)
+else:
+    await post_agent_comment(
+        thread_id=outcome.thread_id,
+        role="engineering-agent/qa-engineer",
+        perspective="회귀 위험 점검",
+        grounds="기존 e2e 미커버 영역",
+        risks="onboarding step 2 깨질 가능성",
+        next_actions=("add e2e for step 2",),
+        confidence="medium",
+        post_message_fn=discord_post_message,
+    )
+```
+
+### 8.3 규약
+
+- adapter는 ResearchPack 모델(`agents/research_pack.py`)에만 의존한다 — workflow / dispatcher / Ollama를 호출하지 않는다.
+- 게시 실패는 예외로 던지지 않고 `ForumPostOutcome.error` / `ForumCommentOutcome.error` 문자열로 호출자에 surface한다. 호출자가 `#봇-상태` 채널 broadcast 또는 retry 정책을 결정한다.
+- prefix 5종(`PREFIX_RESEARCH/TOOL/REFERENCE/DECISION/OBSIDIAN`)은 모듈 상수로 export. 본 정책 §3 표를 바꾸면 모듈 상수도 같이 손본다.
+
+## 9. 후속 작업
+
+1. discord.py 기반 production wrapper(`discord_create_forum_thread` / `discord_post_message`) — adapter는 이미 주입식이므로 wrapper만 추가하면 된다.
 2. `[Decision]` 댓글 → `workflow.intake` 자동 연결 (Forum-driven intake).
 3. Obsidian export — 본 §5의 contract를 그대로 입력으로 사용.
 4. forum thread 검색 인덱서 — 본 thread의 자료가 dispatcher의 reference 추천에 다시 흘러 들어가도록.
