@@ -1,6 +1,6 @@
 # Engineering Agent Discord Workflow (v0)
 
-이 문서는 Discord 안에서 engineering-agent에게 작업을 위임하는 **접수(intake) → 승인(approve) → 진행(progress) → 완료(complete)** 흐름의 정책 기준선이다. 코드 진실 소스는 `src/yule_orchestrator/agents/workflow.py` + `workflow_state.py`, CLI는 `yule engineer`, Discord 슬래시 커맨드는 `commands.py`의 `engineer_intake` / `engineer_show`.
+이 문서는 Discord 안에서 engineering-agent에게 작업을 위임하는 **접수(intake) → 승인(approve) → 진행(progress) → 완료(complete)** 흐름의 정책 기준선이다. 코드 진실 소스는 `src/yule_orchestrator/agents/workflow.py` + `workflow_state.py`, CLI는 `yule engineer`, Discord 슬래시 커맨드는 `commands.py`의 `engineer_intake` / `engineer_approve` / `engineer_reject` / `engineer_progress` / `engineer_complete` / `engineer_show` / `engineer_review`(+ `engineer_review_reply`).
 
 ## 1. 접수 채널 규칙
 
@@ -17,8 +17,9 @@
 - `write_requested=True`로 접수된 세션은 `intake → approved` 전이 전까지 **어떤 write도 시작하지 않는다**.
 - 승인 방법:
   - **CLI**: `yule engineer approve --session <id>`.
-  - **Discord** (예정): 접수 메시지의 ✅ 반응 → 게이트웨이가 reaction을 감지해 승인. 본 마일스톤에서는 슬래시 커맨드 `/engineer_show`로 상태만 확인 가능, 승인은 CLI에서 진행한다. reaction 핸들러는 후속 이슈에서 추가.
-- 거절은 `yule engineer reject --session <id> --reason "..."`. 거절된 세션은 progress/complete가 모두 차단된다.
+  - **Discord 슬래시 커맨드**: `/engineer_approve session_id:<id>`. 승인이 끝나면 운영자에게 `**[engineering-agent] 세션 승인 완료**` 메시지로 다음 단계 안내(`/engineer_progress`, `/engineer_complete`)를 노출한다.
+  - 접수 메시지의 ✅ 반응 기반 승인은 후속 이슈에서 추가한다 (multi-bot 활성화 시).
+- 거절은 `yule engineer reject --session <id> --reason "..."` 또는 `/engineer_reject session_id:<id> reason:"..."`로 처리한다. Discord 응답에는 사유가 그대로 게시되고 "재개할 수 없습니다" 안내가 포함된다. 거절된 세션은 progress/complete/approve가 모두 차단된다.
 - write 게이트는 dispatcher의 `write_block_reason`을 그대로 받아 표시한다 (dispatcher.md §6).
 
 ## 3. 메시지 포맷
@@ -98,10 +99,18 @@ yule engineer show --session <sid>     # JSON 상태
 
 ```
 /engineer_intake prompt:"우리 랜딩 hero..." write_requested:true
-/engineer_show session_id:<sid>
+/engineer_approve session_id:<sid>
+/engineer_progress session_id:<sid> note:"디자이너 1차 시안 정리"
+/engineer_complete session_id:<sid> summary:"hero 카피 + CTA 색 정리"
+/engineer_reject  session_id:<sid> reason:"요구사항 불명확"
+/engineer_show    session_id:<sid>
 ```
 
-승인은 본 마일스톤에서 CLI 전용. reaction-기반 승인은 후속 이슈에서 추가한다.
+각 슬래시 커맨드는 `workflow.py` 의 동일 메서드를 그대로 호출하며, 잘못된 상태 전이(예: intake 상태에서 progress, completed 세션 재승인, 빈 사유로 거절)를 만나면 한국어 한 줄 에러 메시지(`engineer X 실패: <원문>`)로 graceful 하게 답한다.
+
+> ⚠️ Discord 슬래시 커맨드에서는 `complete` 의 `references_used` 인라인 입력을 받지 않는다. 레퍼런스 인용을 같이 남기고 싶다면 같은 세션을 CLI(`yule engineer complete --references-used <json>`)로 마무리한다. Discord 와 CLI 는 같은 SQLite 세션을 공유하므로 어느 쪽에서 닫아도 결과가 동일하다.
+
+reaction-기반 승인 / thread 자동 생성은 후속 이슈에서 추가한다.
 
 ## 8. 후속 작업
 

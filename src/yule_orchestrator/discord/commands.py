@@ -293,6 +293,149 @@ def register_discord_commands(
             discord_module=discord,
         )
 
+    @bot.tree.command(
+        name="engineer_approve",
+        description="engineering-agent 세션을 승인해 진행을 풀어줍니다.",
+        guild=guild,
+    )
+    @app_commands.describe(session_id="승인할 워크플로 세션 ID.")
+    async def engineer_approve(
+        interaction: "discord.Interaction",
+        session_id: str,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            message = await asyncio.to_thread(
+                _run_engineer_approve,
+                session_id=session_id,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer approve 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
+    @bot.tree.command(
+        name="engineer_reject",
+        description="engineering-agent 세션을 거절합니다 (사유 필수).",
+        guild=guild,
+    )
+    @app_commands.describe(
+        session_id="거절할 워크플로 세션 ID.",
+        reason="거절 사유 (운영 기록용, 한 줄).",
+    )
+    async def engineer_reject(
+        interaction: "discord.Interaction",
+        session_id: str,
+        reason: str,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            message = await asyncio.to_thread(
+                _run_engineer_reject,
+                session_id=session_id,
+                reason=reason,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer reject 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
+    @bot.tree.command(
+        name="engineer_progress",
+        description="진행 중인 engineering-agent 세션에 진행 메모를 남깁니다.",
+        guild=guild,
+    )
+    @app_commands.describe(
+        session_id="메모를 남길 워크플로 세션 ID.",
+        note="진행 메모 (한 줄, PR/Thread 링크는 본문에 그대로 붙여도 됩니다).",
+    )
+    async def engineer_progress(
+        interaction: "discord.Interaction",
+        session_id: str,
+        note: str,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            message = await asyncio.to_thread(
+                _run_engineer_progress,
+                session_id=session_id,
+                note=note,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer progress 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
+    @bot.tree.command(
+        name="engineer_complete",
+        description="engineering-agent 세션을 완료 상태로 닫고 요약을 게시합니다.",
+        guild=guild,
+    )
+    @app_commands.describe(
+        session_id="완료 처리할 워크플로 세션 ID.",
+        summary="완료 보고에 들어갈 요약 (한두 줄).",
+    )
+    async def engineer_complete(
+        interaction: "discord.Interaction",
+        session_id: str,
+        summary: str,
+    ) -> None:
+        if not await _safe_defer(interaction, discord_module=discord):
+            return
+        try:
+            message = await asyncio.to_thread(
+                _run_engineer_complete,
+                session_id=session_id,
+                summary=summary,
+            )
+        except (WorkflowError, ValueError) as exc:
+            await _send_message_chunks(
+                interaction,
+                f"engineer complete 실패: {exc}",
+                allowed_mentions=allowed_mentions,
+                discord_module=discord,
+            )
+            return
+        await _send_message_chunks(
+            interaction,
+            message,
+            allowed_mentions=allowed_mentions,
+            discord_module=discord,
+        )
+
     @bot.tree.command(name="checkpoints_now", description="지금 기준으로 다가오는 체크포인트를 보여줍니다.", guild=guild)
     @app_commands.describe(window_minutes="몇 분 앞까지 확인할지 설정합니다.")
     async def checkpoints_now(
@@ -392,6 +535,68 @@ def _run_engineer_review(
     )
     orchestrator = _engineer_orchestrator()
     return orchestrator.record_review_feedback(session_id, feedback)
+
+
+def _run_engineer_approve(*, session_id: str) -> str:
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id must not be empty")
+    orchestrator = _engineer_orchestrator()
+    session = orchestrator.approve(session_id.strip())
+    return _format_engineer_approve_message(session)
+
+
+def _run_engineer_reject(*, session_id: str, reason: str) -> str:
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id must not be empty")
+    if not reason or not reason.strip():
+        raise ValueError("reason must not be empty")
+    orchestrator = _engineer_orchestrator()
+    session = orchestrator.reject(session_id.strip(), reason=reason.strip())
+    return _format_engineer_reject_message(session)
+
+
+def _run_engineer_progress(*, session_id: str, note: str) -> str:
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id must not be empty")
+    if not note or not note.strip():
+        raise ValueError("note must not be empty")
+    orchestrator = _engineer_orchestrator()
+    result = orchestrator.progress(session_id.strip(), note=note.strip())
+    return result.message
+
+
+def _run_engineer_complete(*, session_id: str, summary: str) -> str:
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id must not be empty")
+    if not summary or not summary.strip():
+        raise ValueError("summary must not be empty")
+    orchestrator = _engineer_orchestrator()
+    result = orchestrator.complete(session_id.strip(), summary=summary.strip())
+    return result.message
+
+
+def _format_engineer_approve_message(session) -> str:
+    lines = [
+        "**[engineering-agent] 세션 승인 완료**",
+        f"세션 ID: `{session.session_id}`",
+        f"상태: {session.state.value}",
+        f"실행자: {session.executor_role} ({session.executor_runner or '?'})",
+        "",
+        "이제 `/engineer_progress`로 진행 메모를 남기거나 `/engineer_complete`로 마무리할 수 있습니다.",
+    ]
+    return "\n".join(lines)
+
+
+def _format_engineer_reject_message(session) -> str:
+    lines = [
+        "**[engineering-agent] 세션 거절**",
+        f"세션 ID: `{session.session_id}`",
+        f"상태: {session.state.value}",
+        f"사유: {session.rejection_reason or 'rejected'}",
+        "",
+        "거절된 세션은 재개할 수 없습니다. 필요하면 `/engineer_intake`로 새 세션을 시작해주세요.",
+    ]
+    return "\n".join(lines)
 
 
 def _run_engineer_review_reply(
