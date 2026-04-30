@@ -56,9 +56,10 @@ class LoadMemberBotConfigTestCase(unittest.TestCase):
             (
                 GATEWAY_ROLE_KEY,
                 "tech-lead",
+                "ai-engineer",
+                "product-designer",
                 "backend-engineer",
                 "frontend-engineer",
-                "product-designer",
                 "qa-engineer",
             ),
         )
@@ -77,6 +78,29 @@ class LoadMemberBotConfigTestCase(unittest.TestCase):
     def test_unknown_agent_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
             load_member_bot_config(REPO_ROOT, "no-such-agent")
+
+    def test_ai_engineer_role_is_registered_with_expected_env_key(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            for key in list(os.environ):
+                if key.startswith("ENGINEERING_AGENT_BOT_"):
+                    del os.environ[key]
+            config = load_member_bot_config(REPO_ROOT, "engineering-agent")
+
+        ai_engineer = config.get("ai-engineer")
+        self.assertEqual(
+            ai_engineer.env_key,
+            "ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN",
+        )
+        self.assertFalse(ai_engineer.active)
+
+    def test_ai_engineer_token_in_env_marks_profile_active(self) -> None:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ENGINEERING_AGENT_BOT_")}
+        env["ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN"] = "ai-token"
+        with patch.dict(os.environ, env, clear=True):
+            config = load_member_bot_config(REPO_ROOT, "engineering-agent")
+            profile = config.get("ai-engineer")
+            self.assertTrue(profile.active)
+            self.assertEqual(profile.token, "ai-token")
 
 
 class SelectProfileTestCase(unittest.TestCase):

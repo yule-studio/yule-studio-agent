@@ -10,16 +10,20 @@ import unittest
 from yule_orchestrator.agents.research_profiles import (
     ALL_ROLES,
     ALL_SOURCE_TYPES,
+    ROLE_AI_ENGINEER,
     ROLE_BACKEND_ENGINEER,
     ROLE_FRONTEND_ENGINEER,
     ROLE_PRODUCT_DESIGNER,
     ROLE_QA_ENGINEER,
     ROLE_TECH_LEAD,
+    SOURCE_TYPE_AI_FRAMEWORK_DOCS,
     SOURCE_TYPE_CODE_CONTEXT,
     SOURCE_TYPE_DESIGN_REFERENCE,
     SOURCE_TYPE_GITHUB_ISSUE,
     SOURCE_TYPE_IMAGE_REFERENCE,
+    SOURCE_TYPE_MODEL_DOCS,
     SOURCE_TYPE_OFFICIAL_DOCS,
+    SOURCE_TYPE_RESEARCH_PAPER,
     RoleResearchProfile,
     build_role_query_hints,
     format_research_hints_block,
@@ -47,6 +51,31 @@ class DefaultProfilesTestCase(unittest.TestCase):
             get_role_profile("marketing-engineer")
         self.assertIn("marketing-engineer", str(ctx.exception))
         self.assertIn("tech-lead", str(ctx.exception))
+
+    def test_ai_engineer_default_top_priorities_are_ai_focused(self) -> None:
+        profile = get_role_profile(ROLE_AI_ENGINEER)
+        # 1순위: official_docs (모델/API 사양)
+        self.assertEqual(profile.preferred_source_types[0], SOURCE_TYPE_OFFICIAL_DOCS)
+        # 2~4위에 research_paper, model_docs, ai_framework_docs가 들어가야 함
+        ai_specific = {
+            SOURCE_TYPE_RESEARCH_PAPER,
+            SOURCE_TYPE_MODEL_DOCS,
+            SOURCE_TYPE_AI_FRAMEWORK_DOCS,
+        }
+        self.assertTrue(ai_specific.issubset(set(profile.preferred_source_types)))
+
+    def test_new_ai_source_types_are_registered(self) -> None:
+        for source_type in (
+            SOURCE_TYPE_RESEARCH_PAPER,
+            SOURCE_TYPE_MODEL_DOCS,
+            SOURCE_TYPE_AI_FRAMEWORK_DOCS,
+        ):
+            self.assertIn(source_type, ALL_SOURCE_TYPES)
+
+    def test_ai_engineer_is_in_canonical_role_list(self) -> None:
+        self.assertIn(ROLE_AI_ENGINEER, ALL_ROLES)
+        # 권장 순서: tech-lead 다음, product-designer 앞
+        self.assertEqual(ALL_ROLES.index(ROLE_AI_ENGINEER), 1)
 
     def test_list_role_profiles_returns_canonical_order(self) -> None:
         profiles = list_role_profiles()
@@ -174,6 +203,21 @@ class FormatResearchHintsBlockTestCase(unittest.TestCase):
         self.assertIn("우선 자료:", block)
         # design task → designer top source는 image_reference
         self.assertIn("image_reference", block)
+
+    def test_ai_engineer_block_surfaces_ai_specific_sources(self) -> None:
+        block = format_research_hints_block(
+            (ROLE_AI_ENGINEER,),
+            task_type="backend-feature",
+        )
+        self.assertIn("`ai-engineer`", block)
+        self.assertIn("우선 자료:", block)
+        # 상위 3개 안에 official_docs와 ai-only source 한 종류 이상이 들어가야 함
+        self.assertIn("official_docs", block)
+        ai_only_present = any(
+            keyword in block
+            for keyword in ("research_paper", "model_docs", "ai_framework_docs")
+        )
+        self.assertTrue(ai_only_present)
 
     def test_topic_substituted_into_recommended_query(self) -> None:
         block = format_research_hints_block(

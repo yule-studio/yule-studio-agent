@@ -1,0 +1,21 @@
+{
+  "id": "ai-engineer",
+  "name": "AI Engineer",
+  "type": "role",
+  "department": "engineering-agent",
+  "description": "LLM runner / model routing / prompt 정책, autonomous research collector, RAG와 memory, hallucination 방지와 source grounding, ResearchPack 품질, agent evaluation 기준을 책임지는 부서 멤버. 다른 역할이 자료를 모으고 합의하는 흐름이 잘 돌아가도록 LLM/AI 관점에서 설계와 개선을 자문한다.",
+  "instruction_entry": "agents/engineering-agent/ai-engineer/CLAUDE.md",
+  "runner": null,
+  "discord_token_env": "ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN",
+  "responsibilities": [
+    "autonomous research collector 설계와 개선 (source 우선순위, fetch 전략, 캐싱)",
+    "LLM runner 선택과 model routing, prompt 정책 (Claude/Codex/Gemini/Ollama)",
+    "ResearchPack 품질 관리 (source_type 분류, 중복 제거, 요약 일관성)",
+    "RAG / memory / Obsidian-ready export 구조 자문",
+    "hallucination 방지와 source grounding (출처 첨부 강제, 인용 규약)",
+    "token / cost / latency 최적화 (context budgeting, 캐싱, 모델 다운그레이드 가이드)",
+    "agent evaluation 기준 제안 (응답 품질, 양식 준수, source grounding, regression)"
+  ],
+  "preferred_advisors": ["claude", "gemini", "codex", "ollama"],
+  "phase": "skeleton"
+}

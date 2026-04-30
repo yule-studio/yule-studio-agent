@@ -23,6 +23,9 @@
 | `official_docs` | 공식 문서 (API, framework, DB, infra) |
 | `community_signal` | Reddit, Hacker News, Stack Overflow 등 커뮤니티 신호 |
 | `design_reference` | Pinterest, Notefolio, Behance, Awwwards, Canva, Wix Templates, Mobbin, Page Flows 등 디자인 참고 |
+| `research_paper` | arXiv, NeurIPS, ICML 등 학술 논문 |
+| `model_docs` | Anthropic/OpenAI/Google/Hugging Face 모델 카드와 API 사양 |
+| `ai_framework_docs` | LangChain, LlamaIndex, DSPy, Ragas, TruLens, vector DB(pgvector/Qdrant/Chroma/Weaviate) 등 AI/RAG 프레임워크 공식 문서 |
 
 상수는 `research_profiles.SOURCE_TYPE_*`에 박혀 있으며, `ALL_SOURCE_TYPES` 튜플로 순서가 고정된다. 새 유형이 필요하면 본 표와 모듈의 상수를 함께 갱신한다.
 
@@ -36,6 +39,13 @@
 - 쿼리 템플릿: `{topic} architecture overview`, `{topic} dependency map`, `{topic} risk and tradeoffs`, `{topic} rollout plan`
 - reference: 내부 docs, ADR/RFC, GitHub history
 - 핵심: 결정/순서/리스크/승인 여부 종합
+
+### ai-engineer
+
+- 우선 source_type (상위): `official_docs`, `research_paper`, `model_docs`, `ai_framework_docs`, `code_context`, `community_signal`
+- 쿼리 템플릿: `{topic} prompt engineering best practice`, `{topic} RAG retrieval evaluation`, `{topic} embedding / vector store options`, `{topic} hallucination grounding strategy`, `{topic} agent evaluation metric`, `{topic} model routing latency cost`
+- reference: 공식 모델 docs(Anthropic/OpenAI/Google), Hugging Face model cards, arXiv/research papers, RAG framework docs(LangChain/LlamaIndex), vector DB docs(pgvector/Qdrant/Chroma/Weaviate), agent eval docs(Ragas/TruLens)
+- 핵심: autonomous research collector 설계, LLM/RAG/memory 자문, hallucination 방지와 source grounding, token/cost/latency 최적화, agent evaluation 기준
 
 ### product-designer
 

@@ -32,9 +32,10 @@ agents/
     ├── agent.json                  type=department, members=[...], 부서 단위 LLM 풀
     ├── CLAUDE.md                   게이트웨이 책임/입출력 계약 정의
     ├── tech-lead/                  Role member: 작업 분해 / 합의 조율
+    ├── ai-engineer/                LLM/RAG/research collector/agent eval 자문
+    ├── product-designer/           장기적으로 design-agent로 분기 가능
     ├── backend-engineer/
     ├── frontend-engineer/
-    ├── product-designer/           장기적으로 design-agent로 분기 가능
     └── qa-engineer/
 
 policies/runtime/agents/engineering-agent/
@@ -60,9 +61,10 @@ policies/runtime/agents/engineering-agent/
 | Member | 책임 요약 | 향후 분리 가능성 |
 |---|---|---|
 | `tech-lead` | 작업 분해, 의존 순서, 멤버 간 합의 조율, 외부 회신 | engineering-agent에 유지 |
+| `ai-engineer` | autonomous research collector 설계, LLM runner / model routing / prompt 정책, ResearchPack 품질, RAG/memory/Obsidian export 자문, hallucination 방지와 source grounding, token/cost/latency 최적화, agent evaluation 기준 제안 | 장기적으로 `data-ai-agent` 분리 가능 |
+| `product-designer` | 화면 흐름·구조·시각 가이드 결정 | **장기적으로 `design-agent`로 분기 가능** |
 | `backend-engineer` | 도메인 모델, 서비스, API, 데이터 계층 | engineering-agent에 유지 |
 | `frontend-engineer` | UI 컴포넌트, 사용자 흐름 코드, 데이터 연결 | engineering-agent에 유지 |
-| `product-designer` | 화면 흐름·구조·시각 가이드 결정 | **장기적으로 `design-agent`로 분기 가능** |
 | `qa-engineer` | 수용 기준, 회귀 시나리오, 테스트 우선순위 | engineering-agent에 유지 (또는 `quality-agent`로 분기 가능) |
 
 향후 추가 가능 멤버:
@@ -78,13 +80,14 @@ policies/runtime/agents/engineering-agent/
 > Phase 2 디스패처가 만들어지면 자동 분배가 가능해진다.
 
 1. 게이트웨이가 요청 수신 (planning-agent / 사용자 / 미래 orchestrator) → `tech-lead`에게 작업 분해 요청
-2. `tech-lead`가 의존 순서 결정 → 필요한 멤버 호출 순서 결정 (예: product-designer → backend → frontend → qa)
-3. UI/UX 영역이 포함되면 우선 `reference-pack.md` 기준 레퍼런스 조사 (3~5개) 결과를 PR/이슈에 첨부
-4. `product-designer`가 화면/흐름 결정 산출
-5. `backend-engineer`가 도메인/API 작업
-6. `frontend-engineer`가 UI 옮김
-7. `qa-engineer`가 수용 기준과 회귀 시나리오로 검증
-8. `tech-lead`가 종합 → 게이트웨이가 외부에 회신
+2. `tech-lead`가 의존 순서 결정 → 필요한 멤버 호출 순서 결정 (예: ai-engineer → product-designer → backend → frontend → qa)
+3. `ai-engineer`가 자료 수집 전략, 모델/프롬프트, RAG 관점에서 검토 (research collector 우선순위, ResearchPack 품질, hallucination 가드)
+4. UI/UX 영역이 포함되면 `reference-pack.md` 기준 레퍼런스 조사 (3~5개) 결과를 PR/이슈에 첨부
+5. `product-designer`가 화면/흐름 결정 산출
+6. `backend-engineer`가 도메인/API 작업
+7. `frontend-engineer`가 UI 옮김
+8. `qa-engineer`가 수용 기준과 회귀 시나리오로 검증
+9. `tech-lead`가 종합 → 게이트웨이가 외부에 회신
 
 ## Phase
 

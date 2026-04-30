@@ -2,12 +2,13 @@
   "id": "engineering-agent",
   "name": "Engineering Agent (Engineering Department)",
   "type": "department",
-  "description": "Engineering department gateway under the future CTO organization. Receives requests from upstream agents (planning-agent, orchestrator, eventually cto-agent) and delegates to its role members (tech-lead, backend-engineer, frontend-engineer, product-designer, qa-engineer). Members share the participants/integrations pool defined here so any role can be backed by Claude, Codex, Gemini, Ollama, or GitHub Copilot depending on the task.",
+  "description": "Engineering department gateway under the future CTO organization. Receives requests from upstream agents (planning-agent, orchestrator, eventually cto-agent) and delegates to its role members (tech-lead, ai-engineer, product-designer, backend-engineer, frontend-engineer, qa-engineer). Members share the participants/integrations pool defined here so any role can be backed by Claude, Codex, Gemini, Ollama, or GitHub Copilot depending on the task.",
   "members": [
     "tech-lead",
+    "ai-engineer",
+    "product-designer",
     "backend-engineer",
     "frontend-engineer",
-    "product-designer",
     "qa-engineer"
   ],
   "execution_mode": "single_executor_multi_advisor",

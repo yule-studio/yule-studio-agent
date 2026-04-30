@@ -4,7 +4,7 @@
 
 이 부서의 핵심 원칙 중 하나는 **역할(role)과 모델(model)을 분리**한다는 것이다.
 
-- **역할**은 책임 단위다 — tech-lead, backend-engineer, frontend-engineer, product-designer, qa-engineer.
+- **역할**은 책임 단위다 — tech-lead, ai-engineer, product-designer, backend-engineer, frontend-engineer, qa-engineer.
 - **모델**은 실행 백엔드 풀이다 — Claude, Codex, Gemini, Ollama, GitHub Copilot. 부서 단위 `participants`/`integrations`로 관리.
 
 따라서 한 역할이 항상 같은 모델을 쓰는 게 아니라, **작업 성격에 맞는 모델을 게이트웨이가 선택**한다. 이때 역할별 기본 가중치(이 문서)와 작업별 보정(다음 단계 디스패처)이 결합되어 최종 모델이 결정된다.
@@ -23,6 +23,15 @@
 | `gemini` | 7 | 긴 컨텍스트 분석(여러 이슈 동시 검토)에 유리. |
 | `codex` | 5 | 분배 결정 자체엔 약하지만 코드 영향도 평가에 보조. |
 | `ollama` | 3 | 로컬 사고/분류용. 비용 민감 환경에서 fallback. |
+
+### ai-engineer (LLM runner / model routing / prompt 정책, RAG, agent eval)
+
+| 모델 | 가중치 | 메모 |
+|---|---|---|
+| `claude` | 9 | 모델/프롬프트 설계와 평가 기준 정리에 안정적. 기본 추천. |
+| `gemini` | 7 | 멀티모달·긴 컨텍스트 평가, 임베딩/RAG 비교에 유리. |
+| `codex` | 5 | runner/agent 코드 변경 제안과 evaluation harness 작성에 보조. |
+| `ollama` | 4 | 로컬 분류/요약/embedding 실험. 비용 민감 환경에서 fallback. |
 
 ### backend-engineer (도메인 모델, 서비스, API, 데이터 계층)
 

@@ -33,6 +33,7 @@ class TaskType(str, Enum):
 # role × runner default weights mirroring role-weights-v0.md
 ROLE_DEFAULT_WEIGHTS: Mapping[str, Mapping[str, int]] = {
     "tech-lead": {"claude": 9, "gemini": 7, "codex": 5, "ollama": 3},
+    "ai-engineer": {"claude": 9, "gemini": 7, "codex": 5, "ollama": 4},
     "backend-engineer": {"claude": 9, "codex": 7, "gemini": 5, "ollama": 3},
     "frontend-engineer": {"claude": 8, "codex": 8, "gemini": 5, "ollama": 3},
     "product-designer": {"gemini": 9, "claude": 8, "codex": 4, "ollama": 3},
@@ -40,23 +41,74 @@ ROLE_DEFAULT_WEIGHTS: Mapping[str, Mapping[str, int]] = {
 }
 
 
-# tech-lead always leads; implementing roles follow per task type.
+# tech-lead always leads; ai-engineer follows for LLM/RAG/research collector
+# perspective; implementing roles follow per task type. tech-lead also closes
+# the deliberation in the higher-level role_sequence used by run_research_loop.
 TASK_ROLE_SEQUENCE: Mapping[TaskType, Sequence[str]] = {
-    TaskType.BACKEND_FEATURE: ("tech-lead", "backend-engineer", "qa-engineer"),
-    TaskType.FRONTEND_FEATURE: ("tech-lead", "product-designer", "frontend-engineer", "qa-engineer"),
-    TaskType.LANDING_PAGE: ("tech-lead", "product-designer", "frontend-engineer", "qa-engineer"),
-    TaskType.ONBOARDING_FLOW: (
+    TaskType.BACKEND_FEATURE: (
         "tech-lead",
+        "ai-engineer",
         "product-designer",
-        "frontend-engineer",
         "backend-engineer",
         "qa-engineer",
     ),
-    TaskType.VISUAL_POLISH: ("tech-lead", "product-designer", "frontend-engineer"),
-    TaskType.EMAIL_CAMPAIGN: ("tech-lead", "product-designer", "frontend-engineer", "qa-engineer"),
-    TaskType.QA_TEST: ("tech-lead", "qa-engineer", "backend-engineer"),
-    TaskType.PLATFORM_INFRA: ("tech-lead", "backend-engineer", "qa-engineer"),
-    TaskType.UNKNOWN: ("tech-lead",),
+    TaskType.FRONTEND_FEATURE: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "frontend-engineer",
+        "qa-engineer",
+    ),
+    TaskType.LANDING_PAGE: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "frontend-engineer",
+        "qa-engineer",
+    ),
+    TaskType.ONBOARDING_FLOW: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+    ),
+    TaskType.VISUAL_POLISH: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "frontend-engineer",
+    ),
+    TaskType.EMAIL_CAMPAIGN: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "frontend-engineer",
+        "qa-engineer",
+    ),
+    TaskType.QA_TEST: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "qa-engineer",
+        "backend-engineer",
+    ),
+    TaskType.PLATFORM_INFRA: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "backend-engineer",
+        "qa-engineer",
+    ),
+    TaskType.UNKNOWN: (
+        "tech-lead",
+        "ai-engineer",
+        "product-designer",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+    ),
 }
 
 

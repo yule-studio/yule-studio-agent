@@ -77,6 +77,30 @@ class BuildInventoryTestCase(unittest.TestCase):
         self.assertEqual(backend.runner, BOT_RUNNER_MEMBER)
         self.assertTrue(backend.has_token)
 
+    def test_ai_engineer_member_appears_in_inventory_with_active_status(self) -> None:
+        env = {"ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN": "ai-token"}
+
+        inventory = build_inventory(REPO_ROOT, env=env)
+        ai_engineer = next(
+            bot for bot in inventory.bots if bot.bot_id == "engineering-agent/ai-engineer"
+        )
+
+        self.assertEqual(ai_engineer.role, "ai-engineer")
+        self.assertEqual(ai_engineer.env_key, "ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN")
+        self.assertEqual(ai_engineer.runner, BOT_RUNNER_MEMBER)
+        self.assertTrue(ai_engineer.has_token)
+        self.assertEqual(ai_engineer.status, "active")
+
+    def test_ai_engineer_skipped_when_token_missing(self) -> None:
+        # No env tokens at all → ai-engineer must still appear in inventory but skipped
+        inventory = build_inventory(REPO_ROOT, env={})
+        ai_engineer = next(
+            bot for bot in inventory.bots if bot.bot_id == "engineering-agent/ai-engineer"
+        )
+
+        self.assertFalse(ai_engineer.has_token)
+        self.assertEqual(ai_engineer.status, "skipped (token missing)")
+
     def test_planning_bot_has_planning_runner_type(self) -> None:
         env = {PLANNING_BOT_ENV_KEY: "planning-token"}
 

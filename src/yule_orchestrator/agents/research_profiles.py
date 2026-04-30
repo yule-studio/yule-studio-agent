@@ -36,6 +36,9 @@ SOURCE_TYPE_CODE_CONTEXT = "code_context"
 SOURCE_TYPE_OFFICIAL_DOCS = "official_docs"
 SOURCE_TYPE_COMMUNITY_SIGNAL = "community_signal"
 SOURCE_TYPE_DESIGN_REFERENCE = "design_reference"
+SOURCE_TYPE_RESEARCH_PAPER = "research_paper"
+SOURCE_TYPE_MODEL_DOCS = "model_docs"
+SOURCE_TYPE_AI_FRAMEWORK_DOCS = "ai_framework_docs"
 
 ALL_SOURCE_TYPES: Tuple[str, ...] = (
     SOURCE_TYPE_USER_MESSAGE,
@@ -49,6 +52,9 @@ ALL_SOURCE_TYPES: Tuple[str, ...] = (
     SOURCE_TYPE_OFFICIAL_DOCS,
     SOURCE_TYPE_COMMUNITY_SIGNAL,
     SOURCE_TYPE_DESIGN_REFERENCE,
+    SOURCE_TYPE_RESEARCH_PAPER,
+    SOURCE_TYPE_MODEL_DOCS,
+    SOURCE_TYPE_AI_FRAMEWORK_DOCS,
 )
 
 
@@ -57,6 +63,7 @@ ALL_SOURCE_TYPES: Tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 ROLE_TECH_LEAD = "tech-lead"
+ROLE_AI_ENGINEER = "ai-engineer"
 ROLE_PRODUCT_DESIGNER = "product-designer"
 ROLE_BACKEND_ENGINEER = "backend-engineer"
 ROLE_FRONTEND_ENGINEER = "frontend-engineer"
@@ -65,6 +72,7 @@ ROLE_QA_ENGINEER = "qa-engineer"
 
 ALL_ROLES: Tuple[str, ...] = (
     ROLE_TECH_LEAD,
+    ROLE_AI_ENGINEER,
     ROLE_PRODUCT_DESIGNER,
     ROLE_BACKEND_ENGINEER,
     ROLE_FRONTEND_ENGINEER,
@@ -184,6 +192,44 @@ _DEFAULT_PROFILES: Mapping[str, RoleResearchProfile] = {
             SOURCE_TYPE_CODE_CONTEXT: 6,
             SOURCE_TYPE_URL: 5,
             SOURCE_TYPE_COMMUNITY_SIGNAL: 3,
+        },
+    ),
+    ROLE_AI_ENGINEER: RoleResearchProfile(
+        role=ROLE_AI_ENGINEER,
+        preferred_source_types=(
+            SOURCE_TYPE_OFFICIAL_DOCS,
+            SOURCE_TYPE_RESEARCH_PAPER,
+            SOURCE_TYPE_MODEL_DOCS,
+            SOURCE_TYPE_AI_FRAMEWORK_DOCS,
+            SOURCE_TYPE_CODE_CONTEXT,
+            SOURCE_TYPE_COMMUNITY_SIGNAL,
+        ),
+        suggested_queries=(
+            "{topic} prompt engineering best practice",
+            "{topic} RAG retrieval evaluation",
+            "{topic} embedding / vector store options",
+            "{topic} hallucination grounding strategy",
+            "{topic} agent evaluation metric",
+            "{topic} model routing latency cost",
+        ),
+        reference_categories=(
+            "official model docs (Anthropic / OpenAI / Google)",
+            "Hugging Face model cards",
+            "arXiv / research papers",
+            "RAG framework docs (LangChain, LlamaIndex)",
+            "vector DB docs (pgvector, Qdrant, Chroma, Weaviate)",
+            "agent eval docs (Ragas, TruLens)",
+        ),
+        weight_hints={
+            SOURCE_TYPE_OFFICIAL_DOCS: 10,
+            SOURCE_TYPE_RESEARCH_PAPER: 9,
+            SOURCE_TYPE_MODEL_DOCS: 9,
+            SOURCE_TYPE_AI_FRAMEWORK_DOCS: 8,
+            SOURCE_TYPE_CODE_CONTEXT: 6,
+            SOURCE_TYPE_COMMUNITY_SIGNAL: 5,
+            SOURCE_TYPE_GITHUB_ISSUE: 4,
+            SOURCE_TYPE_URL: 3,
+            SOURCE_TYPE_USER_MESSAGE: 5,
         },
     ),
     ROLE_PRODUCT_DESIGNER: RoleResearchProfile(
