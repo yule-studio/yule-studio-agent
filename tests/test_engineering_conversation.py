@@ -521,5 +521,145 @@ class BuildResearchPackTestCase(unittest.TestCase):
             build_research_pack_from_candidates(title="x", candidates=())
 
 
+# ---------------------------------------------------------------------------
+# Auto-collector wire-up
+# ---------------------------------------------------------------------------
+
+
+class AutoCollectWireUpTestCase(unittest.TestCase):
+    def _enabled_cfg(self):
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+        )
+        return CollectorConfig(
+            enabled=True,
+            provider=PROVIDER_MOCK,
+            max_results=2,
+            max_provider_calls=1,
+            max_results_per_role=2,
+        )
+
+    def test_intake_candidate_runs_collector_and_attaches_pack(self) -> None:
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+            TASK_INTAKE_CANDIDATE,
+        )
+
+        response = build_engineering_conversation_response(
+            "새 랜딩페이지 hero 섹션 다시 짜야 해",
+            role_for_research="engineering-agent/product-designer",
+            collector_config=self._enabled_cfg(),
+        )
+        self.assertEqual(response.intent_id, TASK_INTAKE_CANDIDATE)
+        # auto_collected by mock collector for designer role
+        self.assertIsNotNone(response.research_pack)
+        self.assertIsNotNone(response.collection_outcome)
+        self.assertEqual(response.collection_outcome.mode.value, "auto_collected")
+        self.assertGreaterEqual(response.collection_outcome.auto_collected_count, 1)
+        self.assertIn("1차 자료를", response.content)
+        self.assertIn("운영-리서치", response.content)
+
+    def test_disabling_auto_collect_keeps_legacy_response(self) -> None:
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+            TASK_INTAKE_CANDIDATE,
+        )
+
+        response = build_engineering_conversation_response(
+            "새 랜딩페이지 hero 섹션 다시 짜야 해",
+            auto_collect=False,
+        )
+        self.assertEqual(response.intent_id, TASK_INTAKE_CANDIDATE)
+        self.assertIsNone(response.research_pack)
+        self.assertIsNone(response.collection_outcome)
+        self.assertNotIn("1차 자료를", response.content)
+
+    def test_user_provided_links_route_to_user_provided_mode(self) -> None:
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+        )
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+        )
+
+        # collector disabled → mock NoOp; user provided link → USER_PROVIDED
+        response = build_engineering_conversation_response(
+            "users API 정리",
+            user_links=("https://example.com/auth-doc",),
+            role_for_research="engineering-agent/backend-engineer",
+            collector_config=CollectorConfig(
+                enabled=False,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        self.assertIsNotNone(response.collection_outcome)
+        self.assertEqual(response.collection_outcome.mode.value, "user_provided")
+        self.assertIn("사용자 제공 자료", response.content)
+
+    def test_unknown_role_falls_through_to_needs_user_input(self) -> None:
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+        )
+        from yule_orchestrator.discord.engineering_conversation import (
+            build_engineering_conversation_response,
+        )
+
+        # Role is not in mock buckets → no auto-collected results, no user
+        # links → NEEDS_USER_INPUT path; the response body announces that.
+        response = build_engineering_conversation_response(
+            "시안 모음 주세요",
+            role_for_research="design-agent/illustrator",
+            collector_config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        self.assertEqual(response.collection_outcome.mode.value, "needs_user_input")
+        self.assertIn("자동 수집이 비어 있어", response.content)
+
+    def test_collector_failure_does_not_break_response(self) -> None:
+        from yule_orchestrator.agents.research_collector import ResearchCollector
+        from yule_orchestrator.discord.engineering_conversation import (
+            TASK_INTAKE_CANDIDATE,
+            build_engineering_conversation_response,
+        )
+
+        class _BoomCollector(ResearchCollector):
+            name = "boom"
+
+            def search(self, query):  # noqa: D401 - test stub
+                raise RuntimeError("provider down")
+
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+        )
+
+        response = build_engineering_conversation_response(
+            "새 hero",
+            role_for_research="engineering-agent/product-designer",
+            collector_config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+            collector=_BoomCollector(),
+        )
+        # The collector failed silently — conversation still produces a
+        # legitimate intake-candidate response (no crash).
+        self.assertEqual(response.intent_id, TASK_INTAKE_CANDIDATE)
+
+
 if __name__ == "__main__":
     unittest.main()

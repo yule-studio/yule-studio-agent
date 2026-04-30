@@ -74,6 +74,12 @@ class EngineeringConversationResponse:
       another user turn.
     - ``proposed_splits`` non-empty → reply with split proposal; user picks
       one or types a confirmation phrase to proceed with the original ask.
+    - ``research_pack`` set → autonomous collector returned ≥1 result.
+      Forum publisher / deliberation should consume this pack instead of
+      asking the user for more material.
+    - ``collection_outcome`` carries the raw ``CollectionOutcome`` (mode,
+      collector_name, query, count) so the Discord wiring can post the
+      ``format_collection_summary`` block to the research forum.
     """
 
     content: str
@@ -85,6 +91,8 @@ class EngineeringConversationResponse:
     write_likely: bool = False
     intake_prompt: Optional[str] = None
     mention_user_id: Optional[int] = None
+    research_pack: Optional[Any] = None
+    collection_outcome: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +106,13 @@ def build_engineering_conversation_response(
     author_user_id: Optional[int] = None,
     mention_user: bool = False,
     last_proposed_prompt: Optional[str] = None,
+    auto_collect: bool = True,
+    user_links: Sequence[str] = (),
+    user_attachments: Sequence[Any] = (),
+    role_for_research: str = "engineering-agent/tech-lead",
+    session_id: Optional[str] = None,
+    collector_config: Optional[Any] = None,
+    collector: Optional[Any] = None,
 ) -> EngineeringConversationResponse:
     """Classify *message_text* and produce an actionable response envelope.
 
@@ -105,6 +120,17 @@ def build_engineering_conversation_response(
     message so a follow-up confirmation ("이대로 진행해") can reuse it as
     ``intake_prompt`` instead of the literal confirmation string. The bot
     layer is expected to pass this in from its per-channel state.
+
+    *auto_collect* controls the research collector wire-up. When True (and
+    the message has substantive content), the conversation layer first
+    calls ``auto_collect_or_request_more_input`` so the gateway can answer
+    "1차 자료를 수집했습니다" with a populated ``ResearchPack`` instead of
+    immediately asking the user for links. Pass *user_links* /
+    *user_attachments* whenever the inbound Discord message already
+    carries them so the collector can short-circuit to ``USER_PROVIDED``.
+
+    *collector_config* / *collector* are injection seams for tests and
+    let alternate environments swap providers without touching env vars.
     """
 
     intent = detect_engineering_intent(message_text)
@@ -145,35 +171,146 @@ def build_engineering_conversation_response(
             mention_user_id=mention_user_id,
         )
 
+    suggested = _suggest_task_type(message_text)
+    write_likely = _looks_like_write_request(message_text)
+    collection = _maybe_run_auto_collect(
+        message_text=message_text,
+        suggested_task_type=suggested,
+        auto_collect=auto_collect,
+        user_links=user_links,
+        user_attachments=user_attachments,
+        role_for_research=role_for_research,
+        session_id=session_id,
+        collector_config=collector_config,
+        collector=collector,
+    )
+
     if intent.intent_id == SPLIT_TASK_PROPOSAL:
         splits = split_task_branches(message_text)
-        body = _format_split_proposal(splits)
+        body_lines = [_format_split_proposal(splits)]
+        if collection is not None:
+            body_lines.append(_format_collection_announcement(collection))
         return EngineeringConversationResponse(
-            content=_prepend_mention(body, mention_user_id),
+            content=_prepend_mention("\n\n".join(body_lines), mention_user_id),
             intent_id=SPLIT_TASK_PROPOSAL,
             proposed_splits=tuple(splits),
-            suggested_task_type=_suggest_task_type(message_text),
-            write_likely=_looks_like_write_request(message_text),
+            suggested_task_type=suggested,
+            write_likely=write_likely,
             intake_prompt=message_text,
             mention_user_id=mention_user_id,
+            research_pack=getattr(collection, "pack", None),
+            collection_outcome=collection,
         )
 
     # default: TASK_INTAKE_CANDIDATE
-    suggested = _suggest_task_type(message_text)
-    write_likely = _looks_like_write_request(message_text)
-    body = _format_intake_candidate_question(
-        message_text=message_text,
-        suggested_task_type=suggested,
-        write_likely=write_likely,
-    )
+    body_lines = [
+        _format_intake_candidate_question(
+            message_text=message_text,
+            suggested_task_type=suggested,
+            write_likely=write_likely,
+        )
+    ]
+    if collection is not None:
+        body_lines.append(_format_collection_announcement(collection))
     return EngineeringConversationResponse(
-        content=_prepend_mention(body, mention_user_id),
+        content=_prepend_mention("\n\n".join(body_lines), mention_user_id),
         intent_id=TASK_INTAKE_CANDIDATE,
         suggested_task_type=suggested,
         write_likely=write_likely,
         intake_prompt=message_text,
         mention_user_id=mention_user_id,
+        research_pack=getattr(collection, "pack", None),
+        collection_outcome=collection,
     )
+
+
+def _maybe_run_auto_collect(
+    *,
+    message_text: str,
+    suggested_task_type: Optional[str],
+    auto_collect: bool,
+    user_links: Sequence[str],
+    user_attachments: Sequence[Any],
+    role_for_research: str,
+    session_id: Optional[str],
+    collector_config: Optional[Any],
+    collector: Optional[Any],
+):
+    """Run the autonomous collector and return its outcome (or None).
+
+    Returns ``None`` when:
+    - ``auto_collect`` is False, or
+    - the message text is too short / blank to query usefully, or
+    - importing the collector module fails (defensive).
+
+    Otherwise returns a ``CollectionOutcome``. The caller decides how to
+    splice it into the response body.
+    """
+
+    if not auto_collect:
+        return None
+    if not (message_text or "").strip():
+        return None
+    try:
+        from ..agents.research_collector import (
+            CollectorConfig as _CollectorConfig,
+            auto_collect_or_request_more_input,
+        )
+    except Exception:  # noqa: BLE001 - never block conversation on collector wiring
+        return None
+
+    cfg = collector_config
+    if cfg is None:
+        try:
+            cfg = _CollectorConfig.from_env()
+        except Exception:  # noqa: BLE001
+            return None
+
+    try:
+        return auto_collect_or_request_more_input(
+            role=role_for_research,
+            prompt=message_text,
+            task_type=suggested_task_type,
+            user_links=user_links,
+            user_attachments=user_attachments,
+            session_id=session_id,
+            config=cfg,
+            collector=collector,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _format_collection_announcement(collection: Any) -> str:
+    """Short body added under the intake question when collection ran.
+
+    Three modes:
+    - AUTO_COLLECTED → "1차 자료를 N건 수집했습니다 ..."
+    - USER_PROVIDED → 사용자 자료를 그대로 사용한다는 안내
+    - NEEDS_USER_INPUT → 기존 안내 (collector가 빈 결과)
+    """
+
+    mode = getattr(collection, "mode", None)
+    mode_value = getattr(mode, "value", str(mode))
+    count = getattr(collection, "auto_collected_count", 0) or 0
+    collector_name = getattr(collection, "collector_name", "?")
+    query = getattr(collection, "query", "") or ""
+
+    if mode_value == "auto_collected":
+        return (
+            f"_📚 1차 자료를 {count}건 수집했습니다_ "
+            f"(collector: `{collector_name}` · query: `{query}`).\n"
+            "운영-리서치 forum에 출처와 활용 가능성을 정리해 두고, 역할별 deliberation으로 이어집니다."
+        )
+    if mode_value == "user_provided":
+        return (
+            "_사용자 제공 자료를 1순위 reference로 사용합니다._ "
+            "별도 자동 수집은 실행하지 않았습니다."
+        )
+    if mode_value == "needs_user_input":
+        prompt = getattr(collection, "user_prompt", None) or "관련 자료를 한두 개 붙여 주세요."
+        return f"_💡 자동 수집이 비어 있어 추가 자료가 필요합니다._ {prompt}"
+    return ""
 
 
 def detect_engineering_intent(message_text: str) -> EngineeringIntentMatch:
