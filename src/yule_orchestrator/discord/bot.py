@@ -5,6 +5,7 @@ import json
 import math
 import os
 import time as time_module
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from ..agents import (
     WorkflowOrchestrator,
     build_participants_pool,
 )
+from ..agents.workflow_state import update_session
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
@@ -35,6 +37,7 @@ from .engineering_channel_router import (
     EngineeringThreadKickoff,
     route_engineering_message,
 )
+from .engineering_team_runtime import kickoff_directive
 from .formatter import (
     format_checkpoints_message,
     format_plan_today_message,
@@ -1487,14 +1490,16 @@ def _default_engineering_intake_fn(
 
 def _make_default_thread_kickoff_fn(discord_module: "discord"):
     async def _kickoff(*, channel, session, plan, topic):
-        kickoff_text = _format_engineering_kickoff_message(session, plan)
         thread_topic = (topic or "").strip() or _default_engineering_thread_topic(session)
 
         thread_cls = getattr(discord_module, "Thread", None)
         if thread_cls is not None and isinstance(channel, thread_cls):
-            await channel.send(kickoff_text)
+            thread_id = getattr(channel, "id", None)
+            session_with_thread = _persist_engineering_thread_id(session, thread_id)
+            kickoff_text = _format_engineering_kickoff_message(session_with_thread, plan)
+            await channel.send(_append_team_kickoff_directive(kickoff_text, session_with_thread))
             return EngineeringThreadKickoff(
-                thread_id=getattr(channel, "id", None),
+                thread_id=thread_id,
                 message=kickoff_text,
             )
 
@@ -1504,20 +1509,52 @@ def _make_default_thread_kickoff_fn(discord_module: "discord"):
             discord_module=discord_module,
         )
         if thread is None:
+            kickoff_text = _format_engineering_kickoff_message(session, plan)
             await channel.send(kickoff_text)
             return EngineeringThreadKickoff(thread_id=None, message=kickoff_text)
 
+        thread_id = getattr(thread, "id", None)
+        session_with_thread = _persist_engineering_thread_id(session, thread_id)
+        kickoff_text = _format_engineering_kickoff_message(session_with_thread, plan)
         try:
-            await thread.send(kickoff_text)
+            await thread.send(_append_team_kickoff_directive(kickoff_text, session_with_thread))
         except Exception as exc:  # noqa: BLE001 - report and continue
             print(f"warning: engineering thread kickoff send failed: {exc}")
 
         return EngineeringThreadKickoff(
-            thread_id=getattr(thread, "id", None),
+            thread_id=thread_id,
             message=kickoff_text,
         )
 
     return _kickoff
+
+
+def _persist_engineering_thread_id(session, thread_id):
+    if session is None or thread_id is None:
+        return session
+    try:
+        parsed_thread_id = int(thread_id)
+    except (TypeError, ValueError):
+        return session
+    if getattr(session, "thread_id", None) == parsed_thread_id:
+        return session
+    try:
+        updated = replace(session, thread_id=parsed_thread_id)
+        return update_session(updated, now=datetime.now().astimezone())
+    except Exception as exc:  # noqa: BLE001 - kickoff can still continue without persistence
+        print(f"warning: engineering thread id persistence failed: {exc}")
+        return session
+
+
+def _append_team_kickoff_directive(message: str, session) -> str:
+    if session is None:
+        return message
+    try:
+        directive = kickoff_directive(session)
+    except Exception as exc:  # noqa: BLE001 - keep kickoff visible even if team chain cannot start
+        print(f"warning: engineering team kickoff directive failed: {exc}")
+        return message
+    return f"{message}\n\n{directive}"
 
 
 async def _create_engineering_thread(

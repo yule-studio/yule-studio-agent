@@ -12,6 +12,7 @@ from pathlib import Path
 
 from yule_orchestrator.cli.discord_up import parse_agent_ids, run_discord_up_command
 from yule_orchestrator.discord.supervisor import (
+    BOT_RUNNER_ENGINEERING_GATEWAY,
     BOT_RUNNER_MEMBER,
     BOT_RUNNER_PLANNING,
     ENGINEERING_AGENT_FAMILY,
@@ -54,7 +55,7 @@ class BuildInventoryTestCase(unittest.TestCase):
         self.assertEqual(planning.status, "skipped (token missing)")
         self.assertIn(planning, inventory.skipped())
 
-    def test_engineering_member_bot_has_member_runner_type(self) -> None:
+    def test_engineering_gateway_uses_gateway_runner_type(self) -> None:
         env = {"ENGINEERING_AGENT_BOT_GATEWAY_TOKEN": "gw-token"}
 
         inventory = build_inventory(REPO_ROOT, env=env)
@@ -62,8 +63,19 @@ class BuildInventoryTestCase(unittest.TestCase):
             bot for bot in inventory.bots if bot.bot_id == "engineering-agent/gateway"
         )
 
-        self.assertEqual(gateway.runner, BOT_RUNNER_MEMBER)
+        self.assertEqual(gateway.runner, BOT_RUNNER_ENGINEERING_GATEWAY)
         self.assertTrue(gateway.has_token)
+
+    def test_engineering_role_bot_has_member_runner_type(self) -> None:
+        env = {"ENGINEERING_AGENT_BOT_BACKEND_ENGINEER_TOKEN": "be-token"}
+
+        inventory = build_inventory(REPO_ROOT, env=env)
+        backend = next(
+            bot for bot in inventory.bots if bot.bot_id == "engineering-agent/backend-engineer"
+        )
+
+        self.assertEqual(backend.runner, BOT_RUNNER_MEMBER)
+        self.assertTrue(backend.has_token)
 
     def test_planning_bot_has_planning_runner_type(self) -> None:
         env = {PLANNING_BOT_ENV_KEY: "planning-token"}

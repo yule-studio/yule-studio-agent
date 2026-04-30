@@ -44,6 +44,7 @@ PLANNING_BOT_DISPLAY_LABEL = "planning-bot"
 ENGINEERING_AGENT_FAMILY = "engineering-agent"
 
 BOT_RUNNER_PLANNING = "planning-bot-runner"
+BOT_RUNNER_ENGINEERING_GATEWAY = "engineering-gateway-runner"
 BOT_RUNNER_MEMBER = "member-bot-runner"
 
 
@@ -234,7 +235,11 @@ def _build_member_entry(profile: MemberBotProfile, env_map: Mapping[str, str]) -
         role=profile.role,
         env_key=profile.env_key,
         has_token=has_token,
-        runner=BOT_RUNNER_MEMBER,
+        runner=(
+            BOT_RUNNER_ENGINEERING_GATEWAY
+            if profile.role == GATEWAY_ROLE_KEY
+            else BOT_RUNNER_MEMBER
+        ),
         display_label=profile.display_label,
         member_profile=profile,
     )
@@ -264,6 +269,13 @@ def _target_callable(bot: BotEntry) -> tuple[Callable[..., None], tuple]:
 
     if bot.runner == BOT_RUNNER_PLANNING:
         return (_run_planning_in_subprocess, (str(_resolve_repo_root()),))
+    if bot.runner == BOT_RUNNER_ENGINEERING_GATEWAY:
+        if bot.member_profile is None:
+            raise ValueError(f"gateway bot {bot.bot_id} has no profile attached")
+        return (
+            _run_engineering_gateway_in_subprocess,
+            (str(_resolve_repo_root()), bot.member_profile.env_key),
+        )
     if bot.runner == BOT_RUNNER_MEMBER:
         if bot.member_profile is None:
             raise ValueError(f"member bot {bot.bot_id} has no profile attached")
@@ -274,6 +286,44 @@ def _target_callable(bot: BotEntry) -> tuple[Callable[..., None], tuple]:
 def _run_planning_in_subprocess(repo_root_str: str) -> None:  # pragma: no cover - subprocess only
     from .bot import run_discord_bot
 
+    _apply_env_overrides(
+        {
+            # Keep the planning bot out of #업무-접수. The engineering
+            # gateway process owns that channel so visible replies use the
+            # yule-eng-gateway account.
+            "DISCORD_ENGINEERING_INTAKE_CHANNEL_ID": "",
+            "DISCORD_ENGINEERING_INTAKE_CHANNEL_NAME": "",
+        }
+    )
+    run_discord_bot(repo_root=Path(repo_root_str))
+
+
+def _run_engineering_gateway_in_subprocess(
+    repo_root_str: str,
+    gateway_token_env_key: str,
+) -> None:  # pragma: no cover - subprocess only
+    from .bot import run_discord_bot
+
+    gateway_token = os.environ.get(gateway_token_env_key, "").strip()
+    if not gateway_token:
+        raise ValueError(f"{gateway_token_env_key} is required to start engineering gateway")
+
+    _apply_env_overrides(
+        {
+            "DISCORD_BOT_TOKEN": gateway_token,
+            "DISCORD_APPLICATION_ID": "",
+            "DISCORD_DAILY_CHANNEL_ID": "",
+            "DISCORD_DAILY_CHANNEL_NAME": "",
+            "DISCORD_CHECKPOINT_CHANNEL_ID": "",
+            "DISCORD_CHECKPOINT_CHANNEL_NAME": "",
+            "DISCORD_DEBUG_CHANNEL_ID": "",
+            "DISCORD_DEBUG_CHANNEL_NAME": "",
+            "DISCORD_CONVERSATION_CHANNEL_ID": "",
+            "DISCORD_CONVERSATION_CHANNEL_NAME": "",
+            "DISCORD_CONVERSATION_REPLY_MODE": "disabled",
+            "DISCORD_NOTIFY_USER_ID": "",
+        }
+    )
     run_discord_bot(repo_root=Path(repo_root_str))
 
 
@@ -281,6 +331,11 @@ def _run_member_in_subprocess(profile: MemberBotProfile) -> None:  # pragma: no 
     from .member_bot import run_member_bot
 
     run_member_bot(profile)
+
+
+def _apply_env_overrides(overrides: Mapping[str, str]) -> None:
+    for key, value in overrides.items():
+        os.environ[key] = value
 
 
 def _resolve_repo_root() -> Path:
