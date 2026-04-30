@@ -68,6 +68,8 @@ from .research_pack import (
 ENV_AUTO_COLLECT_ENABLED = "ENGINEERING_RESEARCH_AUTO_COLLECT_ENABLED"
 ENV_PROVIDER = "ENGINEERING_RESEARCH_PROVIDER"
 ENV_MAX_RESULTS = "ENGINEERING_RESEARCH_MAX_RESULTS"
+ENV_MAX_PROVIDER_CALLS = "ENGINEERING_RESEARCH_MAX_PROVIDER_CALLS"
+ENV_MAX_RESULTS_PER_ROLE = "ENGINEERING_RESEARCH_MAX_RESULTS_PER_ROLE"
 
 ENV_TAVILY_API_KEY = "TAVILY_API_KEY"
 ENV_BRAVE_API_KEY = "BRAVE_SEARCH_API_KEY"
@@ -79,6 +81,12 @@ PROVIDER_BRAVE = "brave"
 KNOWN_PROVIDERS: Tuple[str, ...] = (PROVIDER_MOCK, PROVIDER_TAVILY, PROVIDER_BRAVE)
 
 DEFAULT_MAX_RESULTS = 5
+DEFAULT_MAX_PROVIDER_CALLS = 3
+DEFAULT_MAX_RESULTS_PER_ROLE = 5
+
+CONFIDENCE_HIGH = "high"
+CONFIDENCE_MEDIUM = "medium"
+CONFIDENCE_LOW = "low"
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,8 @@ class CollectorConfig:
     provider: str
     max_results: int
     api_key: Optional[str] = None
+    max_provider_calls: int = DEFAULT_MAX_PROVIDER_CALLS
+    max_results_per_role: int = DEFAULT_MAX_RESULTS_PER_ROLE
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "CollectorConfig":
@@ -106,6 +116,12 @@ class CollectorConfig:
             provider_raw = PROVIDER_MOCK
         max_results = _positive_int(
             env_map.get(ENV_MAX_RESULTS), default=DEFAULT_MAX_RESULTS
+        )
+        max_provider_calls = _positive_int(
+            env_map.get(ENV_MAX_PROVIDER_CALLS), default=DEFAULT_MAX_PROVIDER_CALLS
+        )
+        max_results_per_role = _positive_int(
+            env_map.get(ENV_MAX_RESULTS_PER_ROLE), default=DEFAULT_MAX_RESULTS_PER_ROLE
         )
 
         api_key: Optional[str] = None
@@ -119,6 +135,8 @@ class CollectorConfig:
             provider=provider_raw,
             max_results=max_results,
             api_key=api_key,
+            max_provider_calls=max_provider_calls,
+            max_results_per_role=max_results_per_role,
         )
 
 
@@ -143,6 +161,195 @@ def _strip_or_none(value: Optional[str]) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+# ---------------------------------------------------------------------------
+# GitHub URL parsing (network-free)
+# ---------------------------------------------------------------------------
+
+
+_GITHUB_ISSUE_RE = re.compile(
+    r"^https?://github\.com/(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+)/issues/(?P<number>\d+)",
+    re.IGNORECASE,
+)
+_GITHUB_PR_RE = re.compile(
+    r"^https?://github\.com/(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+)/pull/(?P<number>\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_github_url(url: Optional[str]) -> Optional[Mapping[str, Any]]:
+    """Extract ``{kind, owner, repo, number}`` from a GitHub issue/PR URL.
+
+    Returns ``None`` for any other URL (including repo root, commit, etc.)
+    so callers can fall through to generic classification.
+    """
+
+    if not url:
+        return None
+    text = str(url).strip()
+    issue_match = _GITHUB_ISSUE_RE.match(text)
+    if issue_match:
+        groups = issue_match.groupdict()
+        return {
+            "kind": "issue",
+            "owner": groups["owner"],
+            "repo": groups["repo"],
+            "number": int(groups["number"]),
+        }
+    pr_match = _GITHUB_PR_RE.match(text)
+    if pr_match:
+        groups = pr_match.groupdict()
+        return {
+            "kind": "pull_request",
+            "owner": groups["owner"],
+            "repo": groups["repo"],
+            "number": int(groups["number"]),
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Confidence scoring (deterministic)
+# ---------------------------------------------------------------------------
+
+
+def compute_confidence(
+    *,
+    source_type: SourceType,
+    role: str,
+    has_url: bool,
+    has_snippet: bool,
+    has_thumbnail: bool = False,
+    provider_score: Optional[float] = None,
+) -> str:
+    """Return ``"high"`` / ``"medium"`` / ``"low"`` from cheap signals.
+
+    Signals (additive):
+    - URL present → +1.
+    - Snippet/summary present → +1.
+    - Thumbnail present → +0.5 (rounded into ``score`` later).
+    - source_type matches role's research profile slot:
+      - rank 0  → +3 (prime)
+      - rank 1-2 → +2 (still preferred)
+      - rank 3+ → +1 (acceptable)
+    - High-trust source_type baseline:
+      - OFFICIAL_DOCS / GITHUB_ISSUE / GITHUB_PR → +2
+      - DESIGN_REFERENCE / IMAGE_REFERENCE / FILE_ATTACHMENT / CODE_CONTEXT → +1
+      - COMMUNITY_SIGNAL → 0
+      - WEB_RESULT / URL → -1 (generic, less trustworthy)
+    - provider_score in [0.0, 1.0] (Tavily/Brave): adds ``round(score * 2)``.
+
+    Cutoffs:
+    - score ≥ 5  → high
+    - score ≥ 3  → medium
+    - else       → low
+
+    Stays deterministic so unit tests can pin the label.
+    """
+
+    score = 0.0
+    if has_url:
+        score += 1
+    if has_snippet:
+        score += 1
+    if has_thumbnail:
+        score += 0.5
+
+    short = short_role(role)
+    profile = ROLE_RESEARCH_PROFILES.get(short, ())
+    type_value = (
+        source_type.value
+        if isinstance(source_type, SourceType)
+        else str(source_type)
+    )
+    if profile and type_value in profile:
+        rank = profile.index(type_value)
+        if rank == 0:
+            score += 3
+        elif rank <= 2:
+            score += 2
+        else:
+            score += 1
+
+    high_trust = {
+        SourceType.OFFICIAL_DOCS,
+        SourceType.GITHUB_ISSUE,
+        SourceType.GITHUB_PR,
+    }
+    medium_trust = {
+        SourceType.DESIGN_REFERENCE,
+        SourceType.IMAGE_REFERENCE,
+        SourceType.FILE_ATTACHMENT,
+        SourceType.CODE_CONTEXT,
+    }
+    if source_type in high_trust:
+        score += 2
+    elif source_type in medium_trust:
+        score += 1
+    elif source_type == SourceType.COMMUNITY_SIGNAL:
+        pass
+    elif source_type in {SourceType.WEB_RESULT, SourceType.URL}:
+        score -= 1
+
+    if provider_score is not None:
+        try:
+            normalized = max(0.0, min(1.0, float(provider_score)))
+            score += round(normalized * 2)
+        except (TypeError, ValueError):
+            pass
+
+    if score >= 5:
+        return CONFIDENCE_HIGH
+    if score >= 3:
+        return CONFIDENCE_MEDIUM
+    return CONFIDENCE_LOW
+
+
+# ---------------------------------------------------------------------------
+# Budget guard (per collection run)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BudgetTracker:
+    """Per-run guard for provider calls and result count.
+
+    Mutable on purpose so the same instance can be threaded through one
+    ``collect_research_pack`` call. ``can_call()`` reports whether the
+    next provider invocation is allowed; ``record_call()`` increments
+    the counter; ``trim_results(results)`` slices to the per-role cap.
+    """
+
+    max_provider_calls: int = DEFAULT_MAX_PROVIDER_CALLS
+    max_results_per_role: int = DEFAULT_MAX_RESULTS_PER_ROLE
+    calls_made: int = 0
+    truncated: bool = False
+
+    def can_call(self) -> bool:
+        return self.calls_made < self.max_provider_calls
+
+    def record_call(self) -> None:
+        self.calls_made += 1
+
+    def trim_results(self, results: Sequence[ResearchSource]) -> Tuple[ResearchSource, ...]:
+        if len(results) > self.max_results_per_role:
+            self.truncated = True
+            return tuple(results[: self.max_results_per_role])
+        return tuple(results)
+
+    def limit_note(self) -> Optional[str]:
+        if self.calls_made >= self.max_provider_calls and self.calls_made > 0:
+            return (
+                f"provider call budget exhausted ({self.calls_made}/"
+                f"{self.max_provider_calls}); 추가 수집은 다음 turn에서 진행"
+            )
+        if self.truncated:
+            return (
+                f"수집 결과를 역할당 {self.max_results_per_role}건으로 잘랐습니다 — "
+                "필요하면 다음 turn에서 더 깊이 봅니다"
+            )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -464,13 +671,24 @@ class MockSearchCollector(ResearchCollector):
                     description="thumbnail (metadata only — 이미지 원본 저장 안 함)",
                 ),
             )
-        extra = {
+        gh_meta = parse_github_url(hit.url)
+        extra: dict[str, Any] = {
             "domain": hit.domain,
             "snippet": hit.snippet,
             "thumbnail_url": hit.thumbnail_url,
             "query": query.query,
             "provider": "mock",
         }
+        if gh_meta is not None:
+            extra["github"] = dict(gh_meta)
+        # Mock hits have curated metadata so we score with high signal.
+        confidence = compute_confidence(
+            source_type=hit.source_type,
+            role=query.role,
+            has_url=bool(hit.url),
+            has_snippet=bool(hit.snippet),
+            has_thumbnail=bool(hit.thumbnail_url),
+        )
         return ResearchSource(
             source_type=hit.source_type,
             source_url=hit.url,
@@ -480,7 +698,7 @@ class MockSearchCollector(ResearchCollector):
             why_relevant=hit.why_relevant,
             risk_or_limit=hit.risk_or_limit,
             collected_at=collected_at,
-            confidence="medium",
+            confidence=confidence,
             attachments=attachments,
             extra=extra,
         )
@@ -574,6 +792,73 @@ class BraveSearchCollector(ResearchCollector):
         )
 
 
+_TITLE_KEYS = ("title", "name", "headline", "heading")
+_URL_KEYS = ("url", "link", "href", "web_url")
+_SNIPPET_KEYS = ("snippet", "description", "content", "summary", "body", "excerpt")
+_THUMBNAIL_KEYS = ("thumbnail", "image", "image_url", "favicon", "thumb")
+_SCORE_KEYS = ("score", "relevance", "relevance_score", "confidence")
+
+
+def _first_string(item: Mapping[str, Any], keys: Sequence[str]) -> str:
+    """Return the first non-empty string under any of *keys* (or empty)."""
+
+    for key in keys:
+        value = item.get(key) if isinstance(item, Mapping) else None
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_thumbnail(item: Mapping[str, Any]) -> Optional[str]:
+    """Robustly extract a thumbnail URL from various provider shapes.
+
+    Handles plain strings, ``{"src": ...}``, ``{"url": ...}``, and
+    ``[{"url": ...}, ...]`` lists. Returns ``None`` if nothing usable.
+    """
+
+    for key in _THUMBNAIL_KEYS:
+        value = item.get(key) if isinstance(item, Mapping) else None
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+        elif isinstance(value, Mapping):
+            for sub in ("src", "url", "href"):
+                sub_value = value.get(sub)
+                if isinstance(sub_value, str) and sub_value.strip():
+                    return sub_value.strip()
+        elif isinstance(value, (list, tuple)) and value:
+            for entry in value:
+                if isinstance(entry, str) and entry.strip():
+                    return entry.strip()
+                if isinstance(entry, Mapping):
+                    for sub in ("src", "url", "href"):
+                        sub_value = entry.get(sub)
+                        if isinstance(sub_value, str) and sub_value.strip():
+                            return sub_value.strip()
+    return None
+
+
+def _first_provider_score(item: Mapping[str, Any]) -> Optional[float]:
+    """Return a numeric provider score in [0, 1] when surfaced."""
+
+    for key in _SCORE_KEYS:
+        value = item.get(key) if isinstance(item, Mapping) else None
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _result_dict_to_source(
     item: Mapping[str, Any],
     *,
@@ -581,40 +866,67 @@ def _result_dict_to_source(
     collected_at: datetime,
     provider: str = "live",
 ) -> ResearchSource:
-    """Coerce a generic provider result into our :class:`ResearchSource` shape."""
+    """Coerce a generic provider result into our :class:`ResearchSource` shape.
 
-    title = str(item.get("title") or item.get("name") or "(untitled)")
-    url = str(item.get("url") or item.get("link") or "")
-    snippet = str(item.get("snippet") or item.get("description") or "")
-    thumbnail = item.get("thumbnail") or item.get("image") or item.get("favicon")
-    if isinstance(thumbnail, dict):
-        thumbnail = thumbnail.get("src") or thumbnail.get("url")
-    domain = extract_domain(url)
+    Defensive: tolerates field-name variations across providers, missing
+    fields, dict/list-shaped thumbnails, and unknown extra keys. Returns
+    a usable :class:`ResearchSource` even when most fields are absent —
+    a placeholder title (``"(untitled)"``) keeps the pack renderable.
+    """
+
+    if not isinstance(item, Mapping):
+        item = {}
+
+    title = _first_string(item, _TITLE_KEYS) or "(untitled)"
+    url = _first_string(item, _URL_KEYS)
+    snippet = _first_string(item, _SNIPPET_KEYS)
+    thumbnail = _first_thumbnail(item)
+    provider_score = _first_provider_score(item)
+    domain = extract_domain(url) if url else ""
+
     attachments: Tuple[ResearchAttachment, ...] = ()
-    if isinstance(thumbnail, str) and thumbnail.strip():
+    if thumbnail:
         attachments = (
             ResearchAttachment(
                 kind="image",
-                url=thumbnail.strip(),
-                description="thumbnail (metadata only)",
+                url=thumbnail,
+                description="thumbnail (metadata only — 이미지 원본 저장 안 함)",
             ),
         )
-    extra = {
+
+    source_type = _classify_remote_source_type(domain, query.role, url=url or None)
+    gh_meta = parse_github_url(url) if url else None
+
+    extra: dict[str, Any] = {
         "domain": domain,
-        "snippet": snippet,
-        "thumbnail_url": thumbnail if isinstance(thumbnail, str) else None,
+        "snippet": snippet or None,
+        "thumbnail_url": thumbnail,
         "query": query.query,
         "provider": provider,
     }
+    if provider_score is not None:
+        extra["provider_score"] = provider_score
+    if gh_meta is not None:
+        extra["github"] = dict(gh_meta)
+
+    confidence = compute_confidence(
+        source_type=source_type,
+        role=query.role,
+        has_url=bool(url),
+        has_snippet=bool(snippet),
+        has_thumbnail=bool(thumbnail),
+        provider_score=provider_score,
+    )
+
     return ResearchSource(
-        source_type=_classify_remote_source_type(domain, query.role),
+        source_type=source_type,
         source_url=url or None,
         title=title,
         summary=snippet or None,
         collected_by_role=query.role,
         why_relevant=None,
         collected_at=collected_at,
-        confidence="medium",
+        confidence=confidence,
         attachments=attachments,
         extra=extra,
     )
@@ -652,8 +964,26 @@ _OFFICIAL_HINTS = (
 )
 
 
-def _classify_remote_source_type(domain: str, role: str) -> SourceType:
-    """Best-effort source_type based on domain only (no fetch)."""
+def _classify_remote_source_type(
+    domain: str,
+    role: str,
+    *,
+    url: Optional[str] = None,
+) -> SourceType:
+    """Best-effort source_type based on URL/domain only (no fetch).
+
+    GitHub issue/PR URLs are recognised explicitly; everything else falls
+    back to the domain-based heuristic.
+    """
+
+    if url:
+        gh = parse_github_url(url)
+        if gh is not None:
+            return (
+                SourceType.GITHUB_ISSUE
+                if gh["kind"] == "issue"
+                else SourceType.GITHUB_PR
+            )
 
     short = (domain or "").lower()
     if any(d in short for d in _DESIGN_DOMAINS):
@@ -661,8 +991,8 @@ def _classify_remote_source_type(domain: str, role: str) -> SourceType:
     if any(d in short for d in _OFFICIAL_HINTS):
         return SourceType.OFFICIAL_DOCS
     if "github.com" in short:
-        # We can't tell issue vs PR vs repo from the URL alone; default
-        # to OFFICIAL_DOCS so the role profile rankings still surface it.
+        # repo root / commit / wiki / etc — surface as official_docs so the
+        # role profile still ranks it ahead of generic web results.
         return SourceType.OFFICIAL_DOCS
     if "reddit.com" in short or "forum" in short or "stackoverflow.com" in short:
         return SourceType.COMMUNITY_SIGNAL
@@ -734,6 +1064,7 @@ def collect_research_pack(
     session_id: Optional[str] = None,
     max_results: int = DEFAULT_MAX_RESULTS,
     extra_keywords: Sequence[str] = (),
+    budget: Optional[BudgetTracker] = None,
 ) -> ResearchPack:
     """Run one collection pass and assemble a :class:`ResearchPack`.
 
@@ -763,20 +1094,36 @@ def collect_research_pack(
         cleaned = (url or "").strip()
         if not cleaned:
             continue
+        gh_meta = parse_github_url(cleaned)
+        # GitHub issue/PR URL은 user-provided이더라도 정확한 source_type으로 분류.
+        if gh_meta is not None:
+            user_source_type = (
+                SourceType.GITHUB_ISSUE
+                if gh_meta["kind"] == "issue"
+                else SourceType.GITHUB_PR
+            )
+            extra: dict[str, Any] = {
+                "domain": extract_domain(cleaned),
+                "query": "<user-provided>",
+                "github": dict(gh_meta),
+            }
+        else:
+            user_source_type = SourceType.URL
+            extra = {
+                "domain": extract_domain(cleaned),
+                "query": "<user-provided>",
+            }
         sources.append(
             ResearchSource(
-                source_type=SourceType.URL,
+                source_type=user_source_type,
                 source_url=cleaned,
                 title=cleaned,
                 summary=None,
                 collected_by_role=role,
                 why_relevant="사용자 제공 링크 — 1순위 reference",
-                confidence="high",
+                confidence=CONFIDENCE_HIGH,
                 collected_at=datetime.utcnow(),
-                extra={
-                    "domain": extract_domain(cleaned),
-                    "query": "<user-provided>",
-                },
+                extra=extra,
             )
         )
 
@@ -802,13 +1149,17 @@ def collect_research_pack(
             )
         )
 
+    if budget is None:
+        budget = BudgetTracker()
+
     query = build_query_for_role(
         role=role,
         prompt=prompt,
         task_type=task_type,
         extra_keywords=extra_keywords,
     )
-    if query:
+    if query and budget.can_call():
+        budget.record_call()
         try:
             web_hits = collector.search(
                 CollectorQuery(
@@ -820,14 +1171,24 @@ def collect_research_pack(
             )
         except CollectorError:
             web_hits = ()
-        # Order role-preferred source_type buckets first, then the rest.
+        except Exception:  # noqa: BLE001 - never crash the conversation flow
+            web_hits = ()
+        # Order role-preferred source_type buckets first, then the rest,
+        # then trim to the per-role budget.
         ranked = _rank_sources_for_role(web_hits, role=role)
+        ranked = budget.trim_results(ranked)
         sources.extend(ranked)
+
+    pack_extra: dict[str, Any] = {}
+    limit_note = budget.limit_note()
+    if limit_note:
+        pack_extra["budget_note"] = limit_note
 
     return pack_from_request(
         request=request,
         sources=tuple(sources),
         tags=("auto-collected",) if any(s.extra.get("provider") for s in sources if s.extra) else (),
+        extra=pack_extra,
     )
 
 
@@ -905,6 +1266,10 @@ def auto_collect_or_request_more_input(
     chosen = collector or build_collector(cfg)
     user_supplied = bool(user_links) or bool(user_attachments)
 
+    budget = BudgetTracker(
+        max_provider_calls=cfg.max_provider_calls,
+        max_results_per_role=cfg.max_results_per_role,
+    )
     pack = collect_research_pack(
         collector=chosen,
         role=role,
@@ -915,6 +1280,7 @@ def auto_collect_or_request_more_input(
         session_id=session_id,
         request_id=request_id,
         max_results=cfg.max_results,
+        budget=budget,
     )
 
     # Count sources stamped by *some* provider (mock/tavily/brave/live).
@@ -985,23 +1351,51 @@ def format_collection_summary(
     collector_name: str,
     query: str,
     role: str,
+    next_steps: Sequence[str] = (),
 ) -> str:
-    """Produce a Markdown summary block surfacing why_relevant per source.
+    """Produce a Markdown summary block surfacing the collection result.
 
-    Designed to be appended inside ``format_research_post_body`` so the
-    forum thread carries 수집 출처 / 요약 / 역할별 활용 가능성 in one block.
+    Layout (designed to drop into ``format_research_post_body``):
+
+    - 수집 주제 (request topic / role / query)
+    - 수집된 출처 목록 (per-source provenance + source_type + domain)
+    - 역할별 활용 가능성 (why_relevant)
+    - 수집 한계 (risk_or_limit + budget note)
+    - 다음 토의 단계 (deliberation 진입 안내)
     """
 
-    lines: list[str] = [
-        f"**1차 자료 수집 — {short_role(role)}**",
-        f"- collector: `{collector_name}` · query: `{query or '(empty)'}` · 자료 {len(pack.sources)}건",
-    ]
+    short = short_role(role)
+    request_topic = (
+        getattr(pack.request, "topic", None) if pack.request is not None else None
+    ) or pack.title
+
+    lines: list[str] = []
+
+    # 수집 주제
+    lines.append(f"**1차 자료 수집 — {short}**")
+    lines.append(f"- 수집 주제: {request_topic}")
+    lines.append(
+        f"- collector: `{collector_name}` · query: `{query or '(empty)'}` · 자료 {len(pack.sources)}건"
+    )
+
+    # 수집된 출처 목록 + 역할별 활용 가능성
+    body_count = 0
+    risks: list[str] = []
+    lines.append("")
+    lines.append("**수집된 출처**")
     for source in pack.sources:
         if source.source_type == SourceType.USER_MESSAGE:
             continue
+        body_count += 1
         domain = (source.extra or {}).get("domain") or extract_domain(source.source_url)
         title = source.title or "(no title)"
-        bits = [f"- **{title}** [{(source.source_type.value if isinstance(source.source_type, SourceType) else str(source.source_type))}]"]
+        type_value = (
+            source.source_type.value
+            if isinstance(source.source_type, SourceType)
+            else str(source.source_type)
+        )
+        confidence_label = (source.confidence or "medium").lower()
+        bits = [f"- **{title}** [{type_value} · {confidence_label}]"]
         if domain:
             bits.append(f" · `{domain}`")
         if source.source_url:
@@ -1010,7 +1404,33 @@ def format_collection_summary(
         if source.why_relevant:
             lines.append(f"  ↪ 활용 가능성: {source.why_relevant}")
         if source.risk_or_limit:
-            lines.append(f"  ⚠ 한계/리스크: {source.risk_or_limit}")
+            risks.append(f"{title}: {source.risk_or_limit}")
+    if body_count == 0:
+        lines.append("- (수집된 외부 자료 없음 — 사용자에게 자료를 요청하거나 다른 query로 재시도)")
+
+    # 수집 한계
+    budget_note = (pack.extra or {}).get("budget_note") if pack.extra else None
+    if risks or budget_note:
+        lines.append("")
+        lines.append("**수집 한계**")
+        for risk in risks:
+            lines.append(f"- ⚠ {risk}")
+        if budget_note:
+            lines.append(f"- ⚠ {budget_note}")
+
+    # 다음 토의 단계
+    lines.append("")
+    lines.append("**다음 토의 단계**")
+    if next_steps:
+        for step in next_steps:
+            lines.append(f"- {step}")
+    elif body_count > 0:
+        lines.append(
+            "- 위 자료를 바탕으로 역할별 deliberation 진행 → tech-lead synthesis로 합의안 도출"
+        )
+    else:
+        lines.append("- 사용자에게 추가 자료 요청 후 재수집 시도")
+
     return "\n".join(lines)
 
 

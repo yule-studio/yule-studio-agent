@@ -11,14 +11,22 @@ except ModuleNotFoundError:
 
 from yule_orchestrator.agents.research_collector import (
     BraveSearchCollector,
+    BudgetTracker,
     CollectionMode,
     CollectionOutcome,
     CollectorConfig,
     CollectorQuery,
+    CONFIDENCE_HIGH,
+    CONFIDENCE_LOW,
+    CONFIDENCE_MEDIUM,
+    DEFAULT_MAX_PROVIDER_CALLS,
     DEFAULT_MAX_RESULTS,
+    DEFAULT_MAX_RESULTS_PER_ROLE,
     ENV_AUTO_COLLECT_ENABLED,
     ENV_BRAVE_API_KEY,
+    ENV_MAX_PROVIDER_CALLS,
     ENV_MAX_RESULTS,
+    ENV_MAX_RESULTS_PER_ROLE,
     ENV_PROVIDER,
     ENV_TAVILY_API_KEY,
     MockSearchCollector,
@@ -29,12 +37,15 @@ from yule_orchestrator.agents.research_collector import (
     ProviderUnavailable,
     ResearchCollector,
     TavilySearchCollector,
+    _result_dict_to_source,
     auto_collect_or_request_more_input,
     build_collector,
     build_query_for_role,
     collect_research_pack,
+    compute_confidence,
     extract_domain,
     format_collection_summary,
+    parse_github_url,
     short_role,
 )
 from yule_orchestrator.agents.research_pack import (
@@ -523,6 +534,369 @@ class ShortRoleTestCase(unittest.TestCase):
 
     def test_returns_unchanged_when_no_slash(self) -> None:
         self.assertEqual(short_role("tech-lead"), "tech-lead")
+
+
+# ---------------------------------------------------------------------------
+# GitHub URL parsing
+# ---------------------------------------------------------------------------
+
+
+class ParseGithubUrlTestCase(unittest.TestCase):
+    def test_recognises_issue_url(self) -> None:
+        meta = parse_github_url("https://github.com/yule-studio/yule-studio-agent/issues/42")
+        self.assertEqual(meta, {
+            "kind": "issue",
+            "owner": "yule-studio",
+            "repo": "yule-studio-agent",
+            "number": 42,
+        })
+
+    def test_recognises_pr_url(self) -> None:
+        meta = parse_github_url("https://github.com/owner/repo/pull/7")
+        self.assertEqual(meta["kind"], "pull_request")
+        self.assertEqual(meta["number"], 7)
+
+    def test_returns_none_for_repo_root(self) -> None:
+        self.assertIsNone(parse_github_url("https://github.com/owner/repo"))
+
+    def test_returns_none_for_commit_url(self) -> None:
+        self.assertIsNone(parse_github_url("https://github.com/owner/repo/commit/abc123"))
+
+    def test_handles_blank_input(self) -> None:
+        self.assertIsNone(parse_github_url(None))
+        self.assertIsNone(parse_github_url(""))
+
+    def test_collect_research_pack_user_link_classifies_github_issue(self) -> None:
+        pack = collect_research_pack(
+            collector=NoOpCollector(),
+            role="engineering-agent/qa-engineer",
+            prompt="이슈 점검",
+            user_links=("https://github.com/owner/repo/issues/9",),
+        )
+        gh_sources = [
+            s for s in pack.sources
+            if s.source_type.value == "github_issue"
+        ]
+        self.assertEqual(len(gh_sources), 1)
+        self.assertEqual(gh_sources[0].extra["github"]["number"], 9)
+
+
+# ---------------------------------------------------------------------------
+# Confidence scoring
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceTestCase(unittest.TestCase):
+    def test_official_docs_for_backend_is_high(self) -> None:
+        from yule_orchestrator.agents.research_pack import SourceType
+        self.assertEqual(
+            compute_confidence(
+                source_type=SourceType.OFFICIAL_DOCS,
+                role="engineering-agent/backend-engineer",
+                has_url=True,
+                has_snippet=True,
+            ),
+            CONFIDENCE_HIGH,
+        )
+
+    def test_design_reference_for_designer_is_medium_or_high(self) -> None:
+        from yule_orchestrator.agents.research_pack import SourceType
+        result = compute_confidence(
+            source_type=SourceType.DESIGN_REFERENCE,
+            role="engineering-agent/product-designer",
+            has_url=True,
+            has_snippet=True,
+            has_thumbnail=True,
+        )
+        self.assertIn(result, {CONFIDENCE_HIGH, CONFIDENCE_MEDIUM})
+
+    def test_community_signal_without_match_is_low(self) -> None:
+        from yule_orchestrator.agents.research_pack import SourceType
+        # tech-lead profile doesn't include community_signal at high rank
+        result = compute_confidence(
+            source_type=SourceType.COMMUNITY_SIGNAL,
+            role="design-agent/illustrator",  # unknown profile
+            has_url=False,
+            has_snippet=False,
+        )
+        self.assertEqual(result, CONFIDENCE_LOW)
+
+    def test_web_result_baseline_is_low(self) -> None:
+        from yule_orchestrator.agents.research_pack import SourceType
+        result = compute_confidence(
+            source_type=SourceType.WEB_RESULT,
+            role="engineering-agent/tech-lead",
+            has_url=True,
+            has_snippet=False,
+        )
+        self.assertIn(result, {CONFIDENCE_LOW, CONFIDENCE_MEDIUM})
+
+    def test_provider_score_boosts_confidence(self) -> None:
+        from yule_orchestrator.agents.research_pack import SourceType
+        without = compute_confidence(
+            source_type=SourceType.WEB_RESULT,
+            role="engineering-agent/tech-lead",
+            has_url=True,
+            has_snippet=True,
+        )
+        with_score = compute_confidence(
+            source_type=SourceType.WEB_RESULT,
+            role="engineering-agent/tech-lead",
+            has_url=True,
+            has_snippet=True,
+            provider_score=1.0,
+        )
+        # Higher provider score should never reduce confidence.
+        labels = {CONFIDENCE_LOW: 0, CONFIDENCE_MEDIUM: 1, CONFIDENCE_HIGH: 2}
+        self.assertGreaterEqual(labels[with_score], labels[without])
+
+
+# ---------------------------------------------------------------------------
+# Defensive provider parsing
+# ---------------------------------------------------------------------------
+
+
+class ResultDictParsingTestCase(unittest.TestCase):
+    def _query(self) -> CollectorQuery:
+        return CollectorQuery(
+            query="hero",
+            role="engineering-agent/product-designer",
+            max_results=3,
+        )
+
+    def test_handles_missing_fields(self) -> None:
+        from datetime import datetime
+        source = _result_dict_to_source(
+            {},
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        # Always returns a usable source even when input is empty.
+        self.assertEqual(source.title, "(untitled)")
+        self.assertIsNone(source.source_url)
+
+    def test_picks_first_available_url_alias(self) -> None:
+        from datetime import datetime
+        source = _result_dict_to_source(
+            {"name": "Result", "href": "https://example.com/x", "content": "snippet body"},
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(source.title, "Result")
+        self.assertEqual(source.source_url, "https://example.com/x")
+        self.assertEqual(source.summary, "snippet body")
+
+    def test_thumbnail_dict_form_extracted(self) -> None:
+        from datetime import datetime
+        source = _result_dict_to_source(
+            {
+                "title": "X",
+                "url": "https://example.com",
+                "image": {"src": "https://cdn/x.png"},
+            },
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(len(source.attachments), 1)
+        self.assertEqual(source.attachments[0].url, "https://cdn/x.png")
+
+    def test_thumbnail_list_form_extracted(self) -> None:
+        from datetime import datetime
+        source = _result_dict_to_source(
+            {
+                "title": "X",
+                "url": "https://example.com",
+                "thumbnail": [
+                    {"url": "https://cdn/y.png"},
+                    "https://cdn/z.png",
+                ],
+            },
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(source.attachments[0].url, "https://cdn/y.png")
+
+    def test_unknown_fields_ignored(self) -> None:
+        from datetime import datetime
+        source = _result_dict_to_source(
+            {
+                "title": "X",
+                "url": "https://example.com",
+                "weird_field": {"nested": [1, 2, 3]},
+                "score": 0.7,
+            },
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(source.title, "X")
+        self.assertEqual(source.extra["provider_score"], 0.7)
+
+    def test_github_url_is_classified_correctly(self) -> None:
+        from datetime import datetime
+        from yule_orchestrator.agents.research_pack import SourceType
+        source = _result_dict_to_source(
+            {
+                "title": "Issue 42",
+                "url": "https://github.com/owner/repo/issues/42",
+                "snippet": "bug report",
+            },
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(source.source_type, SourceType.GITHUB_ISSUE)
+        self.assertEqual(source.extra["github"]["number"], 42)
+
+    def test_non_mapping_input_returns_placeholder(self) -> None:
+        from datetime import datetime
+        # A misbehaved provider could surface a string — defensive parsing
+        # should still return a usable source instead of crashing.
+        source = _result_dict_to_source(
+            "garbage",  # type: ignore[arg-type]
+            query=self._query(),
+            collected_at=datetime(2026, 4, 30),
+        )
+        self.assertEqual(source.title, "(untitled)")
+
+
+# ---------------------------------------------------------------------------
+# Budget tracker
+# ---------------------------------------------------------------------------
+
+
+class BudgetTrackerTestCase(unittest.TestCase):
+    def test_can_call_until_max_reached(self) -> None:
+        b = BudgetTracker(max_provider_calls=2, max_results_per_role=5)
+        self.assertTrue(b.can_call())
+        b.record_call()
+        self.assertTrue(b.can_call())
+        b.record_call()
+        self.assertFalse(b.can_call())
+
+    def test_trim_results_caps_to_per_role(self) -> None:
+        from yule_orchestrator.agents.research_pack import ResearchSource
+        b = BudgetTracker(max_provider_calls=3, max_results_per_role=2)
+        sources = [ResearchSource(source_url=f"https://x/{i}") for i in range(5)]
+        trimmed = b.trim_results(sources)
+        self.assertEqual(len(trimmed), 2)
+        self.assertTrue(b.truncated)
+
+    def test_limit_note_when_exhausted(self) -> None:
+        b = BudgetTracker(max_provider_calls=1, max_results_per_role=5)
+        b.record_call()
+        self.assertIn("budget", (b.limit_note() or "").lower())
+
+    def test_limit_note_when_only_truncated(self) -> None:
+        from yule_orchestrator.agents.research_pack import ResearchSource
+        b = BudgetTracker(max_provider_calls=3, max_results_per_role=1)
+        b.trim_results([ResearchSource(), ResearchSource()])
+        self.assertIn("잘랐", b.limit_note() or "")
+
+
+# ---------------------------------------------------------------------------
+# Budget integrated through collect_research_pack
+# ---------------------------------------------------------------------------
+
+
+class BudgetIntegrationTestCase(unittest.TestCase):
+    def test_per_role_cap_applied_to_pack(self) -> None:
+        budget = BudgetTracker(max_provider_calls=3, max_results_per_role=2)
+        pack = collect_research_pack(
+            collector=MockSearchCollector(),
+            role="engineering-agent/product-designer",
+            prompt="hero",
+            max_results=5,
+            budget=budget,
+        )
+        non_user = [
+            s for s in pack.sources
+            if s.source_type.value != "user_message"
+        ]
+        self.assertLessEqual(len(non_user), 2)
+        self.assertIn("budget_note", pack.extra)
+
+    def test_zero_budget_blocks_collector(self) -> None:
+        budget = BudgetTracker(max_provider_calls=0, max_results_per_role=5)
+        pack = collect_research_pack(
+            collector=MockSearchCollector(),
+            role="engineering-agent/product-designer",
+            prompt="hero",
+            budget=budget,
+        )
+        non_user = [
+            s for s in pack.sources
+            if s.source_type.value != "user_message"
+        ]
+        self.assertEqual(non_user, [])
+
+    def test_collector_config_env_picks_up_new_keys(self) -> None:
+        env = {
+            ENV_AUTO_COLLECT_ENABLED: "true",
+            ENV_MAX_PROVIDER_CALLS: "2",
+            ENV_MAX_RESULTS_PER_ROLE: "1",
+        }
+        with patch.dict(os.environ, _env(**env), clear=True):
+            cfg = CollectorConfig.from_env()
+        self.assertEqual(cfg.max_provider_calls, 2)
+        self.assertEqual(cfg.max_results_per_role, 1)
+
+
+# ---------------------------------------------------------------------------
+# Updated forum summary surfaces all required sections
+# ---------------------------------------------------------------------------
+
+
+class FormatCollectionSummarySectionsTestCase(unittest.TestCase):
+    def test_summary_contains_required_sections(self) -> None:
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero",
+            task_type="landing-page",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        summary = format_collection_summary(
+            outcome.pack,
+            collector_name=outcome.collector_name,
+            query=outcome.query,
+            role="engineering-agent/product-designer",
+        )
+        # 5 required sections per spec
+        self.assertIn("수집 주제:", summary)
+        self.assertIn("**수집된 출처**", summary)
+        self.assertIn("활용 가능성", summary)
+        self.assertIn("**다음 토의 단계**", summary)
+        # 한계 section appears only when there are risks/budget — confirm it shows
+        # for designer mock (Notefolio entry has risk_or_limit) OR budget note.
+        # Either condition should satisfy.
+        if "**수집 한계**" not in summary:
+            self.assertIn("budget_note", outcome.pack.extra)
+
+    def test_summary_includes_explicit_next_steps(self) -> None:
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        summary = format_collection_summary(
+            outcome.pack,
+            collector_name=outcome.collector_name,
+            query=outcome.query,
+            role="engineering-agent/product-designer",
+            next_steps=("backend 검토", "frontend 검토"),
+        )
+        self.assertIn("- backend 검토", summary)
+        self.assertIn("- frontend 검토", summary)
 
 
 if __name__ == "__main__":
