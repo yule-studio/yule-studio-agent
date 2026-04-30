@@ -367,5 +367,146 @@ class PostAgentCommentTestCase(unittest.TestCase):
         self.assertIn("rate limit", outcome.error or "")
 
 
+# ---------------------------------------------------------------------------
+# Auto collection block in forum body
+# ---------------------------------------------------------------------------
+
+
+class CollectionBlockInForumBodyTestCase(unittest.TestCase):
+    def _make_outcome(self):
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+            auto_collect_or_request_more_input,
+        )
+
+        return auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero 정리",
+            task_type="landing-page",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+
+    def test_collection_block_appears_in_post_body(self) -> None:
+        outcome = self._make_outcome()
+        body = format_research_post_body(
+            outcome.pack,
+            posted_by="bot:designer",
+            collection_outcome=outcome,
+        )
+        self.assertIn("1차 자료 수집 — product-designer", body)
+        self.assertIn("**수집된 출처**", body)
+        self.assertIn("**다음 토의 단계**", body)
+
+    def test_block_omitted_when_no_outcome_passed(self) -> None:
+        outcome = self._make_outcome()
+        body = format_research_post_body(outcome.pack, posted_by="bot:designer")
+        self.assertNotIn("1차 자료 수집 —", body)
+
+    def test_explicit_next_steps_propagate(self) -> None:
+        outcome = self._make_outcome()
+        body = format_research_post_body(
+            outcome.pack,
+            collection_outcome=outcome,
+            collection_next_steps=("backend 영향 점검", "qa 회귀 시나리오"),
+        )
+        self.assertIn("- backend 영향 점검", body)
+        self.assertIn("- qa 회귀 시나리오", body)
+
+    def test_collection_role_overrides_pack_request_role(self) -> None:
+        outcome = self._make_outcome()
+        body = format_research_post_body(
+            outcome.pack,
+            collection_outcome=outcome,
+            collection_role="engineering-agent/qa-engineer",
+        )
+        self.assertIn("1차 자료 수집 — qa-engineer", body)
+
+
+class CollectionBlockInFallbackTestCase(unittest.TestCase):
+    def test_fallback_includes_collection_block(self) -> None:
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+            auto_collect_or_request_more_input,
+        )
+
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+        text = format_thread_markdown_fallback(
+            outcome.pack,
+            title=outcome.pack.title,
+            reason="forum 권한 없음",
+            collection_outcome=outcome,
+        )
+        self.assertIn("⚠️", text)
+        self.assertIn("1차 자료 수집 — product-designer", text)
+
+
+class CreateResearchPostCollectionTestCase(unittest.TestCase):
+    def test_collection_block_passes_through_to_thread_body(self) -> None:
+        import asyncio
+
+        from yule_orchestrator.agents.research_collector import (
+            CollectorConfig,
+            PROVIDER_MOCK,
+            auto_collect_or_request_more_input,
+        )
+        from yule_orchestrator.discord.research_forum import (
+            ResearchForumContext,
+            create_research_post,
+        )
+
+        outcome = auto_collect_or_request_more_input(
+            role="engineering-agent/product-designer",
+            prompt="새 hero",
+            config=CollectorConfig(
+                enabled=True,
+                provider=PROVIDER_MOCK,
+                max_results=2,
+                max_provider_calls=1,
+                max_results_per_role=2,
+            ),
+        )
+
+        captured: dict = {}
+
+        async def fake_thread_fn(*, channel_id, channel_name, name, content):
+            captured["content"] = content
+            return {"id": 100, "url": "https://discord.example/threads/100"}
+
+        async def runner():
+            return await create_research_post(
+                outcome.pack,
+                forum_context=ResearchForumContext(channel_id=999),
+                create_thread_fn=fake_thread_fn,
+                collection_outcome=outcome,
+            )
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(runner())
+        finally:
+            loop.close()
+
+        self.assertTrue(result.posted)
+        self.assertIn("1차 자료 수집", captured.get("content", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

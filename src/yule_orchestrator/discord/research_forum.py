@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, Iterable, Mapping, Optional
+from typing import Any, Awaitable, Iterable, Mapping, Optional, Sequence
 
 from ..agents.research_pack import ResearchAttachment, ResearchPack, ResearchSource
 
@@ -93,13 +93,35 @@ def format_research_post_body(
     pack: ResearchPack,
     *,
     posted_by: Optional[str] = None,
+    collection_outcome: Optional[Any] = None,
+    collection_role: Optional[str] = None,
+    collection_next_steps: Sequence[str] = (),
 ) -> str:
-    """Render a ResearchPack as the body of a forum thread."""
+    """Render a ResearchPack as the body of a forum thread.
+
+    When *collection_outcome* is provided (the result of
+    ``research_collector.auto_collect_or_request_more_input``), a
+    "1차 자료 수집 — <role>" block is appended at the top so the forum
+    thread surfaces the autonomous collection in the same body. The
+    block carries 수집 주제 / 출처 / 활용 가능성 / 한계 / 다음 토의 단계.
+    Falls back gracefully (no block) when the import or call fails.
+    """
 
     lines: list[str] = []
     if posted_by:
         lines.append(f"_posted by_ `{posted_by}`")
         lines.append("")
+
+    collection_block = _render_collection_block(
+        pack=pack,
+        outcome=collection_outcome,
+        role=collection_role,
+        next_steps=collection_next_steps,
+    )
+    if collection_block:
+        lines.append(collection_block)
+        lines.append("")
+
     if pack.summary:
         lines.append("**요약**")
         lines.append(pack.summary.strip())
@@ -132,6 +154,52 @@ def format_research_post_body(
             lines.append("**출처**")
             lines.append(provenance)
     return "\n".join(line for line in lines).strip()
+
+
+def _render_collection_block(
+    *,
+    pack: ResearchPack,
+    outcome: Optional[Any],
+    role: Optional[str],
+    next_steps: Sequence[str],
+) -> str:
+    """Wrap ``research_collector.format_collection_summary`` defensively.
+
+    Returns an empty string if the outcome is missing, unstructured, or if
+    the collector module itself can't be imported. The forum body should
+    never crash because the collector hook is unavailable.
+    """
+
+    if outcome is None:
+        return ""
+    try:
+        from ..agents.research_collector import format_collection_summary
+    except Exception:  # noqa: BLE001
+        return ""
+
+    target_role = (
+        role
+        or getattr(getattr(outcome, "pack", None), "request", None)
+        and getattr(outcome.pack.request, "role", None)
+    )
+    if not target_role and getattr(pack, "request", None) is not None:
+        target_role = getattr(pack.request, "role", None)
+    if not target_role:
+        target_role = "engineering-agent/tech-lead"
+
+    collector_name = getattr(outcome, "collector_name", "?")
+    query = getattr(outcome, "query", "") or ""
+
+    try:
+        return format_collection_summary(
+            pack,
+            collector_name=collector_name,
+            query=query,
+            role=target_role,
+            next_steps=next_steps,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def format_agent_comment(
@@ -197,18 +265,29 @@ def format_thread_markdown_fallback(
     title: Optional[str] = None,
     posted_by: Optional[str] = None,
     reason: Optional[str] = None,
+    collection_outcome: Optional[Any] = None,
+    collection_role: Optional[str] = None,
+    collection_next_steps: Sequence[str] = (),
 ) -> str:
     """Markdown blob for posting to a regular text channel when the
     forum endpoint is unavailable (no token / 403 / unconfigured).
 
     The shape mirrors a forum thread: H2 title, an optional warning
     line explaining why we're falling back, and the same body the
-    forum thread would have carried.  Callers can pipe this directly
-    into ``channel.send`` (split if it exceeds 2000 chars).
+    forum thread would have carried (including the autonomous
+    collection block when *collection_outcome* is present). Callers
+    can pipe this directly into ``channel.send`` (split if it exceeds
+    2000 chars).
     """
 
     final_title = normalize_thread_title(title or pack.title)
-    body = format_research_post_body(pack, posted_by=posted_by)
+    body = format_research_post_body(
+        pack,
+        posted_by=posted_by,
+        collection_outcome=collection_outcome,
+        collection_role=collection_role,
+        collection_next_steps=collection_next_steps,
+    )
     notice_bits = ["⚠️ 운영-리서치 forum 게시에 실패했습니다 — 일반 thread markdown fallback."]
     if reason and reason.strip():
         notice_bits.append(f"사유: {reason.strip()}")
@@ -265,6 +344,9 @@ async def create_research_post(
     create_thread_fn: CreateThreadFn,
     posted_by: Optional[str] = None,
     prefix: Optional[str] = None,
+    collection_outcome: Optional[Any] = None,
+    collection_role: Optional[str] = None,
+    collection_next_steps: Sequence[str] = (),
 ) -> ForumPostOutcome:
     """Compose title+body, hand them to *create_thread_fn*, return outcome.
 
@@ -272,10 +354,21 @@ async def create_research_post(
     tests can stub it. It is awaited with kwargs ``channel_id``, ``name``,
     ``content``, and is expected to return an object with ``id``/``url``
     or a Mapping-shaped result.
+
+    When *collection_outcome* is provided, the thread body includes the
+    autonomous collection summary block (수집 주제 / 출처 / 활용 가능성 /
+    한계 / 다음 토의 단계) at the top. *collection_role* defaults to the
+    pack's request role when present.
     """
 
     title = normalize_thread_title(pack.title, prefix=prefix)
-    body = format_research_post_body(pack, posted_by=posted_by)
+    body = format_research_post_body(
+        pack,
+        posted_by=posted_by,
+        collection_outcome=collection_outcome,
+        collection_role=collection_role,
+        collection_next_steps=collection_next_steps,
+    )
 
     if not forum_context.configured:
         reason = "forum channel not configured"
