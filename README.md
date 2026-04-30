@@ -223,6 +223,7 @@ DISCORD_GUILD_ID=
   - engineering-agent gateway는 `ENGINEERING_AGENT_BOT_GATEWAY_TOKEN`을 자기 토큰으로 들고 별도 프로세스로 기동되며, 자식 환경에서 `DISCORD_DAILY_*`/`DISCORD_CHECKPOINT_*`/`DISCORD_CONVERSATION_*`/`DISCORD_DEBUG_*`/`DISCORD_NOTIFY_USER_ID`를 비워 planning 채널 동작을 차단합니다 (`DISCORD_CONVERSATION_REPLY_MODE=disabled`).
   - 결과: 두 봇이 같은 메시지에 동시에 응답하지 않고, 서로 자기 채널만 본다는 약속이 강제됩니다. 자세한 분리 동작은 `policies/runtime/agents/engineering-agent/launcher.md`와 supervisor의 `BOT_RUNNER_ENGINEERING_GATEWAY` 분기 참조.
 - engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화되고, kickoff 메시지 끝에 `[team-turn:<session_id> tech-lead]` directive가 자동 부착되어 멤버 봇 chain이 시작될 수 있습니다.
+- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값입니다. 이 모드에서는 gateway가 `#운영-리서치` 포럼 post와 첫 `[research-turn:<session_id> tech-lead]` directive만 남기고, `tech-lead` / `ai-engineer` / `product-designer` / `backend-engineer` / `frontend-engineer` / `qa-engineer` 봇이 자기 계정으로 역할별 의견을 이어 씁니다. `gateway`로 바꾸면 멤버 봇 토큰이 없을 때처럼 gateway가 역할별 코멘트를 대리 게시하는 fallback 모드로 동작합니다. 값을 바꾼 뒤에는 `yule discord up` 프로세스를 재시작해야 합니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
 - 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.

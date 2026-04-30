@@ -95,4 +95,5 @@ summary: 2 active / 5 skipped
 - planning-bot과 engineering-agent gateway는 **다른 채널을 본다**. 같은 채널을 보면 두 봇이 동일 메시지에 응답하므로 분리 운영을 강제한다.
 - intake 채널 외 4종은 본 마일스톤에서 키 슬롯만 예약했다. 후속 운영 자동화가 들어올 때 본 표를 진실 소스로 사용한다.
 - 운영-리서치 forum은 engineering 전용이 아니라 부서 공통 inbox이므로 키 prefix가 `DISCORD_AGENT_RESEARCH_*`다. 게시 규약과 댓글 양식, Obsidian export contract는 `research-forum.md` 참조.
+- 운영-리서치 역할별 댓글은 `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE`가 제어한다. 기본 권장값 `member-bots`에서는 gateway가 첫 `[research-turn:...]` directive만 남기고 멤버 봇들이 자기 계정으로 이어 말한다. `gateway`로 두면 gateway가 모든 역할 코멘트를 대리 게시한다.
 - 채널 정의의 자세한 매트릭스는 `discord-workflow.md` §1.1을 참고한다.

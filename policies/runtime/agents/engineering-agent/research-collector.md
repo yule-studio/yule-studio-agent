@@ -33,6 +33,9 @@ CollectionOutcome
 | `ENGINEERING_RESEARCH_AUTO_COLLECT_ENABLED` | `false` | 자동 수집 on/off. opt-in이라 명시적으로 켜야 동작. |
 | `ENGINEERING_RESEARCH_PROVIDER` | `mock` | `mock` / `tavily` / `brave`. 알 수 없는 값은 `mock`으로 fallback. |
 | `ENGINEERING_RESEARCH_MAX_RESULTS` | `5` | provider에 요청할 최대 결과 수. 음수/비숫자는 기본값 사용. |
+| `ENGINEERING_RESEARCH_MAX_PROVIDER_CALLS` | 안전 기본값 | 한 번의 요청에서 provider 호출을 제한한다. 무한 호출/비용 폭주 방지용. |
+| `ENGINEERING_RESEARCH_MAX_RESULTS_PER_ROLE` | 안전 기본값 | 역할별로 사용할 수집 결과 수를 제한한다. 한 역할이 결과를 독점하지 않게 한다. |
+| `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE` | `member-bots` | `member-bots`면 gateway는 포스트와 첫 `[research-turn:...]`만 남기고 멤버 봇들이 자기 계정으로 댓글을 쓴다. `gateway`면 gateway가 역할별 코멘트를 대리 게시한다. |
 | `TAVILY_API_KEY` | (없음) | provider=tavily일 때 필요. 없으면 mock으로 silent fallback. |
 | `BRAVE_SEARCH_API_KEY` | (없음) | provider=brave일 때 필요. 없으면 mock으로 silent fallback. |
 
@@ -40,6 +43,7 @@ CollectionOutcome
 - truthy 값: `1` / `true` / `yes` / `on` (대소문자 무시).
 - API key는 `.env.local`에만 두고, 절대 출력/로깅하지 않는다.
 - `enabled=False`일 때는 어떤 provider 호출도 일어나지 않는다 — `NoOpCollector`가 즉시 빈 튜플을 반환.
+- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE` 변경은 런타임 프로세스 시작 시 읽히므로, 값을 바꾼 뒤에는 `yule discord up`을 재시작한다.
 
 ## 3. 메타데이터-only 수집 원칙
 

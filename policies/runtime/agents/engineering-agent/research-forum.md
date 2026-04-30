@@ -1,6 +1,6 @@
 # Agent Research Forum (`#운영-리서치`) — v0
 
-이 문서는 **Discord Forum 채널 `#운영-리서치`** 를 부서 에이전트의 연구·심의(deliberation) inbox로 운영하기 위한 정책 기준선이다. 본 마일스톤은 **운영 규약과 데이터 구조만** 정의하며, 실제 게시/댓글 자동화와 Obsidian export 구현은 후속 이슈에서 다룬다.
+이 문서는 **Discord Forum 채널 `#운영-리서치`** 를 부서 에이전트의 연구·심의(deliberation) inbox로 운영하기 위한 정책 기준선이다. 현재 MVP에서는 forum post 생성, collection summary 게시, 역할별 research-turn chain까지 런타임에 연결되어 있다. Obsidian export는 여전히 문자열/계약까지만 다루며 실제 vault 저장은 후속 단계에서 다룬다.
 
 ## 1. 포럼이 하는 일
 
@@ -19,12 +19,15 @@
 
 | 키 | 런타임 | 용도 |
 |---|---|---|
-| `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID` | 예약 (본 단계 미연결) | Forum 채널 ID. 런타임 일치 우선. |
-| `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | 예약 (본 단계 미연결) | 채널 이름 fallback (기본 `운영-리서치`). |
+| `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID` | 활성 | Forum 채널 ID. 런타임 일치 우선. |
+| `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | 활성 | 채널 이름 fallback (기본 `운영-리서치`). |
+| `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE` | 활성 | `member-bots` 또는 `gateway`. 역할별 댓글을 누가 게시할지 결정한다. |
 
 규약
 - ID/NAME 중 하나만 매치되어도 라우팅이 동작하도록 후속 코드는 매트릭스(`discord-workflow.md` §1.1)와 동일한 패턴을 따른다.
-- 본 마일스톤에서 어떤 코드 경로도 위 키를 읽지 않는다. forum publisher가 들어올 때 본 키를 진실 소스로 사용한다.
+- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값이다. gateway는 포스트 생성과 첫 `[research-turn:<session_id> tech-lead]` directive만 남기고, 각 멤버 봇이 자기 계정으로 역할별 의견을 남긴다.
+- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=gateway`는 fallback 모드다. 멤버 봇 토큰이 없거나 member-bots chain을 잠시 끄고 싶을 때 gateway가 역할별 코멘트를 대리 게시한다.
+- 위 설정은 프로세스 시작 시 읽히므로 값을 바꾸면 `yule discord up`을 재시작한다.
 
 ## 3. Thread 제목 prefix
 
