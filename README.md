@@ -210,6 +210,13 @@ DISCORD_GUILD_ID=
 - `DISCORD_CONVERSATION_REPLY_MODE=disabled`로 두면 대화형 응답을 완전히 끌 수 있습니다.
 - 별도 대화 채널을 지정하지 않으면 `DISCORD_DAILY_CHANNEL_ID` 또는 `DISCORD_DAILY_CHANNEL_NAME`이 대화 채널 fallback 으로도 사용됩니다.
 - `DISCORD_DAILY_CHANNEL_ID`(또는 NAME)와 `DISCORD_CONVERSATION_CHANNEL_ID`(또는 NAME)를 **다르게** 설정하면 DAILY 채널은 자동 브리핑 전용 broadcast 채널로 잠기고, 사용자가 그곳에서 메시지를 보내거나 봇을 멘션해도 응답하지 않습니다. 채팅은 오직 CONVERSATION 채널에서만 이루어집니다. DAILY와 CONVERSATION을 같은 채널로 두거나 CONVERSATION을 비워 fallback으로 두면, 같은 채널 안에서 자동 브리핑과 채팅이 함께 이루어집니다.
+- engineering-agent는 planning-bot과 **다른 채널**을 사용합니다. 운영 표준 분담은 다음과 같습니다:
+  - `#일정-관리` (= `DISCORD_CONVERSATION_CHANNEL_*`) — planning 자유 대화.
+  - `#업무-접수` (= `DISCORD_ENGINEERING_INTAKE_CHANNEL_*`) — engineering 자유 대화 + 작업 접수. 런타임에서 직접 읽는 활성 키.
+  - `#승인-대기` (= `DISCORD_ENGINEERING_APPROVAL_CHANNEL_*`) — write 승인 UX. 현재 예약 슬롯.
+  - `#봇-상태` (= `DISCORD_ENGINEERING_STATUS_CHANNEL_*`) — 상태/오류/헬스체크. 현재 예약 슬롯.
+  - `#실험실` (= `DISCORD_ENGINEERING_LAB_CHANNEL_*`) — 워크플로/프롬프트 테스트. 현재 예약 슬롯.
+- intake 채널은 ID와 NAME 중 하나만 매치돼도 라우팅됩니다. 둘 다 비어 있으면 engineering 라우터가 비활성으로 떨어져 모든 메시지는 기존 planning 흐름으로 처리됩니다. 자세한 매트릭스는 `policies/runtime/agents/engineering-agent/discord-workflow.md` §1.1 참고.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
 - 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.

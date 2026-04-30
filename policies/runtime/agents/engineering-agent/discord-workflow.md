@@ -4,13 +4,30 @@
 
 ## 1. 접수 채널 규칙
 
-- **CONVERSATION 채널**에서만 접수한다. DAILY 채널은 broadcast 전용으로 잠겨 있다 (DAILY 채널 정책과 동일).
-- 슬래시 커맨드 `/engineer_intake` 사용을 권장한다.
+- **engineering 전용 `#업무-접수` 채널**에서 자유 발화 또는 `/engineer_intake` 슬래시 커맨드로 접수한다. planning conversation은 별도 채널(`#일정-관리` / 기존 CONVERSATION)에서 동작한다 — 두 흐름은 채널 단위로 분리한다.
+- DAILY 채널은 broadcast 전용으로 잠겨 있다 (DAILY 채널 정책과 동일).
+- 슬래시 커맨드 `/engineer_intake` 인자:
   - `prompt`: 자연어 작업 요청 (필수).
   - `task_type`: 명시 분류 (선택, 생략 시 키워드 분류).
   - `write_requested`: 코드/문서 쓰기 요청 여부.
 - 향후 멤버 봇 분리(Phase 2) 시 부서 게이트웨이 봇만 접수한다. 멤버 봇은 외부와 직접 대화하지 않는다 (engineering-agent CLAUDE.md 규약).
 - 작업 단위가 길어지면 게이트웨이가 thread를 만들어 진행 보고/완료 보고를 같은 thread에 묶는 운영을 권장한다 (thread 자동 생성은 후속 마일스톤).
+
+### 1.1 채널 환경변수 매트릭스
+
+운영자가 어느 키가 실제 런타임에 영향을 주고 어느 키가 후속 자동화용 예약인지 헷갈리지 않게 한곳에 정리한다.
+
+| 채널 | env 키 | 런타임 사용 | 용도 |
+|---|---|---|---|
+| `#업무-접수` | `DISCORD_ENGINEERING_INTAKE_CHANNEL_ID`, `DISCORD_ENGINEERING_INTAKE_CHANNEL_NAME` | **활성** — `engineering_channel_router.EngineeringRouteContext.from_env()`가 직접 읽는다 | 자유 대화 + 작업 접수. ID/NAME 중 하나만 매치돼도 라우팅된다. 둘 다 비어 있으면 라우터의 `configured`가 False로 떨어져 engineering 경로 자체가 비활성된다. |
+| `#승인-대기` | `DISCORD_ENGINEERING_APPROVAL_CHANNEL_ID`, `DISCORD_ENGINEERING_APPROVAL_CHANNEL_NAME` | **예약** — 런타임 미연결 | write 승인 UX 자동화(예: 접수 메시지 미러링, ✅ 반응 승인)에서 사용 예정. |
+| `#봇-상태` | `DISCORD_ENGINEERING_STATUS_CHANNEL_ID`, `DISCORD_ENGINEERING_STATUS_CHANNEL_NAME` | **예약** — 런타임 미연결 | 헬스체크/오류 알림/봇 가동 상태 broadcast 예정. |
+| `#실험실` | `DISCORD_ENGINEERING_LAB_CHANNEL_ID`, `DISCORD_ENGINEERING_LAB_CHANNEL_NAME` | **예약** — 런타임 미연결 | 신규 워크플로/프롬프트 실험용 sandbox. |
+
+규약
+- intake 채널 키는 ID/NAME 둘 다 같은 채널을 가리키는 게 권장이다. 한쪽만 채워도 라우팅은 동작하지만, 채널 ID가 바뀌었을 때 NAME fallback이 있으면 무중단 복구가 쉽다.
+- 예약 슬롯 키는 비워둬도 정상이다. 후속 마일스톤에서 키를 활성화하기 전까지 어떤 코드 경로도 이 키를 읽지 않는다.
+- planning 흐름의 `DISCORD_DAILY_CHANNEL_*` / `DISCORD_CHECKPOINT_CHANNEL_*` / `DISCORD_CONVERSATION_CHANNEL_*` 와는 키가 분리되어 있어 한쪽 변경이 다른 쪽 동작을 흔들지 않는다.
 
 ## 2. 승인 게이트
 
