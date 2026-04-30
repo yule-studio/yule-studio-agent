@@ -1032,6 +1032,144 @@ def pack_to_dict(pack: ResearchPack) -> dict:
     }
 
 
+def pack_from_dict(data: Mapping[str, Any]) -> ResearchPack:
+    """Reverse :func:`pack_to_dict` — best-effort reconstruction.
+
+    Used when a ResearchPack must survive a round-trip through
+    ``WorkflowSession.extra`` (JSON-serialised) so member bots can pick
+    up the same evidence that the gateway saw at collection time.
+
+    Missing/unknown fields fall back to safe defaults rather than
+    raising, so a pack persisted by an older version still loads.
+    """
+
+    if not isinstance(data, Mapping):
+        return ResearchPack(title="(untitled)")
+
+    request_data = data.get("request")
+    request: Optional[ResearchRequest] = None
+    if isinstance(request_data, Mapping):
+        request = ResearchRequest(
+            request_id=str(request_data.get("request_id") or _gen_id("req")),
+            topic=str(request_data.get("topic") or ""),
+            role=str(request_data.get("role") or ""),
+            session_id=_optional_str(request_data.get("session_id")),
+            context=dict(request_data.get("context") or {}),
+            created_at=_parse_iso_datetime(request_data.get("created_at")),
+        )
+
+    sources: list[ResearchSource] = []
+    for entry in data.get("sources") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        sources.append(_source_from_dict(entry))
+
+    findings: list[ResearchFinding] = []
+    for entry in data.get("findings") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        findings.append(
+            ResearchFinding(
+                finding_id=str(entry.get("finding_id") or _gen_id("find")),
+                title=str(entry.get("title") or ""),
+                summary=str(entry.get("summary") or ""),
+                role=str(entry.get("role") or ""),
+                supporting_source_ids=tuple(
+                    str(sid) for sid in (entry.get("supporting_source_ids") or ())
+                ),
+                confidence=str(entry.get("confidence") or "medium"),
+                risk_or_limit=_optional_str(entry.get("risk_or_limit")),
+                created_at=_parse_iso_datetime(entry.get("created_at")),
+            )
+        )
+
+    return ResearchPack(
+        title=str(data.get("title") or "(untitled)"),
+        summary=str(data.get("summary") or ""),
+        primary_url=_optional_str(data.get("primary_url")),
+        sources=tuple(sources),
+        tags=tuple(str(t) for t in (data.get("tags") or ())),
+        created_at=_parse_iso_datetime(data.get("created_at")),
+        extra=dict(data.get("extra") or {}),
+        request=request,
+        findings=tuple(findings),
+    )
+
+
+def _source_from_dict(entry: Mapping[str, Any]) -> ResearchSource:
+    raw_type = entry.get("source_type")
+    try:
+        source_type = (
+            SourceType(raw_type) if isinstance(raw_type, str) else SourceType.UNKNOWN
+        )
+    except ValueError:
+        source_type = SourceType.UNKNOWN
+
+    attachments: list[ResearchAttachment] = []
+    for att_entry in entry.get("attachments") or ():
+        if not isinstance(att_entry, Mapping):
+            continue
+        attachments.append(
+            ResearchAttachment(
+                kind=str(att_entry.get("kind") or "file"),
+                url=str(att_entry.get("url") or ""),
+                filename=_optional_str(att_entry.get("filename")),
+                content_type=_optional_str(att_entry.get("content_type")),
+                size_bytes=_coerce_int(att_entry.get("size_bytes")),
+                description=_optional_str(att_entry.get("description")),
+                attachment_id=_optional_str(att_entry.get("attachment_id")),
+            )
+        )
+
+    return ResearchSource(
+        source_url=_optional_str(entry.get("url") or entry.get("source_url")),
+        title=_optional_str(entry.get("title")),
+        summary=_optional_str(entry.get("summary")),
+        author_role=_optional_str(entry.get("author_role")),
+        channel_id=_coerce_int(entry.get("channel_id")),
+        thread_id=_coerce_int(entry.get("thread_id")),
+        message_id=_coerce_int(entry.get("message_id")),
+        posted_at=_parse_iso_datetime(entry.get("posted_at")),
+        attachments=tuple(attachments),
+        extra=dict(entry.get("extra") or {}),
+        source_type=source_type,
+        collected_by_role=_optional_str(entry.get("collected_by_role")),
+        why_relevant=_optional_str(entry.get("why_relevant")),
+        risk_or_limit=_optional_str(entry.get("risk_or_limit")),
+        collected_at=_parse_iso_datetime(entry.get("collected_at")),
+        confidence=_optional_str(entry.get("confidence")),
+        attachment_id=_optional_str(entry.get("attachment_id")),
+        source_id=_optional_str(entry.get("source_id")),
+    )
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def pack_to_markdown(pack: ResearchPack) -> str:
     """Render a pack to a human-friendly Markdown blob.
 

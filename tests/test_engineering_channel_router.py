@@ -991,6 +991,7 @@ class DefaultResearchLoopTestCase(unittest.TestCase):
                 thread_id=12345,
                 deliberation_runner=deliberation_runner,
                 post_to_thread=post_to_thread,
+                forum_comment_mode="gateway",
             )
         )
 
@@ -1018,6 +1019,7 @@ class DefaultResearchLoopTestCase(unittest.TestCase):
                 research_pack="<<pack>>",
                 thread_id=12345,
                 deliberation_runner=deliberation_runner,
+                forum_comment_mode="gateway",
             )
         )
         # Error surfaced but the call did not raise.
@@ -1072,6 +1074,290 @@ class CentralisedLabelTestCase(unittest.TestCase):
         # Unknown defaults to medium, never crashes
         self.assertEqual(pretty_confidence("超-high"), "신뢰도 보통")
         self.assertEqual(pretty_confidence(None), "신뢰도 보통")
+
+
+class ResearchTurnKickoffInForumTestCase(unittest.TestCase):
+    """member-bots mode posts only the kickoff directive into the forum thread."""
+
+    def test_member_bots_mode_posts_kickoff_directive_only(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            make_default_research_loop,
+        )
+        from yule_orchestrator.agents.workflow_state import (
+            WorkflowSession,
+            WorkflowState,
+        )
+        from datetime import datetime as _dt
+
+        session = WorkflowSession(
+            session_id="sess-9",
+            prompt="hero 정리",
+            task_type="landing-page",
+            state=WorkflowState.APPROVED,
+            created_at=_dt(2026, 4, 30),
+            updated_at=_dt(2026, 4, 30),
+            role_sequence=("tech-lead", "ai-engineer", "qa-engineer"),
+        )
+
+        async def forum_publisher(**_):
+            class _Outcome:
+                posted = True
+                thread_id = 7777
+                thread_url = None
+
+            return _Outcome()
+
+        forum_posts: list[tuple[int, str]] = []
+
+        async def post_to_forum_thread(thread_id, content):
+            forum_posts.append((thread_id, content))
+
+        async def post_to_thread(_thread_id, _content):  # pragma: no cover
+            raise AssertionError("gateway-mode deliberation must not run")
+
+        def deliberation_runner(*, session, research_pack):  # pragma: no cover
+            raise AssertionError("gateway-mode deliberation must not run")
+
+        report = _run(
+            make_default_research_loop(
+                session=session,
+                message_text="prompt",
+                attachments=(),
+                channel=None,
+                collection_outcome=_StubCollectionOutcome(),
+                research_pack="<<pack>>",
+                role_for_research="engineering-agent/tech-lead",
+                thread_id=12345,
+                forum_publisher=forum_publisher,
+                post_to_forum_thread=post_to_forum_thread,
+                post_to_thread=post_to_thread,
+                deliberation_runner=deliberation_runner,
+                forum_comment_mode="member-bots",
+            )
+        )
+
+        self.assertEqual(report.forum_thread_id, 7777)
+        self.assertEqual(len(forum_posts), 1)
+        thread_id, content = forum_posts[0]
+        self.assertEqual(thread_id, 7777)
+        # Gateway speaks like a facilitator, not a clerk
+        self.assertIn("자료 수집을 마쳤어요", content)
+        # And drops only the first directive — tech-lead is always first
+        self.assertIn("[research-turn:sess-9 tech-lead]", content)
+        # ai-engineer/qa-engineer/synthesis directives must NOT show up here
+        self.assertNotIn("ai-engineer]", content)
+        self.assertNotIn("qa-engineer]", content)
+        self.assertNotIn("tech-lead-synthesis]", content)
+        self.assertIsNone(report.error)
+
+
+class ResearchTurnProtocolTestCase(unittest.TestCase):
+    """Protocol-level tests live with the router suite so they run alongside
+    the wire-up they enable."""
+
+    def test_parse_marker_extracts_session_and_role(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            parse_research_dispatch_marker,
+        )
+
+        self.assertEqual(
+            parse_research_dispatch_marker("preamble [research-turn:abc123 ai-engineer] tail"),
+            ("abc123", "ai-engineer"),
+        )
+
+    def test_parse_marker_returns_none_when_missing(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            parse_research_dispatch_marker,
+        )
+
+        self.assertIsNone(parse_research_dispatch_marker("no marker here"))
+        # team-turn marker must not match research-turn parser
+        self.assertIsNone(
+            parse_research_dispatch_marker("[team-turn:abc qa-engineer]")
+        )
+
+    def test_dispatch_directive_format(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            research_dispatch_directive,
+        )
+
+        self.assertEqual(
+            research_dispatch_directive("xyz", "qa-engineer"),
+            "[research-turn:xyz qa-engineer]",
+        )
+
+    def test_role_sequence_normalises_session_role_sequence(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            deliberation_research_role_sequence,
+        )
+        from yule_orchestrator.agents.workflow_state import (
+            WorkflowSession,
+            WorkflowState,
+        )
+        from datetime import datetime as _dt
+
+        session = WorkflowSession(
+            session_id="x",
+            prompt="x",
+            task_type="x",
+            state=WorkflowState.APPROVED,
+            created_at=_dt(2026, 4, 30),
+            updated_at=_dt(2026, 4, 30),
+            role_sequence=(
+                "qa-engineer",  # would-be first role
+                "qa-engineer",  # duplicate
+                "engineering-agent/ai-engineer",  # full address normalises
+            ),
+        )
+        seq = deliberation_research_role_sequence(session)
+        # tech-lead is always inserted first regardless of session input
+        self.assertEqual(seq[0], "tech-lead")
+        # remaining slots come from session.role_sequence (deduped, short form)
+        self.assertIn("qa-engineer", seq)
+        self.assertIn("ai-engineer", seq)
+        self.assertEqual(len(set(seq)), len(seq))  # no duplicates
+
+    def test_role_sequence_default_when_session_blank(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            DEFAULT_RESEARCH_ROLE_SEQUENCE,
+            deliberation_research_role_sequence,
+        )
+        from yule_orchestrator.agents.workflow_state import (
+            WorkflowSession,
+            WorkflowState,
+        )
+        from datetime import datetime as _dt
+
+        session = WorkflowSession(
+            session_id="x",
+            prompt="x",
+            task_type="x",
+            state=WorkflowState.APPROVED,
+            created_at=_dt(2026, 4, 30),
+            updated_at=_dt(2026, 4, 30),
+            role_sequence=(),
+        )
+        seq = deliberation_research_role_sequence(session)
+        self.assertEqual(seq, DEFAULT_RESEARCH_ROLE_SEQUENCE)
+
+
+class HandleResearchTurnMessageTestCase(unittest.TestCase):
+    """Member bots only post when the marker targets their role."""
+
+    def _session(self):
+        from yule_orchestrator.agents.workflow_state import (
+            WorkflowSession,
+            WorkflowState,
+        )
+        from datetime import datetime as _dt
+
+        return WorkflowSession(
+            session_id="sess-1",
+            prompt="hero 정리",
+            task_type="landing-page",
+            state=WorkflowState.APPROVED,
+            created_at=_dt(2026, 4, 30),
+            updated_at=_dt(2026, 4, 30),
+            role_sequence=(
+                "tech-lead",
+                "ai-engineer",
+                "product-designer",
+                "backend-engineer",
+                "frontend-engineer",
+                "qa-engineer",
+            ),
+        )
+
+    def test_marker_for_other_role_returns_none(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="qa-engineer",
+            text="[research-turn:sess-1 ai-engineer]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNone(outcome)
+
+    def test_marker_for_own_role_renders_take_and_next_directive(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="ai-engineer",
+            text="[research-turn:sess-1 ai-engineer]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNotNone(outcome)
+        self.assertEqual(outcome.role, "ai-engineer")
+        # ai-engineer take rendered with the role's structured fields
+        self.assertIn("**[ai-engineer]**", outcome.message)
+        # Next directive points at the next role in the sequence
+        self.assertIn(
+            "[research-turn:sess-1 product-designer]", outcome.message
+        )
+        self.assertFalse(outcome.is_synthesis)
+
+    def test_last_role_emits_synthesis_directive(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="qa-engineer",
+            text="[research-turn:sess-1 qa-engineer]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNotNone(outcome)
+        # The last role hands off to the synthesis sentinel
+        self.assertIn(
+            "[research-turn:sess-1 tech-lead-synthesis]",
+            outcome.message,
+        )
+
+    def test_synthesis_marker_renders_synthesis_text(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="tech-lead-synthesis",
+            text="[research-turn:sess-1 tech-lead-synthesis]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNotNone(outcome)
+        self.assertTrue(outcome.is_synthesis)
+        # synthesis comment carries the closing summary, no further directive
+        self.assertIn("tech-lead 종합", outcome.message)
+        self.assertNotIn("[research-turn:", outcome.message)
+
+    def test_unknown_session_returns_none(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="ai-engineer",
+            text="[research-turn:nope ai-engineer]",
+            session_loader=lambda _sid: None,
+        )
+        self.assertIsNone(outcome)
+
+    def test_team_turn_marker_does_not_trigger_research_handler(self) -> None:
+        """Existing team-turn protocol must keep working untouched."""
+
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="ai-engineer",
+            text="[team-turn:sess-1 ai-engineer]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNone(outcome)
 
 
 if __name__ == "__main__":

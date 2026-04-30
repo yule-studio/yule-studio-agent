@@ -71,6 +71,32 @@ ENV_PROVIDER = "ENGINEERING_RESEARCH_PROVIDER"
 ENV_MAX_RESULTS = "ENGINEERING_RESEARCH_MAX_RESULTS"
 ENV_MAX_PROVIDER_CALLS = "ENGINEERING_RESEARCH_MAX_PROVIDER_CALLS"
 ENV_MAX_RESULTS_PER_ROLE = "ENGINEERING_RESEARCH_MAX_RESULTS_PER_ROLE"
+ENV_FORUM_COMMENT_MODE = "ENGINEERING_RESEARCH_FORUM_COMMENT_MODE"
+
+
+# Forum comment publishing modes:
+# - "member-bots" (default): gateway posts the forum thread + first
+#   research-turn directive, and each member bot adds its own role
+#   comment from its own account so the team feels real.
+# - "gateway": legacy fallback — gateway posts every role comment
+#   itself. Used during Phase 1 / when member bots aren't booted.
+FORUM_COMMENT_MODE_MEMBER_BOTS = "member-bots"
+FORUM_COMMENT_MODE_GATEWAY = "gateway"
+FORUM_COMMENT_MODES: Tuple[str, ...] = (
+    FORUM_COMMENT_MODE_MEMBER_BOTS,
+    FORUM_COMMENT_MODE_GATEWAY,
+)
+DEFAULT_FORUM_COMMENT_MODE = FORUM_COMMENT_MODE_MEMBER_BOTS
+
+
+def resolve_forum_comment_mode(env: Optional[Mapping[str, str]] = None) -> str:
+    """Return ``"member-bots"`` or ``"gateway"`` from env, with safe fallback."""
+
+    env_map: Mapping[str, str] = env if env is not None else os.environ
+    raw = (env_map.get(ENV_FORUM_COMMENT_MODE) or "").strip().lower()
+    if raw in FORUM_COMMENT_MODES:
+        return raw
+    return DEFAULT_FORUM_COMMENT_MODE
 
 ENV_TAVILY_API_KEY = "TAVILY_API_KEY"
 ENV_BRAVE_API_KEY = "BRAVE_SEARCH_API_KEY"

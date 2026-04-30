@@ -4,7 +4,9 @@ import sys
 
 from .config import DiscordBotConfig
 from .engineering_team_runtime import (
+    ResearchTurnOutcome,
     TeamTurnOutcome,
+    handle_research_turn_message,
     handle_team_turn_message,
 )
 from .member_bots import GATEWAY_ROLE_KEY, MemberBotProfile
@@ -56,14 +58,27 @@ def run_member_bot(profile: MemberBotProfile) -> None:
                 # never let the member-bot loop process gateway traffic.
                 return
 
-            outcome = handle_team_turn_message(
+            text = message.content or ""
+
+            # Research-turn (운영-리서치 forum thread) takes precedence
+            # because research markers and team markers can both land in
+            # threads the bot can see. We process whichever shows up.
+            research_outcome = handle_research_turn_message(
                 role=profile.role,
-                text=message.content or "",
+                text=text,
             )
-            if outcome is None:
+            if research_outcome is not None:
+                await _post_research_turn(message.channel, research_outcome)
                 return
 
-            await _post_team_turn(message.channel, outcome)
+            team_outcome = handle_team_turn_message(
+                role=profile.role,
+                text=text,
+            )
+            if team_outcome is None:
+                return
+
+            await _post_team_turn(message.channel, team_outcome)
 
     bot = MemberBot(command_prefix=commands.when_mentioned, intents=intents)
     print(
@@ -83,3 +98,14 @@ async def _post_team_turn(channel, outcome: TeamTurnOutcome) -> None:
     """
 
     await channel.send(outcome.full_post())
+
+
+async def _post_research_turn(channel, outcome: ResearchTurnOutcome) -> None:
+    """Send a research-forum turn comment into *channel*.
+
+    The render already embeds the next directive (``[research-turn:...]``)
+    when applicable, so each member bot's comment naturally hands off to
+    the next role bot without the gateway impersonating anyone.
+    """
+
+    await channel.send(outcome.message)

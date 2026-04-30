@@ -414,6 +414,8 @@ async def make_default_research_loop(
     forum_publisher: Optional[Callable[..., Awaitable[Any]]] = None,
     deliberation_runner: Optional[Callable[..., Any]] = None,
     post_to_thread: Optional[Callable[[int, str], Awaitable[None]]] = None,
+    forum_comment_mode: Optional[str] = None,
+    post_to_forum_thread: Optional[Callable[[int, str], Awaitable[None]]] = None,
 ) -> EngineeringResearchLoopReport:
     """Default plumbing that runs after intake + kickoff land.
 
@@ -421,10 +423,19 @@ async def make_default_research_loop(
        publish the collection summary to ``#운영-리서치``. The publisher
        is expected to return a value with ``.thread_id`` / ``.thread_url``
        / ``.error`` (e.g. :class:`ForumPostOutcome`).
-    2. If ``deliberation_runner`` is wired, run the deliberation loop
+    2. ``forum_comment_mode``:
+       - ``"member-bots"`` (default) — after the forum post lands, the
+         gateway posts only the first ``[research-turn:<sid> tech-lead]``
+         directive. Each member bot's ``on_message`` handler picks the
+         marker up and posts its own role comment from its own account.
+       - ``"gateway"`` (legacy) — gateway runs the whole deliberation
+         and pipes role takes back into the working thread (preserves
+         pre-multi-bot behaviour for tests/operators without member tokens).
+    3. If ``deliberation_runner`` is wired, run the deliberation loop
        with the research pack and post role takes + tech-lead synthesis
-       into the working thread (via ``post_to_thread``). Failures are
-       surfaced through the report's ``error`` field.
+       into the working thread (via ``post_to_thread``) — only in
+       ``gateway`` mode. ``member-bots`` mode skips this so member bots
+       can speak with their own personas.
 
     All hooks are optional — when ``None`` we simply skip that step. The
     function never raises so ``_run_research_loop_hook`` keeps the bot
@@ -439,6 +450,16 @@ async def make_default_research_loop(
     error: Optional[str] = None
 
     has_pack = research_pack is not None
+
+    # Resolve the forum comment mode lazily so callers can override for tests
+    # without depending on env state.
+    if forum_comment_mode is None:
+        try:
+            from ..agents.research_collector import resolve_forum_comment_mode
+        except Exception:  # noqa: BLE001
+            forum_comment_mode = "member-bots"
+        else:
+            forum_comment_mode = resolve_forum_comment_mode()
 
     # 1. Forum publish
     if has_pack and forum_publisher is not None:
@@ -465,13 +486,48 @@ async def make_default_research_loop(
                     + (f" — {fail_reason}." if fail_reason else ".")
                 )
 
-    # 2. Deliberation
-    if (
+        # member-bots mode: drop only the first research-turn directive into
+        # the freshly-created forum thread. Each member bot's on_message
+        # handler picks it up and posts its own comment from its own account.
+        if (
+            forum_comment_mode == "member-bots"
+            and posted
+            and forum_thread_id is not None
+            and post_to_forum_thread is not None
+            and session is not None
+        ):
+            try:
+                from .engineering_team_runtime import research_kickoff_directive
+            except Exception:  # noqa: BLE001
+                kickoff = None
+            else:
+                try:
+                    kickoff = research_kickoff_directive(session)
+                except Exception:  # noqa: BLE001
+                    kickoff = None
+            if kickoff:
+                kickoff_message = (
+                    "자료 수집을 마쳤어요. 이제 각 역할이 차례대로 자기 관점으로 검토합니다.\n\n"
+                    f"{kickoff}"
+                )
+                try:
+                    await post_to_forum_thread(forum_thread_id, kickoff_message)
+                except Exception as exc:  # noqa: BLE001
+                    error = (error + " · " if error else "") + (
+                        f"forum kickoff 게시 실패: {exc}"
+                    )
+
+    # 2. Deliberation in the working thread — gateway mode only.
+    # member-bots mode hands the deliberation to each member bot via the
+    # research-turn protocol, so the gateway does not impersonate them here.
+    should_run_gateway_deliberation = (
         has_pack
         and session is not None
         and thread_id is not None
         and deliberation_runner is not None
-    ):
+        and forum_comment_mode == "gateway"
+    )
+    if should_run_gateway_deliberation:
         try:
             deliberation_result = deliberation_runner(
                 session=session,

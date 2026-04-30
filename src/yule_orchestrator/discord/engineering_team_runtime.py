@@ -50,6 +50,32 @@ DISPATCH_MARKER_RE = re.compile(
     r"\[team-turn:(?P<sid>[A-Za-z0-9_\-]+)(?:\s+(?P<role>[A-Za-z0-9_\-]+))?\]"
 )
 
+RESEARCH_DISPATCH_MARKER_RE = re.compile(
+    r"\[research-turn:(?P<sid>[A-Za-z0-9_\-]+)(?:\s+(?P<role>[A-Za-z0-9_\-]+))?\]"
+)
+
+
+# Default ordering for the research-turn chain in the operations forum.
+# tech-lead opens, then ai-engineer brings the model/memory perspective,
+# then product-designer, backend-engineer, frontend-engineer, qa-engineer,
+# and finally tech-lead synthesises. ``deliberation_research_role_sequence``
+# normalises an arbitrary session.role_sequence against this ideal so
+# operators can override per-task without losing the synthesis bookend.
+DEFAULT_RESEARCH_ROLE_SEQUENCE: Tuple[str, ...] = (
+    "tech-lead",
+    "ai-engineer",
+    "product-designer",
+    "backend-engineer",
+    "frontend-engineer",
+    "qa-engineer",
+)
+
+
+# Sentinel that closes the research-turn chain and triggers the tech-lead
+# synthesis comment in the forum thread. The synthesis uses a regular
+# research-turn directive so the same handler dispatches it.
+RESEARCH_SYNTHESIS_ROLE = "tech-lead-synthesis"
+
 
 @dataclass(frozen=True)
 class TeamTurn:
@@ -330,6 +356,273 @@ def kickoff_directive(session: WorkflowSession) -> str:
 
     plan = build_turn_plan(session)
     return dispatch_directive(plan[0])
+
+
+# ---------------------------------------------------------------------------
+# Research-turn protocol (운영-리서치 forum)
+# ---------------------------------------------------------------------------
+
+
+def parse_research_dispatch_marker(
+    text: str,
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Parse ``[research-turn:<sid> <role>]`` (role optional) out of a message.
+
+    Returns ``(session_id, role_or_None)`` or ``None`` if no marker is
+    present. Mirrors :func:`parse_dispatch_marker` for the forum chain
+    so the working thread (team-turn) and the operations-research forum
+    (research-turn) stay independent — flipping one channel's policy
+    never disturbs the other.
+    """
+
+    match = RESEARCH_DISPATCH_MARKER_RE.search(text or "")
+    if not match:
+        return None
+    return match.group("sid"), match.group("role")
+
+
+def research_dispatch_directive(session_id: str, role: str) -> str:
+    """Marker that hands the next research turn to *role* in the forum thread."""
+
+    return f"[research-turn:{session_id} {role}]"
+
+
+def deliberation_research_role_sequence(
+    session: WorkflowSession,
+    *,
+    base: Optional[Sequence[str]] = None,
+) -> Tuple[str, ...]:
+    """Normalise the research-turn role sequence for a session.
+
+    Rules:
+    - ``tech-lead`` always opens the chain.
+    - The middle is taken from ``session.role_sequence`` when provided
+      (short role names — ``ai-engineer``/``product-designer``/...);
+      otherwise from :data:`DEFAULT_RESEARCH_ROLE_SEQUENCE`.
+    - Unknown roles pass through (so a future ``security-review`` turn
+      still lands in the chain even before its dataclass exists).
+    - Duplicates are dropped (first-seen wins).
+    - The returned tuple does **not** include the synthesis sentinel —
+      callers append :data:`RESEARCH_SYNTHESIS_ROLE` themselves when
+      they need it for the closing comment.
+    """
+
+    candidate: list[str] = ["tech-lead"]
+    requested = (
+        list(base)
+        if base is not None
+        else list(getattr(session, "role_sequence", ()) or DEFAULT_RESEARCH_ROLE_SEQUENCE)
+    )
+    for role in requested:
+        short = (role or "").split("/", 1)[-1]
+        short = short.strip()
+        if not short:
+            continue
+        if short in candidate:
+            continue
+        candidate.append(short)
+    return tuple(candidate)
+
+
+def research_kickoff_directive(session: WorkflowSession) -> str:
+    """Marker the gateway posts in the forum thread to start research turns.
+
+    Always targets the first role in :func:`deliberation_research_role_sequence`
+    (``tech-lead``). The session id is required so member bots can scope
+    each chain to a single workflow run.
+    """
+
+    sequence = deliberation_research_role_sequence(session)
+    return research_dispatch_directive(session.session_id, sequence[0])
+
+
+@dataclass(frozen=True)
+class ResearchTurnOutcome:
+    """What the bot for one role should post into the operations forum.
+
+    ``message`` contains the rendered role take. ``next_directive`` is
+    appended in the same comment so the next bot wakes up; ``None`` for
+    the last role before the synthesis sentinel kicks in.
+    """
+
+    role: str
+    session_id: str
+    message: str
+    next_directive: Optional[str]
+    is_synthesis: bool = False
+
+
+def handle_research_turn_message(
+    *,
+    role: str,
+    text: str,
+    session_loader: Optional[Callable[[str], Optional[WorkflowSession]]] = None,
+    pack_loader: Optional[Callable[[WorkflowSession], Any]] = None,
+) -> Optional[ResearchTurnOutcome]:
+    """Decide whether the bot for *role* should post in the research forum.
+
+    Parses ``[research-turn:<sid> <role>]`` out of *text*. If the marker
+    targets this role, loads the session, optionally restores the
+    :class:`ResearchPack` via *pack_loader*, runs the role's deliberation
+    take, renders it, and appends the next directive (or the tech-lead
+    synthesis marker when the role is last).
+
+    Returns ``None`` when the marker is missing, targets a different
+    role, the session can't be loaded, or any transient failure makes
+    the take unsafe to post — keeping the forum clean of half-baked
+    comments.
+    """
+
+    parsed = parse_research_dispatch_marker(text)
+    if parsed is None:
+        return None
+    session_id, target_role = parsed
+    if target_role is None:
+        # Unscoped marker — the gateway always emits a role-scoped one,
+        # but we tolerate missing role for ops "ping all" recovery.
+        target_role = role
+    if target_role != role:
+        return None
+
+    loader = session_loader or load_session
+    session = loader(session_id)
+    if session is None:
+        return None
+
+    sequence = deliberation_research_role_sequence(session)
+    if role == RESEARCH_SYNTHESIS_ROLE:
+        # tech-lead synthesis comment closes the chain. Re-use the
+        # existing ``synthesize_thread`` so the forum and working thread
+        # converge on the same wording.
+        research_pack = _maybe_load_pack(pack_loader, session)
+        accumulated = _replay_role_takes(session, sequence, research_pack)
+        _, synthesis_text = synthesize_thread(
+            session, accumulated, research_pack=research_pack
+        )
+        return ResearchTurnOutcome(
+            role=role,
+            session_id=session_id,
+            message=synthesis_text,
+            next_directive=None,
+            is_synthesis=True,
+        )
+
+    if role not in sequence:
+        return None
+
+    research_pack = _maybe_load_pack(pack_loader, session)
+    take, rendered = deliberation_role_turn(
+        session,
+        f"engineering-agent/{role}",
+        research_pack=research_pack,
+        previous_turns=_replay_role_takes_until(session, sequence, role, research_pack),
+    )
+
+    next_role = _next_research_role(sequence, role)
+    next_directive: Optional[str]
+    if next_role is None:
+        next_directive = research_dispatch_directive(
+            session_id, RESEARCH_SYNTHESIS_ROLE
+        )
+    else:
+        next_directive = research_dispatch_directive(session_id, next_role)
+
+    message = rendered
+    if next_directive:
+        message = f"{rendered}\n\n{next_directive}"
+    return ResearchTurnOutcome(
+        role=role,
+        session_id=session_id,
+        message=message,
+        next_directive=next_directive,
+        is_synthesis=False,
+    )
+
+
+def _next_research_role(sequence: Sequence[str], current: str) -> Optional[str]:
+    found = False
+    for role in sequence:
+        if found:
+            return role
+        if role == current:
+            found = True
+    return None
+
+
+def _maybe_load_pack(
+    pack_loader: Optional[Callable[[WorkflowSession], Any]],
+    session: WorkflowSession,
+) -> Any:
+    if pack_loader is None:
+        return _load_pack_from_session_extra(session)
+    try:
+        return pack_loader(session)
+    except Exception:  # noqa: BLE001 - never crash the chain
+        return _load_pack_from_session_extra(session)
+
+
+def _load_pack_from_session_extra(session: WorkflowSession) -> Any:
+    """Best-effort restore of a ResearchPack stored under session.extra.
+
+    The gateway persists the pack at collection time via
+    ``pack_to_dict`` under ``session.extra["research_pack"]``. We restore
+    it lazily here so the deliberation runs even when the original
+    in-memory pack went away (process restart, multi-bot shard, ...).
+    Falls back to ``None`` so deliberation runs deterministic templates.
+    """
+
+    extra = getattr(session, "extra", None) or {}
+    raw = extra.get("research_pack") if isinstance(extra, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        from ..agents.research_pack import pack_from_dict
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return pack_from_dict(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _replay_role_takes_until(
+    session: WorkflowSession,
+    sequence: Sequence[str],
+    target_role: str,
+    research_pack: Any,
+) -> Tuple[Any, ...]:
+    """Recreate prior turns deterministically so each role's take inherits
+    the same ``previous_turns`` context regardless of which bot is running."""
+
+    accumulated: list[Any] = []
+    for role in sequence:
+        if role == target_role:
+            break
+        take, _ = deliberation_role_turn(
+            session,
+            f"engineering-agent/{role}",
+            research_pack=research_pack,
+            previous_turns=tuple(accumulated),
+        )
+        accumulated.append(take)
+    return tuple(accumulated)
+
+
+def _replay_role_takes(
+    session: WorkflowSession,
+    sequence: Sequence[str],
+    research_pack: Any,
+) -> Tuple[Any, ...]:
+    accumulated: list[Any] = []
+    for role in sequence:
+        take, _ = deliberation_role_turn(
+            session,
+            f"engineering-agent/{role}",
+            research_pack=research_pack,
+            previous_turns=tuple(accumulated),
+        )
+        accumulated.append(take)
+    return tuple(accumulated)
 
 
 # ---------------------------------------------------------------------------

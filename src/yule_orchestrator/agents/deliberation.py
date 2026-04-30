@@ -122,6 +122,14 @@ ROLE_RESEARCH_PROFILES: Mapping[str, Tuple[str, ...]] = {
         SOURCE_TYPE_GITHUB_PR,
         SOURCE_TYPE_URL,
     ),
+    "ai-engineer": (
+        SOURCE_TYPE_OFFICIAL_DOCS,
+        SOURCE_TYPE_GITHUB_PR,
+        SOURCE_TYPE_CODE_CONTEXT,
+        SOURCE_TYPE_COMMUNITY_SIGNAL,
+        SOURCE_TYPE_WEB_RESULT,
+        SOURCE_TYPE_URL,
+    ),
 }
 
 
@@ -206,12 +214,28 @@ class QaEngineerTake:
     next_actions: Sequence[str] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class AiEngineerTake:
+    """ai-engineer 관점의 모델/메모리/RAG/평가 영향."""
+
+    role: str = "engineering-agent/ai-engineer"
+    model_strategy: Optional[str] = None
+    memory_strategy: Optional[str] = None
+    retrieval_strategy: Optional[str] = None
+    evaluation_strategy: Optional[str] = None
+    risks: Sequence[str] = field(default_factory=tuple)
+    perspective: Optional[str] = None
+    evidence: Sequence[str] = field(default_factory=tuple)
+    next_actions: Sequence[str] = field(default_factory=tuple)
+
+
 RoleTake = Union[
     TechLeadOpening,
     ProductDesignerTake,
     BackendEngineerTake,
     FrontendEngineerTake,
     QaEngineerTake,
+    AiEngineerTake,
 ]
 
 
@@ -537,6 +561,8 @@ def render_role_take(take: RoleTake) -> str:
         return _render_frontend_engineer(take)
     if isinstance(take, QaEngineerTake):
         return _render_qa_engineer(take)
+    if isinstance(take, AiEngineerTake):
+        return _render_ai_engineer(take)
     raise TypeError(f"unsupported role take type: {type(take)!r}")
 
 
@@ -571,6 +597,8 @@ def _deterministic_role_take(context: DeliberationContext) -> RoleTake:
         return _fallback_frontend_engineer(context)
     if role_short == "qa-engineer":
         return _fallback_qa_engineer(context)
+    if role_short == "ai-engineer":
+        return _fallback_ai_engineer(context)
     # Unknown role — coerce to a generic tech-lead-shaped take so callers
     # always get something renderable.
     return TechLeadOpening(
@@ -842,6 +870,47 @@ def _fallback_qa_engineer(ctx: DeliberationContext) -> QaEngineerTake:
     )
 
 
+def _fallback_ai_engineer(ctx: DeliberationContext) -> AiEngineerTake:
+    """ai-engineer 관점의 모델·메모리·검색·평가 영향 정리."""
+
+    pack = ctx.research_pack
+    role = ctx.role
+    evidence = evidence_lines_for_role(pack, role)
+
+    risks: list[str] = [
+        "context window 초과로 응답 품질 저하 가능",
+        "벡터 인덱스가 비어 있으면 first-pass quality 낮음",
+    ]
+    if pack is None or not evidence:
+        risks.append("RAG/메모리 reference 부족 — 모델 결정 근거 약함")
+
+    perspective = (
+        "사용자 자료를 모델 컨텍스트로 어떻게 들여보내고, 메모리/RAG 구조와 "
+        "평가 신호를 어떻게 분리할지 정리한다."
+    )
+
+    next_actions: list[str] = [
+        "session 단위 메모리 구조와 외부 vault 동기화 경계 정의",
+        "RAG retrieval/recall 평가 metric 1개 명시",
+    ]
+    backend_data = _previous_field(ctx.previous_turns, BackendEngineerTake, "data_impact")
+    if backend_data:
+        next_actions.append(
+            f"백엔드 데이터 영향({backend_data})에 맞춰 embedding pipeline 동기화"
+        )
+
+    return AiEngineerTake(
+        model_strategy="작은 컨텍스트 모델로 정리 → 필요 시 long-context 모델로 확장",
+        memory_strategy="thread/session 메모리는 in-process로 유지, 외부 vault export는 별도 contract",
+        retrieval_strategy="ResearchPack의 source_type 우선순위 그대로 사용 — 임의 scraping 금지",
+        evaluation_strategy="역할별 evidence 인용률과 사용자 confirm 비율을 1차 metric으로",
+        risks=tuple(risks),
+        perspective=perspective,
+        evidence=evidence,
+        next_actions=tuple(next_actions),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Renderers
 # ---------------------------------------------------------------------------
@@ -917,6 +986,24 @@ def _render_qa_engineer(t: QaEngineerTake) -> str:
     lines.append(_bullet_block("근거", t.evidence))
     lines.append(_bullet_block("리스크", t.risks))
     lines.append(_bullet_block("회귀 대상", t.regression_targets))
+    lines.append(_bullet_block("다음 행동", t.next_actions))
+    return "\n".join(line for line in lines if line)
+
+
+def _render_ai_engineer(t: AiEngineerTake) -> str:
+    lines = ["**[ai-engineer]**"]
+    if t.perspective:
+        lines.append(f"관점: {t.perspective}")
+    if t.model_strategy:
+        lines.append(f"모델 전략: {t.model_strategy}")
+    if t.memory_strategy:
+        lines.append(f"메모리 전략: {t.memory_strategy}")
+    if t.retrieval_strategy:
+        lines.append(f"검색 전략: {t.retrieval_strategy}")
+    if t.evaluation_strategy:
+        lines.append(f"평가 전략: {t.evaluation_strategy}")
+    lines.append(_bullet_block("근거", t.evidence))
+    lines.append(_bullet_block("리스크", t.risks))
     lines.append(_bullet_block("다음 행동", t.next_actions))
     return "\n".join(line for line in lines if line)
 
