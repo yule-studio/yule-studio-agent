@@ -691,5 +691,388 @@ class ExtractMessageAttachmentsTests(unittest.TestCase):
         self.assertEqual(len(result), 2)
 
 
+# ---------------------------------------------------------------------------
+# Wire-up tests: research_pack / collection_outcome flow through the router
+# ---------------------------------------------------------------------------
+
+
+class _FakeMessage:
+    """Minimal stand-in for ``discord.Message`` used by router tests."""
+
+    def __init__(self, content: str, *, channel_id: int = 999):
+        self.content = content
+        self.attachments: list = []
+
+        class _Channel:
+            id = channel_id
+            name = "업무-접수"
+            parent = None
+            parent_id = None
+
+            async def send(self, *_args, **_kwargs):  # pragma: no cover - tests stub send_chunks
+                return None
+
+        class _Author:
+            id = 42
+
+        self.channel = _Channel()
+        self.author = _Author()
+
+
+@dataclass
+class _StubCollectionOutcome:
+    mode_value: str = "auto_collected"
+    auto_collected_count: int = 2
+    collector_name: str = "mock"
+    query: str = "test query"
+
+    @property
+    def mode(self):
+        class _M:
+            value = self.mode_value
+
+        return _M()
+
+
+class _StubConversationResponse:
+    """Conversation layer return shape that mirrors EngineeringConversationResponse."""
+
+    def __init__(self, *, content: str, confirmed: bool, intake_prompt: str,
+                 research_pack: Any, collection_outcome: Any,
+                 role_for_research: str = "engineering-agent/tech-lead"):
+        self.content = content
+        self.confirmed = confirmed
+        self.intake_prompt = intake_prompt
+        self.write_requested = False
+        self.thread_topic = None
+        self.research_pack = research_pack
+        self.collection_outcome = collection_outcome
+        self.role_for_research = role_for_research
+
+
+class RouterPassesResearchContextTestCase(unittest.TestCase):
+    """The router must extract research_pack / collection_outcome / role from
+    the conversation response and forward them into the research_loop_fn."""
+
+    def test_research_pack_flows_to_research_loop_hook(self) -> None:
+        ctx = EngineeringRouteContext(intake_channel_id=999)
+        message = _FakeMessage("자료 수집해줘")
+
+        async def conversation_fn(*, message_text, **kwargs):
+            return _StubConversationResponse(
+                content="좋아요. 먼저 1차 자료를 모아볼게요.",
+                confirmed=True,
+                intake_prompt=message_text,
+                research_pack="<<pack>>",
+                collection_outcome=_StubCollectionOutcome(),
+                role_for_research="engineering-agent/product-designer",
+            )
+
+        @dataclass
+        class _IntakeReturn:
+            session: Any
+            plan: Any
+            message: str
+
+        def intake_fn(*, prompt, write_requested, channel_id, user_id):
+            return _IntakeReturn(
+                session=type("S", (), {"session_id": "sess-1"})(),
+                plan=None,
+                message="intake summary",
+            )
+
+        async def thread_kickoff_fn(*, channel, session, plan, topic):
+            return EngineeringThreadKickoff(thread_id=12345, message="kickoff")
+
+        send_chunks = AsyncMock()
+
+        captured: dict = {}
+
+        async def research_loop_fn(**kwargs):
+            captured.update(kwargs)
+            return EngineeringResearchLoopReport(
+                forum_status_message="운영-리서치에 자료 정리를 남겼어요.",
+                forum_thread_id=4242,
+            )
+
+        result = _run(
+            route_engineering_message(
+                message=message,
+                bot_user=None,
+                route_context=ctx,
+                extract_prompt=lambda **_: message.content,
+                conversation_fn=conversation_fn,
+                intake_fn=intake_fn,
+                thread_kickoff_fn=thread_kickoff_fn,
+                send_chunks=send_chunks,
+                research_loop_fn=research_loop_fn,
+            )
+        )
+
+        self.assertTrue(result.handled)
+        # research_loop_fn must receive the research context from the conversation
+        self.assertEqual(captured["research_pack"], "<<pack>>")
+        self.assertIsNotNone(captured["collection_outcome"])
+        self.assertEqual(captured["role_for_research"], "engineering-agent/product-designer")
+        # thread_id from kickoff is forwarded so the loop knows where to post
+        self.assertEqual(captured["thread_id"], 12345)
+        # report propagates into the result
+        self.assertIsNotNone(result.research_loop_report)
+        self.assertEqual(result.research_loop_report.forum_thread_id, 4242)
+
+    def test_conversation_fn_receives_attachments_and_user_links(self) -> None:
+        ctx = EngineeringRouteContext(intake_channel_id=999)
+        message = _FakeMessage(
+            "관련 자료 https://example.com/a https://example.com/b 참고",
+        )
+
+        captured: dict = {}
+
+        def conversation_fn(**kwargs):
+            captured.update(kwargs)
+            return EngineeringConversationOutcome(content="ack")
+
+        _run(
+            route_engineering_message(
+                message=message,
+                bot_user=None,
+                route_context=ctx,
+                extract_prompt=lambda **_: message.content,
+                conversation_fn=conversation_fn,
+                intake_fn=lambda **_: None,
+                thread_kickoff_fn=AsyncMock(),
+                send_chunks=AsyncMock(),
+            )
+        )
+
+        # Router should pre-populate attachments and user links so the
+        # conversation layer can hand them straight to auto_collect.
+        self.assertEqual(captured["attachments"], ())
+        self.assertEqual(
+            tuple(captured["user_links"]),
+            ("https://example.com/a", "https://example.com/b"),
+        )
+        self.assertTrue(captured["auto_collect"])
+
+
+class CoerceOutcomeForwardsResearchFieldsTestCase(unittest.TestCase):
+    def test_coerce_pulls_research_fields_from_response(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            _coerce_outcome,
+        )
+
+        class _Resp:
+            content = "ok"
+            confirmed = False
+            intake_prompt = None
+            write_requested = False
+            thread_topic = None
+            research_pack = "<<rp>>"
+            collection_outcome = "<<co>>"
+            role_for_research = "engineering-agent/qa-engineer"
+
+        outcome = _coerce_outcome(_Resp(), prompt_text="x")
+        self.assertEqual(outcome.research_pack, "<<rp>>")
+        self.assertEqual(outcome.collection_outcome, "<<co>>")
+        self.assertEqual(outcome.role_for_research, "engineering-agent/qa-engineer")
+
+    def test_coerce_handles_missing_research_fields(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            _coerce_outcome,
+        )
+
+        outcome = _coerce_outcome(
+            EngineeringConversationOutcome(content="x"),
+            prompt_text="y",
+        )
+        self.assertIsNone(outcome.research_pack)
+        self.assertIsNone(outcome.collection_outcome)
+        self.assertIsNone(outcome.role_for_research)
+
+
+# ---------------------------------------------------------------------------
+# Default research loop helper
+# ---------------------------------------------------------------------------
+
+
+class DefaultResearchLoopTestCase(unittest.TestCase):
+    def test_publishes_to_forum_when_pack_present(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            make_default_research_loop,
+        )
+
+        publish_calls: list[dict] = []
+
+        async def forum_publisher(**kwargs):
+            publish_calls.append(kwargs)
+
+            class _Outcome:
+                posted = True
+                thread_id = 9999
+                thread_url = "https://example.com/threads/9999"
+
+            return _Outcome()
+
+        report = _run(
+            make_default_research_loop(
+                session=type("S", (), {"session_id": "sess"})(),
+                message_text="prompt",
+                attachments=(),
+                channel=None,
+                collection_outcome=_StubCollectionOutcome(),
+                research_pack="<<pack>>",
+                role_for_research="engineering-agent/product-designer",
+                thread_id=42,
+                forum_publisher=forum_publisher,
+            )
+        )
+
+        self.assertEqual(len(publish_calls), 1)
+        self.assertEqual(publish_calls[0]["pack"], "<<pack>>")
+        self.assertEqual(report.forum_thread_id, 9999)
+        self.assertIn("운영-리서치", report.forum_status_message or "")
+        self.assertFalse(report.insufficient)
+
+    def test_skips_forum_when_pack_missing(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            make_default_research_loop,
+        )
+
+        async def forum_publisher(**_):
+            raise AssertionError("should not be called when pack is None")
+
+        report = _run(
+            make_default_research_loop(
+                session=None,
+                message_text="prompt",
+                attachments=(),
+                channel=None,
+                collection_outcome=None,
+                research_pack=None,
+                forum_publisher=forum_publisher,
+            )
+        )
+        self.assertTrue(report.insufficient)
+        self.assertIsNone(report.forum_status_message)
+
+    def test_runs_deliberation_and_posts_to_thread(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            make_default_research_loop,
+        )
+
+        thread_posts: list[str] = []
+
+        async def post_to_thread(thread_id, content):
+            thread_posts.append(content)
+
+        @dataclass
+        class _Turn:
+            rendered: str
+
+        @dataclass
+        class _DeliberationResult:
+            turns: tuple
+            synthesis_text: str
+
+        def deliberation_runner(*, session, research_pack):
+            return _DeliberationResult(
+                turns=(_Turn(rendered="tech-lead opening"), _Turn(rendered="qa take")),
+                synthesis_text="합의안 한 줄",
+            )
+
+        report = _run(
+            make_default_research_loop(
+                session=type("S", (), {"session_id": "sess"})(),
+                message_text="prompt",
+                attachments=(),
+                channel=None,
+                collection_outcome=_StubCollectionOutcome(),
+                research_pack="<<pack>>",
+                thread_id=12345,
+                deliberation_runner=deliberation_runner,
+                post_to_thread=post_to_thread,
+            )
+        )
+
+        self.assertEqual(len(thread_posts), 3)  # 2 turns + 1 synthesis
+        self.assertIn("tech-lead opening", thread_posts)
+        self.assertIn("qa take", thread_posts)
+        self.assertIn("합의안 한 줄", thread_posts)
+        self.assertIsNone(report.error)
+
+    def test_deliberation_failure_is_non_fatal(self) -> None:
+        from yule_orchestrator.discord.engineering_channel_router import (
+            make_default_research_loop,
+        )
+
+        def deliberation_runner(*, session, research_pack):
+            raise RuntimeError("backend down")
+
+        report = _run(
+            make_default_research_loop(
+                session=type("S", (), {"session_id": "sess"})(),
+                message_text="prompt",
+                attachments=(),
+                channel=None,
+                collection_outcome=_StubCollectionOutcome(),
+                research_pack="<<pack>>",
+                thread_id=12345,
+                deliberation_runner=deliberation_runner,
+            )
+        )
+        # Error surfaced but the call did not raise.
+        self.assertIn("deliberation 실패", report.error or "")
+
+
+# ---------------------------------------------------------------------------
+# Centralised label helpers (research_collector → conversation/forum reuse)
+# ---------------------------------------------------------------------------
+
+
+class CentralisedLabelTestCase(unittest.TestCase):
+    def test_pretty_provider_known_and_unknown(self) -> None:
+        from yule_orchestrator.agents.research_collector import pretty_provider
+
+        self.assertEqual(pretty_provider("mock"), "기본 검색(mock)")
+        self.assertEqual(pretty_provider("tavily"), "Tavily 검색")
+        # Unknown provider falls through unchanged so messages don't crash
+        self.assertEqual(pretty_provider("future-provider"), "future-provider")
+        self.assertEqual(pretty_provider(None), "알 수 없음")
+
+    def test_pretty_task_type_unknown_passthrough(self) -> None:
+        from yule_orchestrator.agents.research_collector import pretty_task_type
+
+        self.assertEqual(pretty_task_type("landing-page"), "랜딩 페이지")
+        self.assertEqual(pretty_task_type("design-system"), "design-system")
+        self.assertEqual(pretty_task_type(None), "일반")
+        self.assertEqual(pretty_task_type(""), "일반")
+
+    def test_pretty_source_type_unknown_passthrough(self) -> None:
+        from yule_orchestrator.agents.research_collector import (
+            pretty_source_type,
+        )
+        from yule_orchestrator.agents.research_pack import SourceType
+
+        self.assertEqual(
+            pretty_source_type(SourceType.OFFICIAL_DOCS), "공식 문서"
+        )
+        # Raw enum values still translate
+        self.assertEqual(pretty_source_type("github_pr"), "GitHub PR")
+        # Unknown string passes through
+        self.assertEqual(pretty_source_type("future_kind"), "future_kind")
+        # None falls back to "기타"
+        self.assertEqual(pretty_source_type(None), "기타")
+
+    def test_pretty_confidence_unknown_passthrough(self) -> None:
+        from yule_orchestrator.agents.research_collector import pretty_confidence
+
+        self.assertEqual(pretty_confidence("high"), "신뢰도 높음")
+        self.assertEqual(pretty_confidence("medium"), "신뢰도 보통")
+        self.assertEqual(pretty_confidence("low"), "신뢰도 낮음")
+        # Unknown defaults to medium, never crashes
+        self.assertEqual(pretty_confidence("超-high"), "신뢰도 보통")
+        self.assertEqual(pretty_confidence(None), "신뢰도 보통")
+
+
 if __name__ == "__main__":
     unittest.main()

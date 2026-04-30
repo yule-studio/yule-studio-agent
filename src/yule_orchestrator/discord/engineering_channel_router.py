@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, Union
+from typing import Any, Awaitable, Callable, Optional, Sequence, Union
 
 
 # Single-source confirmation lexicon; the engineering conversation layer
@@ -83,6 +83,12 @@ class EngineeringConversationOutcome:
     the workflow.  The conversation layer is free to omit those fields
     — the router falls back to a keyword-based confirmation check on
     the original user text.
+
+    ``research_pack`` and ``collection_outcome`` carry the autonomous
+    research collector's result through to the research-loop hook
+    (forum publisher / deliberation kickoff). ``role_for_research``
+    lets the conversation layer signal which role profile drove the
+    collection so downstream code can render labels accordingly.
     """
 
     content: str
@@ -90,6 +96,9 @@ class EngineeringConversationOutcome:
     intake_prompt: Optional[str] = None
     write_requested: bool = False
     thread_topic: Optional[str] = None
+    research_pack: Any = None
+    collection_outcome: Any = None
+    role_for_research: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -238,12 +247,17 @@ async def route_engineering_message(
     if not prompt_text:
         return EngineeringRouteResult(handled=False)
 
+    attachments = extract_message_attachments(message)
+    user_links = extract_user_links_from_message(message, prompt_text)
     raw_outcome = await _maybe_await(
         conversation_fn(
             message_text=prompt_text,
             author_user_id=getattr(message.author, "id", None),
             channel_id=getattr(getattr(message, "channel", None), "id", None),
             bot_user=bot_user,
+            attachments=attachments,
+            user_links=user_links,
+            auto_collect=True,
         )
     )
     outcome = _coerce_outcome(raw_outcome, prompt_text=prompt_text)
@@ -313,6 +327,10 @@ async def route_engineering_message(
             session=session,
             prompt_text=intake_prompt,
             send_chunks=send_chunks,
+            collection_outcome=outcome.collection_outcome,
+            research_pack=outcome.research_pack,
+            role_for_research=outcome.role_for_research,
+            thread_id=thread_id,
         )
 
     return EngineeringRouteResult(
@@ -334,8 +352,18 @@ async def _run_research_loop_hook(
     session: Any,
     prompt_text: str,
     send_chunks: SendChunksFn,
+    collection_outcome: Any = None,
+    research_pack: Any = None,
+    role_for_research: Optional[str] = None,
+    thread_id: Optional[int] = None,
 ) -> EngineeringResearchLoopReport:
     """Call *research_loop_fn* with the message context and surface its result.
+
+    The hook receives the autonomous collector's outputs
+    (``collection_outcome``/``research_pack``) plus the working thread
+    id so the production wiring can post the collection summary to the
+    research forum and start a deliberation chain in the same thread —
+    without the router needing to know the publisher/deliberation APIs.
 
     Errors are caught and reported via a ``⚠️`` chat line so a research
     loop failure does not undo the intake + kickoff that already landed.
@@ -349,6 +377,10 @@ async def _run_research_loop_hook(
                 message_text=prompt_text,
                 attachments=attachments,
                 channel=message.channel,
+                collection_outcome=collection_outcome,
+                research_pack=research_pack,
+                role_for_research=role_for_research,
+                thread_id=thread_id,
             )
         )
     except Exception as exc:  # noqa: BLE001 - non-fatal; report and return
@@ -367,6 +399,119 @@ async def _run_research_loop_hook(
     if report.error and not report.follow_up_message and not report.forum_status_message:
         await send_chunks(message.channel, f"⚠️ research loop: {report.error}")
     return report
+
+
+async def make_default_research_loop(
+    *,
+    session: Any,
+    message_text: str,
+    attachments: Sequence[Any],
+    channel: Any,
+    collection_outcome: Any = None,
+    research_pack: Any = None,
+    role_for_research: Optional[str] = None,
+    thread_id: Optional[int] = None,
+    forum_publisher: Optional[Callable[..., Awaitable[Any]]] = None,
+    deliberation_runner: Optional[Callable[..., Any]] = None,
+    post_to_thread: Optional[Callable[[int, str], Awaitable[None]]] = None,
+) -> EngineeringResearchLoopReport:
+    """Default plumbing that runs after intake + kickoff land.
+
+    1. If ``research_pack`` is non-None and ``forum_publisher`` is wired,
+       publish the collection summary to ``#운영-리서치``. The publisher
+       is expected to return a value with ``.thread_id`` / ``.thread_url``
+       / ``.error`` (e.g. :class:`ForumPostOutcome`).
+    2. If ``deliberation_runner`` is wired, run the deliberation loop
+       with the research pack and post role takes + tech-lead synthesis
+       into the working thread (via ``post_to_thread``). Failures are
+       surfaced through the report's ``error`` field.
+
+    All hooks are optional — when ``None`` we simply skip that step. The
+    function never raises so ``_run_research_loop_hook`` keeps the bot
+    alive even if a downstream module breaks.
+    """
+
+    follow_up: Optional[str] = None
+    forum_status: Optional[str] = None
+    forum_thread_id: Optional[int] = None
+    forum_thread_url: Optional[str] = None
+    insufficient = False
+    error: Optional[str] = None
+
+    has_pack = research_pack is not None
+
+    # 1. Forum publish
+    if has_pack and forum_publisher is not None:
+        try:
+            forum_outcome = await _maybe_await(
+                forum_publisher(
+                    pack=research_pack,
+                    collection_outcome=collection_outcome,
+                    role=role_for_research,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"forum publish 실패: {exc}"
+        else:
+            posted = bool(getattr(forum_outcome, "posted", False))
+            forum_thread_id = _safe_int(getattr(forum_outcome, "thread_id", None))
+            forum_thread_url = _optional_str(getattr(forum_outcome, "thread_url", None))
+            if posted:
+                forum_status = "운영-리서치에 자료 정리를 남겼어요."
+            else:
+                fail_reason = _optional_str(getattr(forum_outcome, "error", None))
+                forum_status = (
+                    "운영-리서치 게시는 잠시 미뤄졌어요"
+                    + (f" — {fail_reason}." if fail_reason else ".")
+                )
+
+    # 2. Deliberation
+    if (
+        has_pack
+        and session is not None
+        and thread_id is not None
+        and deliberation_runner is not None
+    ):
+        try:
+            deliberation_result = deliberation_runner(
+                session=session,
+                research_pack=research_pack,
+            )
+            deliberation_result = await _maybe_await(deliberation_result)
+        except Exception as exc:  # noqa: BLE001
+            error = (error + " · " if error else "") + f"deliberation 실패: {exc}"
+        else:
+            if post_to_thread is not None and deliberation_result is not None:
+                rendered = list(getattr(deliberation_result, "turns", ()) or [])
+                synthesis_text = _optional_str(
+                    getattr(deliberation_result, "synthesis_text", None)
+                )
+                try:
+                    for record in rendered:
+                        text = _optional_str(getattr(record, "rendered", None))
+                        if text:
+                            await post_to_thread(thread_id, text)
+                    if synthesis_text:
+                        await post_to_thread(thread_id, synthesis_text)
+                except Exception as exc:  # noqa: BLE001
+                    error = (error + " · " if error else "") + (
+                        f"thread 게시 실패: {exc}"
+                    )
+
+    if not has_pack:
+        # No autonomous collector pack means the conversation already asked
+        # the user for materials. Nothing to publish — surface an "insufficient"
+        # signal so the gateway can short-circuit downstream wiring.
+        insufficient = True
+
+    return EngineeringResearchLoopReport(
+        follow_up_message=follow_up,
+        forum_status_message=forum_status,
+        forum_thread_id=forum_thread_id,
+        forum_thread_url=forum_thread_url,
+        insufficient=insufficient,
+        error=error,
+    )
 
 
 def _coerce_research_loop_report(raw: Any) -> EngineeringResearchLoopReport:
@@ -427,12 +572,23 @@ def _coerce_outcome(
         if thread_topic_raw is not None
         else None
     )
+    # Optional autonomous-collector context. ``EngineeringConversationResponse``
+    # surfaces these directly; other shapes can omit them safely.
+    research_pack = getattr(raw, "research_pack", None)
+    collection_outcome = getattr(raw, "collection_outcome", None)
+    role_raw = getattr(raw, "role_for_research", None)
+    role_for_research = (
+        str(role_raw).strip() if role_raw is not None else None
+    ) or None
     return EngineeringConversationOutcome(
         content=content,
         confirmed=confirmed,
         intake_prompt=intake_prompt or None,
         write_requested=write_requested,
         thread_topic=thread_topic or None,
+        research_pack=research_pack,
+        collection_outcome=collection_outcome,
+        role_for_research=role_for_research,
     )
 
 
@@ -440,6 +596,27 @@ async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+def extract_user_links_from_message(
+    message: Any,
+    prompt_text: Optional[str] = None,
+) -> tuple[str, ...]:
+    """Pull URLs out of the user's message body.
+
+    Lazily delegates to :func:`research_collector.extract_urls` so we get
+    the same regex + dedup the collector uses internally. Returns an empty
+    tuple if the helper isn't importable (e.g. during a partial install).
+    """
+
+    text = (prompt_text or getattr(message, "content", "") or "")
+    if not text:
+        return ()
+    try:
+        from ..agents.research_collector import extract_urls
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(extract_urls(text))
 
 
 def extract_message_attachments(message: Any) -> tuple[Any, ...]:

@@ -38,7 +38,18 @@ from yule_orchestrator.discord.research_forum import (
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run *coro* on a fresh loop so we work in any suite ordering.
+
+    ``asyncio.get_event_loop()`` is deprecated when no loop is already
+    running; ``asyncio.run`` would close the loop, so a per-call new
+    loop is the safest contract for unit tests that share a process.
+    """
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class ForumContextTestCase(unittest.TestCase):

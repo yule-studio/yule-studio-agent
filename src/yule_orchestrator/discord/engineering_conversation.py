@@ -805,38 +805,28 @@ def _summarize_topic(text: Optional[str], max_chars: int = 60) -> str:
     return head[: max(1, max_chars - 1)].rstrip() + "…"
 
 
-_TASK_TYPE_LABELS: Mapping[str, str] = {
-    "landing-page": "랜딩 페이지",
-    "onboarding-flow": "온보딩 흐름",
-    "visual-polish": "비주얼 정리",
-    "email-campaign": "이메일 캠페인",
-    "qa-test": "QA 테스트",
-    "platform-infra": "플랫폼/인프라",
-    "frontend-feature": "프론트엔드",
-    "backend-feature": "백엔드",
-    "unknown": "일반",
-}
-
-
 def _pretty_task_type(value: Optional[str]) -> str:
-    if not value:
-        return "일반"
-    return _TASK_TYPE_LABELS.get(value, value)
+    """Delegate to the centralised label map in ``research_collector``.
 
+    Imported lazily so this module stays importable even if collector
+    is being refactored or temporarily unavailable.
+    """
 
-_PROVIDER_LABELS: Mapping[str, str] = {
-    "mock": "기본 검색(mock)",
-    "tavily": "Tavily 검색",
-    "brave": "Brave 검색",
-    "noop": "비활성",
-    "?": "알 수 없음",
-}
+    try:
+        from ..agents.research_collector import pretty_task_type
+    except Exception:  # noqa: BLE001
+        return value or "일반"
+    return pretty_task_type(value)
 
 
 def _pretty_provider(name: Optional[str]) -> str:
-    if not name:
-        return "알 수 없음"
-    return _PROVIDER_LABELS.get(name, name)
+    """Delegate to the centralised provider label map."""
+
+    try:
+        from ..agents.research_collector import pretty_provider
+    except Exception:  # noqa: BLE001
+        return name or "알 수 없음"
+    return pretty_provider(name)
 
 
 def _prepend_mention(content: str, mention_user_id: Optional[int]) -> str:

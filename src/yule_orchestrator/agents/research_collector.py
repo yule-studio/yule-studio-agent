@@ -54,6 +54,7 @@ from .research_pack import (
     ResearchRequest,
     ResearchSource,
     SourceType,
+    extract_urls,  # re-exported so callers don't need to know research_pack
     make_research_request,
     pack_from_request,
     source_from_user_message,
@@ -1348,7 +1349,12 @@ def _format_user_input_request(
 # ---------------------------------------------------------------------------
 
 
-_SOURCE_TYPE_LABELS: Mapping[str, str] = {
+# ---------------------------------------------------------------------------
+# Centralised user-facing labels (re-used by conversation/forum/deliberation)
+# ---------------------------------------------------------------------------
+
+
+SOURCE_TYPE_LABELS: Mapping[str, str] = {
     "user_message": "사용자 요청",
     "url": "사용자 링크",
     "web_result": "웹 검색",
@@ -1364,36 +1370,83 @@ _SOURCE_TYPE_LABELS: Mapping[str, str] = {
 }
 
 
-_PROVIDER_LABELS_FOR_SUMMARY: Mapping[str, str] = {
+PROVIDER_LABELS: Mapping[str, str] = {
     "mock": "기본 검색(mock)",
     "tavily": "Tavily 검색",
     "brave": "Brave 검색",
     "noop": "비활성",
+    "live": "외부 검색",
+    "?": "알 수 없음",
 }
 
 
-def _pretty_source_type(source_type: SourceType) -> str:
-    value = (
-        source_type.value
-        if isinstance(source_type, SourceType)
-        else str(source_type)
-    )
-    return _SOURCE_TYPE_LABELS.get(value, value)
+TASK_TYPE_LABELS: Mapping[str, str] = {
+    "landing-page": "랜딩 페이지",
+    "onboarding-flow": "온보딩 흐름",
+    "visual-polish": "비주얼 정리",
+    "email-campaign": "이메일 캠페인",
+    "qa-test": "QA 테스트",
+    "platform-infra": "플랫폼/인프라",
+    "frontend-feature": "프론트엔드",
+    "backend-feature": "백엔드",
+    "unknown": "일반",
+}
 
 
-def _pretty_confidence(value: Optional[str]) -> str:
-    label = (value or "medium").lower()
-    return {
-        CONFIDENCE_HIGH: "신뢰도 높음",
-        CONFIDENCE_MEDIUM: "신뢰도 보통",
-        CONFIDENCE_LOW: "신뢰도 낮음",
-    }.get(label, "신뢰도 보통")
+CONFIDENCE_LABELS: Mapping[str, str] = {
+    CONFIDENCE_HIGH: "신뢰도 높음",
+    CONFIDENCE_MEDIUM: "신뢰도 보통",
+    CONFIDENCE_LOW: "신뢰도 낮음",
+}
 
 
-def _pretty_provider_summary(name: Optional[str]) -> str:
+def pretty_source_type(source_type: Any) -> str:
+    """Translate a :class:`SourceType` (or its string value) into Korean.
+
+    Unknown values fall through unchanged so a future enum addition still
+    renders something readable instead of crashing.
+    """
+
+    if source_type is None:
+        return SOURCE_TYPE_LABELS["unknown"]
+    if isinstance(source_type, SourceType):
+        value = source_type.value
+    else:
+        value = str(source_type)
+    return SOURCE_TYPE_LABELS.get(value, value or SOURCE_TYPE_LABELS["unknown"])
+
+
+def pretty_provider(name: Optional[str]) -> str:
+    """Translate a collector provider id into Korean. Unknown → passthrough."""
+
     if not name:
-        return "알 수 없음"
-    return _PROVIDER_LABELS_FOR_SUMMARY.get(name, name)
+        return PROVIDER_LABELS["?"]
+    return PROVIDER_LABELS.get(name, name)
+
+
+def pretty_task_type(value: Optional[str]) -> str:
+    """Translate a dispatcher ``TaskType.value`` into Korean.
+
+    Falls back to "일반" for missing/blank input and to the raw value
+    otherwise (so ``"design-system"`` stays readable instead of crashing).
+    """
+
+    if not value:
+        return TASK_TYPE_LABELS["unknown"]
+    return TASK_TYPE_LABELS.get(value, value)
+
+
+def pretty_confidence(value: Optional[str]) -> str:
+    """Translate a confidence label (``high|medium|low``) into Korean."""
+
+    label = (value or CONFIDENCE_MEDIUM).lower()
+    return CONFIDENCE_LABELS.get(label, CONFIDENCE_LABELS[CONFIDENCE_MEDIUM])
+
+
+# Backwards-compatible aliases (used internally before centralisation).
+_pretty_source_type = pretty_source_type
+_pretty_confidence = pretty_confidence
+_pretty_provider_summary = pretty_provider
 
 
 def _summarize_topic_for_summary(text: Optional[str], max_chars: int = 60) -> str:
