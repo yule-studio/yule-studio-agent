@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ except ModuleNotFoundError:
 
 from yule_orchestrator.discord.bot import (
     _checkpoint_window_minutes,
+    _default_engineering_conversation_fn,
     _filter_unsent_checkpoints,
     _mark_checkpoints_sent,
     _next_checkpoint_scan,
@@ -167,3 +169,54 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
                 self.envelope = Envelope(due_checkpoints)
 
         return Snapshot(checkpoints)
+
+
+class EngineeringConversationBridgeTestCase(unittest.TestCase):
+    @patch(
+        "yule_orchestrator.discord.engineering_conversation."
+        "build_engineering_conversation_response"
+    )
+    def test_default_bridge_accepts_and_forwards_research_context(
+        self,
+        build_response_mock,
+    ) -> None:
+        pack = object()
+        collection = object()
+        build_response_mock.return_value = SimpleNamespace(
+            content="좋아요. 먼저 1차 자료를 모아볼게요.",
+            intent_id="task_intake_candidate",
+            ready_to_intake=False,
+            intake_prompt="Obsidian memory 설계",
+            write_likely=False,
+            research_pack=pack,
+            collection_outcome=collection,
+        )
+
+        outcome = _default_engineering_conversation_fn(
+            message_text="Obsidian memory 설계",
+            author_user_id=4242,
+            channel_id=999,
+            bot_user=object(),
+            attachments=("image.png",),
+            user_links=("https://example.com/ref",),
+            auto_collect=True,
+            role_for_research="engineering-agent/product-designer",
+            session_id="sess-1",
+        )
+
+        build_response_mock.assert_called_once()
+        _, kwargs = build_response_mock.call_args
+        self.assertEqual(kwargs["user_attachments"], ("image.png",))
+        self.assertEqual(kwargs["user_links"], ("https://example.com/ref",))
+        self.assertTrue(kwargs["auto_collect"])
+        self.assertEqual(
+            kwargs["role_for_research"],
+            "engineering-agent/product-designer",
+        )
+        self.assertEqual(kwargs["session_id"], "sess-1")
+        self.assertIs(outcome.research_pack, pack)
+        self.assertIs(outcome.collection_outcome, collection)
+        self.assertEqual(
+            outcome.role_for_research,
+            "engineering-agent/product-designer",
+        )

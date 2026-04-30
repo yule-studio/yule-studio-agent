@@ -8,7 +8,7 @@ import time as time_module
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..agents import (
     Dispatcher,
@@ -1418,6 +1418,11 @@ def _default_engineering_conversation_fn(
     author_user_id: int | None,
     channel_id: int | None,
     bot_user: object,
+    attachments: Sequence[Any] = (),
+    user_links: Sequence[str] = (),
+    auto_collect: bool = True,
+    role_for_research: str = "engineering-agent/tech-lead",
+    session_id: str | None = None,
 ):
     """Bridge to the engineering free-conversation layer.
 
@@ -1457,6 +1462,11 @@ def _default_engineering_conversation_fn(
         author_user_id=author_user_id,
         mention_user=author_user_id is not None,
         last_proposed_prompt=last_proposed,
+        auto_collect=auto_collect,
+        user_links=tuple(user_links or ()),
+        user_attachments=tuple(attachments or ()),
+        role_for_research=role_for_research,
+        session_id=session_id,
     )
 
     intent_id = getattr(response, "intent_id", "")
@@ -1477,6 +1487,12 @@ def _default_engineering_conversation_fn(
         confirmed=ready_to_intake,
         intake_prompt=str(intake_prompt) if intake_prompt else None,
         write_requested=bool(getattr(response, "write_likely", False)),
+        research_pack=getattr(response, "research_pack", None),
+        collection_outcome=getattr(response, "collection_outcome", None),
+        role_for_research=str(
+            getattr(response, "role_for_research", role_for_research)
+            or role_for_research
+        ),
     )
 
 
