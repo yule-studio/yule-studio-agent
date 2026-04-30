@@ -89,8 +89,10 @@ summary: 2 active / 5 skipped
 | `#승인-대기` | write 승인 UX | `DISCORD_ENGINEERING_APPROVAL_CHANNEL_*` (예약) |
 | `#봇-상태` | 상태/오류/헬스체크 | `DISCORD_ENGINEERING_STATUS_CHANNEL_*` (예약) |
 | `#실험실` | 워크플로·프롬프트 테스트 | `DISCORD_ENGINEERING_LAB_CHANNEL_*` (예약) |
+| `#운영-리서치` (Forum) | 부서 공통 research/deliberation inbox (자료 수집·역할별 검토·tech-lead 종합·Obsidian 후보 선정) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*` (예약) |
 
 규약
 - planning-bot과 engineering-agent gateway는 **다른 채널을 본다**. 같은 채널을 보면 두 봇이 동일 메시지에 응답하므로 분리 운영을 강제한다.
-- intake 채널 외 3종은 본 마일스톤에서 키 슬롯만 예약했다. 후속 운영 자동화가 들어올 때 본 표를 진실 소스로 사용한다.
+- intake 채널 외 4종은 본 마일스톤에서 키 슬롯만 예약했다. 후속 운영 자동화가 들어올 때 본 표를 진실 소스로 사용한다.
+- 운영-리서치 forum은 engineering 전용이 아니라 부서 공통 inbox이므로 키 prefix가 `DISCORD_AGENT_RESEARCH_*`다. 게시 규약과 댓글 양식, Obsidian export contract는 `research-forum.md` 참조.
 - 채널 정의의 자세한 매트릭스는 `discord-workflow.md` §1.1을 참고한다.

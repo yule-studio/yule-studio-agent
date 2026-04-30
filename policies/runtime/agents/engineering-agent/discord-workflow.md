@@ -23,10 +23,12 @@
 | `#승인-대기` | `DISCORD_ENGINEERING_APPROVAL_CHANNEL_ID`, `DISCORD_ENGINEERING_APPROVAL_CHANNEL_NAME` | **예약** — 런타임 미연결 | write 승인 UX 자동화(예: 접수 메시지 미러링, ✅ 반응 승인)에서 사용 예정. |
 | `#봇-상태` | `DISCORD_ENGINEERING_STATUS_CHANNEL_ID`, `DISCORD_ENGINEERING_STATUS_CHANNEL_NAME` | **예약** — 런타임 미연결 | 헬스체크/오류 알림/봇 가동 상태 broadcast 예정. |
 | `#실험실` | `DISCORD_ENGINEERING_LAB_CHANNEL_ID`, `DISCORD_ENGINEERING_LAB_CHANNEL_NAME` | **예약** — 런타임 미연결 | 신규 워크플로/프롬프트 실험용 sandbox. |
+| `#운영-리서치` (Forum) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID`, `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | **예약** — 런타임 미연결 | 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 운영 규약은 `research-forum.md` 참조. |
 
 규약
 - intake 채널 키는 ID/NAME 둘 다 같은 채널을 가리키는 게 권장이다. 한쪽만 채워도 라우팅은 동작하지만, 채널 ID가 바뀌었을 때 NAME fallback이 있으면 무중단 복구가 쉽다.
 - 예약 슬롯 키는 비워둬도 정상이다. 후속 마일스톤에서 키를 활성화하기 전까지 어떤 코드 경로도 이 키를 읽지 않는다.
+- 운영-리서치 forum은 engineering 전용이 아니라 부서 공통이므로 키 prefix가 `DISCORD_ENGINEERING_*`이 아니라 `DISCORD_AGENT_RESEARCH_*`다.
 - planning 흐름의 `DISCORD_DAILY_CHANNEL_*` / `DISCORD_CHECKPOINT_CHANNEL_*` / `DISCORD_CONVERSATION_CHANNEL_*` 와는 키가 분리되어 있어 한쪽 변경이 다른 쪽 동작을 흔들지 않는다.
 
 ## 2. 승인 게이트

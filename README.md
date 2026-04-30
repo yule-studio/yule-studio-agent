@@ -216,6 +216,7 @@ DISCORD_GUILD_ID=
   - `#승인-대기` (= `DISCORD_ENGINEERING_APPROVAL_CHANNEL_*`) — write 승인 UX. 현재 예약 슬롯.
   - `#봇-상태` (= `DISCORD_ENGINEERING_STATUS_CHANNEL_*`) — 상태/오류/헬스체크. 현재 예약 슬롯.
   - `#실험실` (= `DISCORD_ENGINEERING_LAB_CHANNEL_*`) — 워크플로/프롬프트 테스트. 현재 예약 슬롯.
+  - `#운영-리서치` Forum (= `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*`) — 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 현재 예약 슬롯이며 게시 규약/댓글 양식/Obsidian export contract는 `policies/runtime/agents/engineering-agent/research-forum.md` 참조.
 - intake 채널은 ID와 NAME 중 하나만 매치돼도 라우팅됩니다. 둘 다 비어 있으면 engineering 라우터가 비활성으로 떨어져 모든 메시지는 기존 planning 흐름으로 처리됩니다. 자세한 매트릭스는 `policies/runtime/agents/engineering-agent/discord-workflow.md` §1.1 참고.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
