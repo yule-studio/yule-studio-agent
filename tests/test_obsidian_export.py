@@ -180,6 +180,25 @@ class RenderNoteTestCase(unittest.TestCase):
 
 
 class FrontmatterShapeTestCase(unittest.TestCase):
+    def _pack(self) -> ResearchPack:
+        return pack_from_discord_message(
+            title="Stripe Pricing 패턴",
+            content="hero step copy 강조 — https://stripe.com/pricing 참고",
+            author_role="engineering-agent/product-designer",
+            channel_id=999,
+            thread_id=888,
+            message_id=777,
+            posted_at=datetime(2026, 4, 30, 9, 0),
+            attachments=[
+                ResearchAttachment(
+                    kind="image",
+                    url="https://cdn/x.png",
+                    filename="hero.png",
+                )
+            ],
+            tags=["reference", "ux"],
+        )
+
     def test_yaml_keys_in_expected_order(self) -> None:
         pack = pack_from_discord_message(title="t", content="https://x")
         note = render_research_note(pack)
@@ -189,7 +208,7 @@ class FrontmatterShapeTestCase(unittest.TestCase):
             if ":" in line:
                 order.append(line.split(":", 1)[0].strip())
         self.assertEqual(
-            order[:8],
+            order[:11],
             [
                 "title",
                 "source",
@@ -199,6 +218,9 @@ class FrontmatterShapeTestCase(unittest.TestCase):
                 "created_at",
                 "kind",
                 "tags",
+                "topic",
+                "task_type",
+                "sources",
             ],
         )
 
@@ -207,6 +229,38 @@ class FrontmatterShapeTestCase(unittest.TestCase):
         note = render_research_note(pack)
         self.assertEqual(note.frontmatter["contract"], CONTRACT_VERSION)
         self.assertEqual(note.frontmatter["kind"], "research")
+
+    def test_frontmatter_topic_mirrors_pack_title(self) -> None:
+        note = render_research_note(self._pack())
+        self.assertEqual(note.frontmatter["topic"], "Stripe Pricing 패턴")
+        self.assertIn("topic: Stripe Pricing 패턴", note.content)
+
+    def test_frontmatter_task_type_from_session(self) -> None:
+        note = render_research_note(self._pack(), session=_session())
+        self.assertEqual(note.frontmatter["task_type"], "landing-page")
+        self.assertIn("task_type: landing-page", note.content)
+
+    def test_frontmatter_task_type_null_without_session(self) -> None:
+        note = render_research_note(self._pack())
+        self.assertIsNone(note.frontmatter["task_type"])
+        self.assertIn("task_type: null", note.content)
+
+    def test_frontmatter_sources_includes_urls_and_attachments(self) -> None:
+        note = render_research_note(self._pack())
+        self.assertEqual(
+            note.frontmatter["sources"],
+            ["https://stripe.com/pricing", "https://cdn/x.png"],
+        )
+        self.assertIn(
+            "sources: [https://stripe.com/pricing, https://cdn/x.png]",
+            note.content,
+        )
+
+    def test_frontmatter_sources_empty_when_no_urls(self) -> None:
+        pack = ResearchPack(title="회의록", summary="짧은 메모")
+        note = render_research_note(pack)
+        self.assertEqual(note.frontmatter["sources"], [])
+        self.assertIn("sources: []", note.content)
 
 
 if __name__ == "__main__":

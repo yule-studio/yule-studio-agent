@@ -51,6 +51,9 @@ session_id: <세션 id 또는 null>
 created_at: <pack.created_at ISO 또는 null>
 kind: research | decision | reference
 tags: [<kind 단수형 + pack.tags>]
+topic: <pack.title — 인덱서/요약기가 title 변경에 영향받지 않게 별도 키>
+task_type: <session.task_type 또는 null — 작업 분류용>
+sources: [<pack.urls + 첨부 식별자 합본 — 인덱서가 한 줄로 읽는 평면 리스트>]
 contract: research-forum-export/v0
 approval_required: true | false       # synthesis가 있을 때만
 exported_at: <ISO 시각>                # 호출자가 넘기면 표시
@@ -60,6 +63,9 @@ exported_at: <ISO 시각>                # 호출자가 넘기면 표시
 규약
 - `status` 결정 우선순위: `synthesis.approval_required=True` → `approval-pending`. synthesis가 있으면 → `decided`. session 없음 → `captured`. `session.state == intake` → `captured`. 그 외 → `session.state.value`.
 - `tags`는 항상 `[<kind>]`로 시작하고 `pack.tags`를 dedup해 합친다. 예: `[research, ux]`, `[decision, ux]`.
+- `topic`은 현재 `pack.title`과 동일하지만 별도 키로 노출한다 — title rewriting을 해도 인덱서가 동일 토픽을 추적할 수 있도록 분리.
+- `task_type`은 session에서만 채워진다(없으면 `null`). 작업 배정/리포팅 인덱서가 분류 키로 쓰는 값.
+- `sources`는 `pack.urls` (primary + 각 source.url, dedup) 뒤에 `pack.attachments`의 url(또는 filename)을 dedup해 붙인 평면 리스트다. 본문 ## 출처 블록이 사람용이라면 frontmatter `sources`는 인덱서/스크립트용이다.
 - YAML quoting은 진짜 필요할 때만 적용된다 — `: `(콜론+공백) / 양 끝 공백 / `[`/`#`/`-`/`,`/줄바꿈 같은 제어 문자가 들어간 경우. URL이나 ISO 시각은 보통 unquoted로 출력된다.
 
 ## 4. Body 구조

@@ -153,6 +153,9 @@ def _frontmatter(
         "created_at": _iso_or_none(pack.created_at),
         "kind": kind,
         "tags": _tags_for(pack, kind),
+        "topic": pack.title or "(untitled)",
+        "task_type": getattr(session, "task_type", None) if session else None,
+        "sources": _source_descriptors(pack),
         "contract": CONTRACT_VERSION,
     }
     if synthesis is not None:
@@ -275,6 +278,25 @@ def _first_source_url(pack: ResearchPack) -> Optional[str]:
         if source.source_url:
             return source.source_url
     return None
+
+
+def _source_descriptors(pack: ResearchPack) -> list[str]:
+    """Return a flat string list usable as a YAML inline sequence.
+
+    Combines URLs (primary + per-source) with attachment ids, deduped.
+    Frontmatter consumers (indexers) only need a stable identifier per
+    source — full provenance lives in the Markdown body.
+    """
+
+    seen: dict[str, None] = {}
+    for url in pack.urls:
+        if url and url not in seen:
+            seen[url] = None
+    for att in pack.attachments:
+        ident = att.url or att.filename
+        if ident and ident not in seen:
+            seen[ident] = None
+    return list(seen.keys())
 
 
 def _iso_or_none(value: Optional[datetime]) -> Optional[str]:
