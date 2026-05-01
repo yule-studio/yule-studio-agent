@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,8 +12,13 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.formatter import format_references_block
+from yule_orchestrator.discord.member_bot import (
+    _PermissionTarget,
+    _member_bot_startup_permission_lines,
+)
 from yule_orchestrator.discord.member_bots import (
     GATEWAY_ROLE_KEY,
+    MemberBotProfile,
     env_key_for,
     load_member_bot_config,
     render_startup_summary,
@@ -153,6 +159,147 @@ class StartupSummaryTestCase(unittest.TestCase):
         self.assertIn("engineering-agent (gateway): active", joined)
         self.assertIn("engineering-agent/qa-engineer: skipped", joined)
         self.assertIn("ENGINEERING_AGENT_BOT_QA_ENGINEER_TOKEN", joined)
+
+
+class MemberBotPermissionStartupTestCase(unittest.TestCase):
+    def test_reports_ok_when_required_thread_permissions_exist(self) -> None:
+        profile = self._profile("tech-lead")
+        channel = _FakeChannel(
+            channel_id=42,
+            name="운영-리서치",
+            permissions=_FakePermissions(),
+        )
+        guild = _FakeGuild(guild_id=1, channels=(channel,))
+        bot = _FakeBot(guild)
+
+        lines = _member_bot_startup_permission_lines(
+            profile=profile,
+            bot=bot,
+            guild_id=1,
+            targets=(
+                _PermissionTarget(
+                    label="운영-리서치 forum",
+                    channel_id=42,
+                    channel_name=None,
+                    env_hint="DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*",
+                ),
+            ),
+        )
+
+        joined = "\n".join(lines)
+        self.assertIn("Message Content Intent", joined)
+        self.assertIn("permissions OK", joined)
+
+    def test_reports_missing_thread_send_permission(self) -> None:
+        profile = self._profile("qa-engineer")
+        channel = _FakeChannel(
+            channel_id=42,
+            name="운영-리서치",
+            permissions=_FakePermissions(send_messages_in_threads=False),
+        )
+        guild = _FakeGuild(guild_id=1, channels=(channel,))
+        bot = _FakeBot(guild)
+
+        lines = _member_bot_startup_permission_lines(
+            profile=profile,
+            bot=bot,
+            guild_id=1,
+            targets=(
+                _PermissionTarget(
+                    label="운영-리서치 forum",
+                    channel_id=42,
+                    channel_name=None,
+                    env_hint="DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*",
+                ),
+            ),
+        )
+
+        joined = "\n".join(lines)
+        self.assertIn("missing 운영-리서치 forum permissions", joined)
+        self.assertIn("Send Messages in Threads", joined)
+
+    def test_reports_unresolved_channel(self) -> None:
+        profile = self._profile("backend-engineer")
+        guild = _FakeGuild(guild_id=1, channels=())
+        bot = _FakeBot(guild)
+
+        lines = _member_bot_startup_permission_lines(
+            profile=profile,
+            bot=bot,
+            guild_id=1,
+            targets=(
+                _PermissionTarget(
+                    label="업무-접수 thread parent",
+                    channel_id=None,
+                    channel_name="업무-접수",
+                    env_hint="DISCORD_ENGINEERING_INTAKE_CHANNEL_*",
+                ),
+            ),
+        )
+
+        self.assertIn("cannot resolve 업무-접수 thread parent", "\n".join(lines))
+
+    @staticmethod
+    def _profile(role: str) -> MemberBotProfile:
+        return MemberBotProfile(
+            agent_id="engineering-agent",
+            role=role,
+            env_key=f"ENGINEERING_AGENT_BOT_{role.upper().replace('-', '_')}_TOKEN",
+            token="token",
+            display_label=f"engineering-agent/{role}",
+        )
+
+
+class _FakePermissions:
+    def __init__(
+        self,
+        *,
+        view_channel: bool = True,
+        read_message_history: bool = True,
+        send_messages: bool = True,
+        send_messages_in_threads: bool = True,
+    ) -> None:
+        self.view_channel = view_channel
+        self.read_message_history = read_message_history
+        self.send_messages = send_messages
+        self.send_messages_in_threads = send_messages_in_threads
+
+
+class _FakeChannel:
+    def __init__(self, *, channel_id: int, name: str, permissions: _FakePermissions) -> None:
+        self.id = channel_id
+        self.name = name
+        self._permissions = permissions
+
+    def permissions_for(self, _member):
+        return self._permissions
+
+
+class _FakeGuild:
+    def __init__(self, *, guild_id: int, channels: tuple[_FakeChannel, ...]) -> None:
+        self.id = guild_id
+        self.channels = channels
+        self.me = SimpleNamespace(id=123)
+
+    def get_channel(self, channel_id: int):
+        for channel in self.channels:
+            if channel.id == channel_id:
+                return channel
+        return None
+
+
+class _FakeBot:
+    def __init__(self, guild: _FakeGuild) -> None:
+        self.guilds = (guild,)
+        self._guild = guild
+
+    def get_guild(self, guild_id: int):
+        if self._guild.id == guild_id:
+            return self._guild
+        return None
+
+    def get_channel(self, channel_id: int):
+        return self._guild.get_channel(channel_id)
 
 
 class ReferencesBlockTestCase(unittest.TestCase):

@@ -256,6 +256,8 @@ DISCORD_GUILD_ID=
 - engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화되고, kickoff 메시지 끝에 `[team-turn:<session_id> tech-lead]` directive가 자동 부착되어 멤버 봇 chain이 시작될 수 있습니다.
 - 사용자가 `새로 등록하지 말고`, `기존 스레드`, `열려 있는 thread`, `이어가` 같은 표현으로 확인하면 gateway는 새 세션을 만들기 전에 같은 사용자/채널의 열린 engineering thread를 찾아 이어 붙입니다. 찾지 못하면 새 작업 세션을 만들지 않고 재지시를 요청합니다.
 - `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값입니다. 이 모드에서는 gateway가 `#운영-리서치` 포럼 post와 첫 `[research-turn:<session_id> tech-lead]` directive만 남기고, `tech-lead` / `ai-engineer` / `product-designer` / `backend-engineer` / `frontend-engineer` / `qa-engineer` 봇이 자기 계정으로 역할별 의견을 이어 씁니다. `gateway`로 바꾸면 멤버 봇 토큰이 없을 때처럼 gateway가 역할별 코멘트를 대리 게시하는 fallback 모드로 동작합니다. 값을 바꾼 뒤에는 `yule discord up` 프로세스를 재시작해야 합니다.
+- 멤버 봇이 실제로 의견을 이어 쓰려면 **각 멤버 봇 앱마다** Discord Developer Portal에서 `Message Content Intent`를 켜고, 서버/채널 권한으로 `View Channel`, `Read Message History`, `Send Messages`, `Send Messages in Threads`를 부여해야 합니다. 대상은 `#운영-리서치` Forum과 `#업무-접수`의 작업 thread parent 둘 다입니다.
+- 멤버 봇은 로그인 직후 위 채널 권한을 점검해 stderr에 `permissions OK` 또는 `missing ... permissions` 경고를 남깁니다. 단, Developer Portal의 `Message Content Intent` 토글은 Discord 런타임 API로 검증할 수 없어서 로그에는 확인 안내만 표시됩니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
 - 자동 브리핑 본문은 `/plan_today` 슬래시 명령과 동일한 포맷을 사용하고, 슬롯별 헤더(`**[아침 브리핑]**`, `**[업무 시작 브리핑]**`, `**[점심 브리핑]**`, `**[퇴근 후 브리핑]**`)가 맨 위에 붙습니다.
