@@ -1416,6 +1416,52 @@ def _make_engineering_send_chunks(discord_module: "discord"):
 
 
 _ENGINEERING_LAST_PROPOSED: dict[int, str] = {}
+_ENGINEERING_LAST_RESEARCH_CONTEXT: dict[int, dict[str, Any]] = {}
+
+
+def _remember_engineering_research_context(
+    *,
+    channel_id: int | None,
+    intake_prompt: Any,
+    research_pack: Any,
+    collection_outcome: Any,
+    role_for_research: str,
+) -> None:
+    if channel_id is None:
+        return
+    if research_pack is None and collection_outcome is None:
+        return
+    _ENGINEERING_LAST_RESEARCH_CONTEXT[channel_id] = {
+        "intake_prompt": str(intake_prompt) if intake_prompt else None,
+        "research_pack": research_pack,
+        "collection_outcome": collection_outcome,
+        "role_for_research": role_for_research,
+    }
+
+
+def _recall_engineering_research_context(
+    *,
+    channel_id: int | None,
+    intake_prompt: Any,
+    last_proposed: str | None,
+) -> dict[str, Any]:
+    if channel_id is None:
+        return {}
+    context = _ENGINEERING_LAST_RESEARCH_CONTEXT.get(channel_id) or {}
+    if not context:
+        return {}
+    stored_prompt = context.get("intake_prompt")
+    prompt_candidates = {
+        value
+        for value in (
+            str(intake_prompt) if intake_prompt else None,
+            last_proposed,
+        )
+        if value
+    }
+    if stored_prompt and prompt_candidates and stored_prompt not in prompt_candidates:
+        return {}
+    return context
 
 
 def _default_engineering_conversation_fn(
@@ -1478,30 +1524,54 @@ def _default_engineering_conversation_fn(
     intent_id = getattr(response, "intent_id", "")
     intake_prompt = getattr(response, "intake_prompt", None)
     ready_to_intake = bool(getattr(response, "ready_to_intake", False))
+    research_pack = getattr(response, "research_pack", None)
+    collection_outcome = getattr(response, "collection_outcome", None)
+    response_role_for_research = str(
+        getattr(response, "role_for_research", role_for_research)
+        or role_for_research
+    )
     if channel_id is not None:
         continuation_requested = bool(intake_prompt) and should_continue_existing_thread(
             message_text, str(intake_prompt)
         ) and not should_start_new_thread(message_text)
+        if ready_to_intake and research_pack is None and collection_outcome is None:
+            remembered_context = _recall_engineering_research_context(
+                channel_id=channel_id,
+                intake_prompt=intake_prompt,
+                last_proposed=last_proposed,
+            )
+            if remembered_context:
+                research_pack = remembered_context.get("research_pack")
+                collection_outcome = remembered_context.get("collection_outcome")
+                response_role_for_research = str(
+                    remembered_context.get("role_for_research")
+                    or response_role_for_research
+                )
         if ready_to_intake and not continuation_requested:
             _ENGINEERING_LAST_PROPOSED.pop(channel_id, None)
+            _ENGINEERING_LAST_RESEARCH_CONTEXT.pop(channel_id, None)
         elif intent_id in {
             "task_intake_candidate",
             "split_task_proposal",
             "needs_clarification",
         } and intake_prompt:
             _ENGINEERING_LAST_PROPOSED[channel_id] = str(intake_prompt)
+            _remember_engineering_research_context(
+                channel_id=channel_id,
+                intake_prompt=intake_prompt,
+                research_pack=research_pack,
+                collection_outcome=collection_outcome,
+                role_for_research=response_role_for_research,
+            )
 
     return EngineeringConversationOutcome(
         content=str(getattr(response, "content", "") or ""),
         confirmed=ready_to_intake,
         intake_prompt=str(intake_prompt) if intake_prompt else None,
         write_requested=bool(getattr(response, "write_likely", False)),
-        research_pack=getattr(response, "research_pack", None),
-        collection_outcome=getattr(response, "collection_outcome", None),
-        role_for_research=str(
-            getattr(response, "role_for_research", role_for_research)
-            or role_for_research
-        ),
+        research_pack=research_pack,
+        collection_outcome=collection_outcome,
+        role_for_research=response_role_for_research,
     )
 
 
@@ -1584,9 +1654,11 @@ def _clear_engineering_last_proposed_for_channel(message) -> None:
     channel_id = getattr(channel, "id", None)
     if channel_id is not None:
         try:
-            _ENGINEERING_LAST_PROPOSED.pop(int(channel_id), None)
+            normalized_channel_id = int(channel_id)
         except (TypeError, ValueError):
             return
+        _ENGINEERING_LAST_PROPOSED.pop(normalized_channel_id, None)
+        _ENGINEERING_LAST_RESEARCH_CONTEXT.pop(normalized_channel_id, None)
 
 
 def _make_default_thread_kickoff_fn(discord_module: "discord"):
