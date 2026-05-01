@@ -34,6 +34,7 @@ from .engineer import (
 from ..agents.workflow import WorkflowError
 from .doctor import run_doctor_command
 from .github import run_github_issues_command
+from .obsidian import run_obsidian_sync_command
 from .planning import (
     run_planning_checkpoints_command,
     run_planning_daily_command,
@@ -540,6 +541,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     engineer_show_parser.add_argument("--session", required=True, help="Session id.")
 
+    obsidian_parser = subparsers.add_parser(
+        "obsidian",
+        help="Write engineering-agent research notes into a local Obsidian vault.",
+    )
+    obsidian_subparsers = obsidian_parser.add_subparsers(dest="obsidian_command", required=True)
+
+    obsidian_sync_parser = obsidian_subparsers.add_parser(
+        "sync",
+        help="Render a session's research pack and write it under OBSIDIAN_VAULT_PATH.",
+    )
+    obsidian_sync_parser.add_argument(
+        "--session",
+        required=True,
+        help="Workflow session id whose research_pack should be exported.",
+    )
+    obsidian_sync_parser.add_argument(
+        "--kind",
+        choices=("research", "decision", "reference"),
+        help="Override export kind. Defaults to research (or decision when synthesis is present).",
+    )
+    obsidian_sync_parser.add_argument(
+        "--vault-path",
+        help="Override OBSIDIAN_VAULT_PATH for this run only.",
+    )
+    obsidian_sync_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace the target file if it already exists. Default refuses to clobber.",
+    )
+    obsidian_sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Render and validate the path without writing anything.",
+    )
+
     return parser
 
 
@@ -695,6 +731,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         if args.command == "engineer":
             return _dispatch_engineer_command(repo_root, args)
+        if args.command == "obsidian" and args.obsidian_command == "sync":
+            return run_obsidian_sync_command(
+                args.session,
+                kind=args.kind,
+                vault_path=args.vault_path,
+                overwrite=args.overwrite,
+                dry_run=args.dry_run,
+            )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -423,6 +423,23 @@ Discord slash command는 `yule discord bot` 또는 `yule discord up` 실행 시 
 - `/engineer_review_reply`는 적용/제안/남은 이슈를 같은 review cycle에 회신합니다.
 - Discord slash command의 `complete`는 inline `references_used`를 받지 않으므로, reference 인용까지 닫으려면 CLI `yule engineer complete --references-used <json>`을 사용합니다.
 
+### Obsidian 로컬 동기화
+
+ResearchPack을 개인 Obsidian vault에 Markdown 파일로 저장하려면 `OBSIDIAN_VAULT_PATH`에 vault 절대경로를 설정합니다. **실제 절대경로는 git에 커밋되는 `.env.example`이 아니라 로컬 전용 `.env.local`에 둡니다** — `.gitignore`가 `.env*`는 제외하고 `.env.example`만 화이트리스트로 추적하기 때문입니다.
+
+```bash
+# .env.local 예시
+OBSIDIAN_VAULT_PATH=/Users/<MY_USER>/local-dev/yule-agent-vault/obsidian-vault
+
+# 사용
+yule obsidian sync --session <session_id>            # 실제 쓰기 (overwrite 금지가 기본)
+yule obsidian sync --session <session_id> --dry-run  # 경로/내용만 검증
+yule obsidian sync --session <session_id> --overwrite
+yule obsidian sync --session <session_id> --kind reference
+```
+
+vault 안에는 exporter가 정한 `Agents/Engineering/<kind>/YYYY-MM-DD_<slug>.md` 경로로 떨어집니다. 예: `$OBSIDIAN_VAULT_PATH/Agents/Engineering/Research/2026-04-30_stripe-pricing.md`. 자세한 contract와 안전 정책은 `policies/runtime/agents/engineering-agent/obsidian-memory.md`를 참고하세요. `yule doctor`는 `obsidian vault` 체크를 자동 수행합니다.
+
 ## Discord Bot
 
 - 단일 Discord Bot은 `yule discord bot`으로 실행합니다.
