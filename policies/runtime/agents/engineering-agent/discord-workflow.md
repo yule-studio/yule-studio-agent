@@ -10,8 +10,8 @@
   - `prompt`: 자연어 작업 요청 (필수).
   - `task_type`: 명시 분류 (선택, 생략 시 키워드 분류).
   - `write_requested`: 코드/문서 쓰기 요청 여부.
-- 향후 멤버 봇 분리(Phase 2) 시 부서 게이트웨이 봇만 접수한다. 멤버 봇은 외부와 직접 대화하지 않는다 (engineering-agent CLAUDE.md 규약).
-- 작업 단위가 길어지면 게이트웨이가 thread를 만들어 진행 보고/완료 보고를 같은 thread에 묶는 운영을 권장한다 (thread 자동 생성은 후속 마일스톤).
+- 부서 게이트웨이 봇만 접수한다. 멤버 봇은 dispatch marker가 있는 작업/research thread 안에서만 역할별 발화를 이어간다.
+- 접수가 확정되면 게이트웨이는 작업 thread를 만들고 `WorkflowSession.thread_id`에 저장한다. 사용자가 "새로 등록하지 말고", "기존/열려 있는 thread에서 이어가"처럼 명시하면 새 intake를 만들기 전에 같은 사용자/채널의 열린 세션 thread를 먼저 찾고, 찾으면 그 thread에 이어 붙인다. 열린 thread를 찾지 못하면 새 세션을 만들지 않고 사용자에게 재지시를 요청한다.
 
 ### 1.1 채널 환경변수 매트릭스
 
@@ -23,7 +23,7 @@
 | `#승인-대기` | `DISCORD_ENGINEERING_APPROVAL_CHANNEL_ID`, `DISCORD_ENGINEERING_APPROVAL_CHANNEL_NAME` | **예약** — 런타임 미연결 | write 승인 UX 자동화(예: 접수 메시지 미러링, ✅ 반응 승인)에서 사용 예정. |
 | `#봇-상태` | `DISCORD_ENGINEERING_STATUS_CHANNEL_ID`, `DISCORD_ENGINEERING_STATUS_CHANNEL_NAME` | **예약** — 런타임 미연결 | 헬스체크/오류 알림/봇 가동 상태 broadcast 예정. |
 | `#실험실` | `DISCORD_ENGINEERING_LAB_CHANNEL_ID`, `DISCORD_ENGINEERING_LAB_CHANNEL_NAME` | **예약** — 런타임 미연결 | 신규 워크플로/프롬프트 실험용 sandbox. |
-| `#운영-리서치` (Forum) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID`, `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | **예약** — 런타임 미연결 | 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 운영 규약은 `research-forum.md` 참조. |
+| `#운영-리서치` (Forum) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID`, `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | **활성** — `ResearchForumContext.from_env()`가 직접 읽는다 | 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 운영 규약은 `research-forum.md` 참조. |
 
 규약
 - intake 채널 키는 ID/NAME 둘 다 같은 채널을 가리키는 게 권장이다. 한쪽만 채워도 라우팅은 동작하지만, 채널 ID가 바뀌었을 때 NAME fallback이 있으면 무중단 복구가 쉽다.
@@ -129,12 +129,12 @@ yule engineer show --session <sid>     # JSON 상태
 
 > ⚠️ Discord 슬래시 커맨드에서는 `complete` 의 `references_used` 인라인 입력을 받지 않는다. 레퍼런스 인용을 같이 남기고 싶다면 같은 세션을 CLI(`yule engineer complete --references-used <json>`)로 마무리한다. Discord 와 CLI 는 같은 SQLite 세션을 공유하므로 어느 쪽에서 닫아도 결과가 동일하다.
 
-reaction-기반 승인 / thread 자동 생성은 후속 이슈에서 추가한다.
+reaction-기반 승인은 후속 이슈에서 추가한다. thread 자동 생성과 기존 thread continuation은 자유 대화 라우터에서 활성화되어 있다.
 
 ## 8. 후속 작업
 
 1. **승인 reaction 핸들러** — 접수 메시지의 ✅ 반응으로 승인, ❌로 거절.
-2. **Thread 자동 생성** — 작업 단위가 긴 경우 접수 시 thread를 만들어 progress/complete를 묶는다.
+2. **Thread continuation UX 강화** — 열린 thread 후보가 여러 개일 때 선택지를 보여주는 복구 UI.
 3. **멤버 봇 IPC 연결** — approve된 세션이 dispatcher의 executor_role 멤버 봇 큐에 흘러들어가 실제 실행. write 게이트는 실행 시점에서 한 번 더 검사.
 4. **Reference fetcher** — `REFERENCE_*` env 슬롯이 채워졌을 때만 동작. fetch 결과를 references_suggested에 채운다.
 5. **PR 본문 자동 생성** — 완료 메시지 포맷을 그대로 PR description으로 옮기는 헬퍼 (reference-pack.md §산출 양식과 일치).

@@ -110,6 +110,15 @@ class EngineeringThreadKickoff:
 
 
 @dataclass(frozen=True)
+class EngineeringThreadContinuation:
+    """Result of continuing an already-open workflow thread."""
+
+    session: Any
+    thread_id: Optional[int] = None
+    message: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class EngineeringResearchLoopReport:
     """What the research loop hook reported back to the router.
 
@@ -159,6 +168,10 @@ ConversationFn = Callable[..., Union[
 ]]
 IntakeFn = Callable[..., Any]
 ThreadKickoffFn = Callable[..., Awaitable[EngineeringThreadKickoff]]
+ThreadContinuationFn = Callable[..., Union[
+    Optional[EngineeringThreadContinuation],
+    Awaitable[Optional[EngineeringThreadContinuation]],
+]]
 ResearchLoopFn = Callable[..., Union[
     EngineeringResearchLoopReport,
     Awaitable[EngineeringResearchLoopReport],
@@ -213,6 +226,59 @@ def detect_confirmation_signal(text: str) -> bool:
     return any(keyword in normalized for keyword in _CONFIRMATION_KEYWORDS)
 
 
+def should_continue_existing_thread(*texts: str) -> bool:
+    """True when the user asked to reuse an existing workflow thread/session."""
+
+    normalized = " ".join(
+        " ".join(str(text or "").lower().split()) for text in texts
+    )
+    if not normalized.strip():
+        return False
+    continuation_signals = (
+        "새로 등록하지 말고",
+        "새로 만들지 말고",
+        "새 스레드 만들지",
+        "새 thread 만들지",
+        "새로운 스레드",
+        "새 thread",
+        "기존 스레드",
+        "기존 thread",
+        "열려 있는 스레드",
+        "열려있는 스레드",
+        "열려 있는 thread",
+        "열려있는 thread",
+        "이어가",
+        "이어 가",
+        "이어서",
+        "continue existing",
+        "reuse thread",
+        "same thread",
+        "do not create a new thread",
+        "don't create a new thread",
+    )
+    return any(signal in normalized for signal in continuation_signals)
+
+
+def should_start_new_thread(text: str) -> bool:
+    """True when the latest user turn explicitly overrides continuation."""
+
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    force_new_signals = (
+        "새 작업으로 진행",
+        "새 작업으로 시작",
+        "새로 등록해",
+        "새로 등록",
+        "새 스레드로",
+        "새 thread로",
+        "새 세션으로",
+        "new thread",
+        "new session",
+    )
+    return any(signal in normalized for signal in force_new_signals)
+
+
 async def route_engineering_message(
     *,
     message: Any,
@@ -224,6 +290,7 @@ async def route_engineering_message(
     thread_kickoff_fn: ThreadKickoffFn,
     send_chunks: SendChunksFn,
     research_loop_fn: Optional[ResearchLoopFn] = None,
+    thread_continuation_fn: Optional[ThreadContinuationFn] = None,
 ) -> EngineeringRouteResult:
     """Drive the engineering channel response.
 
@@ -271,6 +338,59 @@ async def route_engineering_message(
         return EngineeringRouteResult(
             handled=True,
             conversation_message=outcome.content or None,
+        )
+
+    wants_continuation = should_continue_existing_thread(
+        prompt_text, intake_prompt
+    ) and not should_start_new_thread(prompt_text)
+    if wants_continuation:
+        continuation: Optional[EngineeringThreadContinuation] = None
+        if thread_continuation_fn is not None:
+            continuation = await _maybe_await(
+                thread_continuation_fn(
+                    message=message,
+                    prompt=intake_prompt,
+                    write_requested=outcome.write_requested,
+                    thread_topic=outcome.thread_topic,
+                )
+            )
+        if continuation is not None:
+            continued_session = continuation.session
+            session_id = getattr(continued_session, "session_id", None)
+            thread_id = continuation.thread_id
+            if continuation.message:
+                await send_chunks(message.channel, continuation.message)
+
+            research_loop_report: Optional[EngineeringResearchLoopReport] = None
+            if research_loop_fn is not None and continued_session is not None:
+                research_loop_report = await _run_research_loop_hook(
+                    research_loop_fn=research_loop_fn,
+                    message=message,
+                    session=continued_session,
+                    prompt_text=intake_prompt,
+                    send_chunks=send_chunks,
+                    collection_outcome=outcome.collection_outcome,
+                    research_pack=outcome.research_pack,
+                    role_for_research=outcome.role_for_research,
+                    thread_id=thread_id,
+                )
+            return EngineeringRouteResult(
+                handled=True,
+                conversation_message=outcome.content or None,
+                kickoff_message=continuation.message,
+                session_id=session_id,
+                thread_id=thread_id,
+                research_loop_report=research_loop_report,
+            )
+        not_found_message = (
+            "열려 있는 engineering-agent thread를 찾지 못해서 새 작업 세션은 만들지 않았습니다.\n"
+            "이어갈 thread 안에서 다시 말해주시거나, 새 작업으로 시작하려면 `새 작업으로 진행`이라고 답해 주세요."
+        )
+        await send_chunks(message.channel, not_found_message)
+        return EngineeringRouteResult(
+            handled=True,
+            conversation_message=outcome.content or None,
+            error="existing engineering thread not found",
         )
 
     try:

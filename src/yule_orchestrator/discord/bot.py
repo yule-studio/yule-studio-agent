@@ -15,7 +15,7 @@ from ..agents import (
     WorkflowOrchestrator,
     build_participants_pool,
 )
-from ..agents.workflow_state import update_session
+from ..agents.workflow_state import find_latest_open_session, update_session
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
@@ -37,7 +37,10 @@ from .engineering_channel_router import (
     EngineeringResearchLoopReport,
     EngineeringRouteContext,
     EngineeringThreadKickoff,
+    EngineeringThreadContinuation,
     route_engineering_message,
+    should_continue_existing_thread,
+    should_start_new_thread,
 )
 from .research_forum import ResearchForumContext
 from ..agents.research_loop import (
@@ -161,6 +164,7 @@ def run_discord_bot(repo_root: Path) -> None:
                     thread_kickoff_fn=_make_default_thread_kickoff_fn(discord),
                     send_chunks=send_chunks,
                     research_loop_fn=_make_default_engineering_research_loop_fn(discord),
+                    thread_continuation_fn=_make_default_thread_continuation_fn(discord),
                 )
                 if engineering_result.handled:
                     return
@@ -1475,7 +1479,10 @@ def _default_engineering_conversation_fn(
     intake_prompt = getattr(response, "intake_prompt", None)
     ready_to_intake = bool(getattr(response, "ready_to_intake", False))
     if channel_id is not None:
-        if ready_to_intake:
+        continuation_requested = bool(intake_prompt) and should_continue_existing_thread(
+            message_text, str(intake_prompt)
+        ) and not should_start_new_thread(message_text)
+        if ready_to_intake and not continuation_requested:
             _ENGINEERING_LAST_PROPOSED.pop(channel_id, None)
         elif intent_id in {
             "task_intake_candidate",
@@ -1514,6 +1521,72 @@ def _default_engineering_intake_fn(
         channel_id=channel_id,
         user_id=user_id,
     )
+
+
+def _make_default_thread_continuation_fn(discord_module: "discord"):
+    async def _continue(*, message, prompt, write_requested, thread_topic=None):
+        channel = getattr(message, "channel", None)
+        author = getattr(message, "author", None)
+        user_id = getattr(author, "id", None)
+        current_thread_id = _discord_thread_id(channel, discord_module)
+        parent_channel_id = _discord_parent_channel_id(channel)
+        channel_id = parent_channel_id or getattr(channel, "id", None)
+
+        session = None
+        if current_thread_id is not None:
+            session = find_latest_open_session(
+                thread_id=current_thread_id,
+                user_id=user_id,
+            )
+        if session is None:
+            session = find_latest_open_session(
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+        if session is None and current_thread_id is not None:
+            session = find_latest_open_session(thread_id=current_thread_id)
+        if session is None or getattr(session, "thread_id", None) is None:
+            return None
+
+        thread_id = getattr(session, "thread_id", None)
+        thread = await _resolve_thread_channel(
+            thread_id=thread_id,
+            fallback_channel=channel if current_thread_id == thread_id else None,
+        )
+        if thread is None:
+            return None
+
+        continuation_text = _format_engineering_continuation_message(
+            session=session,
+            prompt=prompt,
+            write_requested=write_requested,
+            topic=thread_topic,
+        )
+        await thread.send(continuation_text)
+        _clear_engineering_last_proposed_for_channel(message)
+        status = (
+            "**[engineering-agent] 기존 thread에 이어서 접수**\n"
+            f"세션 ID: `{session.session_id}`\n"
+            f"thread id: `{thread_id}`\n"
+            "새 작업 세션은 만들지 않았습니다."
+        )
+        return EngineeringThreadContinuation(
+            session=session,
+            thread_id=thread_id,
+            message=status,
+        )
+
+    return _continue
+
+
+def _clear_engineering_last_proposed_for_channel(message) -> None:
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    if channel_id is not None:
+        try:
+            _ENGINEERING_LAST_PROPOSED.pop(int(channel_id), None)
+        except (TypeError, ValueError):
+            return
 
 
 def _make_default_thread_kickoff_fn(discord_module: "discord"):
@@ -1574,6 +1647,73 @@ def _persist_engineering_thread_id(session, thread_id):
         return session
 
 
+def _discord_thread_id(channel, discord_module: "discord") -> int | None:
+    thread_cls = getattr(discord_module, "Thread", None)
+    if thread_cls is not None and isinstance(channel, thread_cls):
+        try:
+            return int(getattr(channel, "id", None))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _discord_parent_channel_id(channel) -> int | None:
+    parent = getattr(channel, "parent", None)
+    raw = getattr(parent, "id", None) or getattr(channel, "parent_id", None)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _resolve_thread_channel(*, thread_id, fallback_channel=None):
+    try:
+        parsed_thread_id = int(thread_id)
+    except (TypeError, ValueError):
+        return None
+    if getattr(fallback_channel, "id", None) == parsed_thread_id:
+        return fallback_channel
+
+    bot = _resolve_active_bot()
+    if bot is not None:
+        thread = bot.get_channel(parsed_thread_id)
+        if thread is not None:
+            return thread
+        try:
+            return await bot.fetch_channel(parsed_thread_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warning: engineering thread fetch failed: {exc}")
+    return None
+
+
+def _format_engineering_continuation_message(
+    *,
+    session,
+    prompt: str,
+    write_requested: bool,
+    topic: str | None,
+) -> str:
+    lines = [
+        "**[engineering-agent] 기존 작업 이어받음**",
+        f"세션 ID: `{getattr(session, 'session_id', '?')}`",
+    ]
+    if topic:
+        lines.append(f"주제: {topic}")
+    lines.extend(
+        [
+            "",
+            "**추가 요청**",
+            _excerpt_text(prompt, limit=900),
+        ]
+    )
+    if write_requested:
+        lines.append("")
+        lines.append("쓰기/수정 가능성이 있어 기존 승인 상태를 유지한 채로 검토를 이어갑니다.")
+    lines.append("")
+    lines.append("이 thread에서 자료 정리와 역할별 검토를 계속 진행합니다.")
+    return "\n".join(lines)
+
+
 def _append_team_kickoff_directive(message: str, session) -> str:
     if session is None:
         return message
@@ -1624,6 +1764,13 @@ def _default_engineering_thread_topic(session) -> str:
     session_id = getattr(session, "session_id", None) or "?"
     task_type = getattr(session, "task_type", None) or "task"
     return f"engineer-{task_type}-{session_id}"[:90]
+
+
+def _excerpt_text(text: str, *, limit: int) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned or "(요청 본문 없음)"
+    return cleaned[: max(1, limit - 1)].rstrip() + "…"
 
 
 def _make_default_engineering_research_loop_fn(discord_module: "discord"):

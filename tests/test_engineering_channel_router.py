@@ -18,11 +18,14 @@ from yule_orchestrator.discord.engineering_channel_router import (
     EngineeringResearchLoopReport,
     EngineeringRouteContext,
     EngineeringRouteResult,
+    EngineeringThreadContinuation,
     EngineeringThreadKickoff,
     detect_confirmation_signal,
     extract_message_attachments,
     is_engineering_channel,
     route_engineering_message,
+    should_continue_existing_thread,
+    should_start_new_thread,
 )
 
 
@@ -212,6 +215,16 @@ class ConfirmationSignalTests(unittest.TestCase):
                 f"did not expect confirmation for {phrase!r}",
             )
 
+    def test_detects_existing_thread_continuation_request(self) -> None:
+        self.assertTrue(
+            should_continue_existing_thread(
+                "이대로 진행",
+                "새로 등록하지 말고 열려 있는 스레드에서 이어가줘",
+            )
+        )
+        self.assertFalse(should_continue_existing_thread("새 작업 등록해줘"))
+        self.assertTrue(should_start_new_thread("새 작업으로 진행"))
+
 
 class RouteContextEnvTests(unittest.TestCase):
     def test_reads_env_vars(self) -> None:
@@ -353,6 +366,96 @@ class RouteEngineeringMessageTests(unittest.TestCase):
         sent_payloads = [call.args[1] for call in self.send_chunks.await_args_list]
         self.assertIn(outcome.content, sent_payloads)
         self.assertIn(intake_message, sent_payloads)
+
+    def test_continuation_request_reuses_existing_thread_without_intake(self) -> None:
+        message = _Message(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        existing_session = _FakeSession(session_id="open-session", task_type="research")
+        outcome = EngineeringConversationOutcome(
+            content="기존 thread를 찾아 이어갈게요.",
+            confirmed=True,
+            intake_prompt="새로 등록하지 말고 열려 있는 스레드에서 리서치 이어가줘",
+        )
+        intake_fn = AsyncMock(side_effect=AssertionError("intake should not run"))
+        kickoff_fn = AsyncMock(side_effect=AssertionError("kickoff should not run"))
+        continuation_fn = AsyncMock(
+            return_value=EngineeringThreadContinuation(
+                session=existing_session,
+                thread_id=999,
+                message="기존 thread에 이어 붙였습니다.",
+            )
+        )
+        captured: dict[str, Any] = {}
+
+        async def research_loop_fn(**kwargs):
+            captured.update(kwargs)
+            return EngineeringResearchLoopReport(
+                forum_status_message="역할별 검토 재개",
+                forum_thread_id=777,
+            )
+
+        result = _run(
+            route_engineering_message(
+                message=message,
+                bot_user=object(),
+                route_context=self.context,
+                extract_prompt=_extract_prompt,
+                conversation_fn=lambda **_: outcome,
+                intake_fn=intake_fn,
+                thread_kickoff_fn=kickoff_fn,
+                send_chunks=self.send_chunks,
+                research_loop_fn=research_loop_fn,
+                thread_continuation_fn=continuation_fn,
+            )
+        )
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.session_id, "open-session")
+        self.assertEqual(result.thread_id, 999)
+        intake_fn.assert_not_awaited()
+        kickoff_fn.assert_not_awaited()
+        continuation_fn.assert_awaited_once()
+        self.assertEqual(captured["session"], existing_session)
+        self.assertEqual(captured["thread_id"], 999)
+        sent_payloads = [call.args[1] for call in self.send_chunks.await_args_list]
+        self.assertIn("기존 thread에 이어 붙였습니다.", sent_payloads)
+        self.assertIn("역할별 검토 재개", sent_payloads)
+
+    def test_continuation_request_without_open_thread_does_not_create_intake(self) -> None:
+        message = _Message(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        outcome = EngineeringConversationOutcome(
+            content="기존 thread를 찾아 이어갈게요.",
+            confirmed=True,
+            intake_prompt="새로 등록하지 말고 기존 스레드에서 이어가줘",
+        )
+        intake_fn = AsyncMock(side_effect=AssertionError("intake should not run"))
+        kickoff_fn = AsyncMock(side_effect=AssertionError("kickoff should not run"))
+
+        result = _run(
+            route_engineering_message(
+                message=message,
+                bot_user=object(),
+                route_context=self.context,
+                extract_prompt=_extract_prompt,
+                conversation_fn=lambda **_: outcome,
+                intake_fn=intake_fn,
+                thread_kickoff_fn=kickoff_fn,
+                send_chunks=self.send_chunks,
+                thread_continuation_fn=AsyncMock(return_value=None),
+            )
+        )
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.error, "existing engineering thread not found")
+        intake_fn.assert_not_awaited()
+        kickoff_fn.assert_not_awaited()
+        sent_payloads = [call.args[1] for call in self.send_chunks.await_args_list]
+        self.assertTrue(any("새 작업 세션은 만들지 않았습니다" in s for s in sent_payloads))
 
     def test_keyword_fallback_promotes_to_intake_when_outcome_is_string(self) -> None:
         message = _Message(
@@ -1332,6 +1435,20 @@ class HandleResearchTurnMessageTestCase(unittest.TestCase):
         # synthesis comment carries the closing summary, no further directive
         self.assertIn("tech-lead 종합", outcome.message)
         self.assertNotIn("[research-turn:", outcome.message)
+
+    def test_tech_lead_bot_handles_synthesis_marker(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="tech-lead",
+            text="[research-turn:sess-1 tech-lead-synthesis]",
+            session_loader=lambda _sid: self._session(),
+        )
+        self.assertIsNotNone(outcome)
+        self.assertTrue(outcome.is_synthesis)
+        self.assertIn("tech-lead 종합", outcome.message)
 
     def test_unknown_session_returns_none(self) -> None:
         from yule_orchestrator.discord.engineering_team_runtime import (

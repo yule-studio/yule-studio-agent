@@ -481,7 +481,11 @@ def handle_research_turn_message(
         # Unscoped marker — the gateway always emits a role-scoped one,
         # but we tolerate missing role for ops "ping all" recovery.
         target_role = role
-    if target_role != role:
+
+    effective_role = target_role
+    if target_role == RESEARCH_SYNTHESIS_ROLE and role == "tech-lead":
+        effective_role = RESEARCH_SYNTHESIS_ROLE
+    elif target_role != role:
         return None
 
     loader = session_loader or load_session
@@ -490,7 +494,7 @@ def handle_research_turn_message(
         return None
 
     sequence = deliberation_research_role_sequence(session)
-    if role == RESEARCH_SYNTHESIS_ROLE:
+    if effective_role == RESEARCH_SYNTHESIS_ROLE:
         # tech-lead synthesis comment closes the chain. Re-use the
         # existing ``synthesize_thread`` so the forum and working thread
         # converge on the same wording.
@@ -507,18 +511,20 @@ def handle_research_turn_message(
             is_synthesis=True,
         )
 
-    if role not in sequence:
+    if effective_role not in sequence:
         return None
 
     research_pack = _maybe_load_pack(pack_loader, session)
     take, rendered = deliberation_role_turn(
         session,
-        f"engineering-agent/{role}",
+        _role_address(effective_role),
         research_pack=research_pack,
-        previous_turns=_replay_role_takes_until(session, sequence, role, research_pack),
+        previous_turns=_replay_role_takes_until(
+            session, sequence, effective_role, research_pack
+        ),
     )
 
-    next_role = _next_research_role(sequence, role)
+    next_role = _next_research_role(sequence, effective_role)
     next_directive: Optional[str]
     if next_role is None:
         next_directive = research_dispatch_directive(
@@ -600,7 +606,7 @@ def _replay_role_takes_until(
             break
         take, _ = deliberation_role_turn(
             session,
-            f"engineering-agent/{role}",
+            _role_address(role),
             research_pack=research_pack,
             previous_turns=tuple(accumulated),
         )
@@ -617,12 +623,19 @@ def _replay_role_takes(
     for role in sequence:
         take, _ = deliberation_role_turn(
             session,
-            f"engineering-agent/{role}",
+            _role_address(role),
             research_pack=research_pack,
             previous_turns=tuple(accumulated),
         )
         accumulated.append(take)
     return tuple(accumulated)
+
+
+def _role_address(role: str) -> str:
+    cleaned = str(role or "").strip()
+    if "/" in cleaned:
+        return cleaned
+    return f"engineering-agent/{cleaned}"
 
 
 # ---------------------------------------------------------------------------
@@ -678,10 +691,29 @@ def handle_team_turn_message(
     next_turn = _next_unplayed_after(plan, role, session)
     next_directive = dispatch_directive(next_turn) if next_turn else None
     is_final = next_turn is None
+    message = my_turn.render()
+
+    research_pack = _load_pack_from_session_extra(session)
+    if research_pack is not None:
+        sequence = tuple(turn.role for turn in plan)
+        _, message = deliberation_role_turn(
+            session,
+            _role_address(role),
+            research_pack=research_pack,
+            previous_turns=_replay_role_takes_until(
+                session, sequence, role, research_pack
+            ),
+        )
+        if is_final:
+            accumulated = _replay_role_takes(session, sequence, research_pack)
+            _, synthesis_text = synthesize_thread(
+                session, accumulated, research_pack=research_pack
+            )
+            message = f"{message}\n\n{synthesis_text}"
 
     return TeamTurnOutcome(
         turn=my_turn,
-        message=my_turn.render(),
+        message=message,
         next_directive=next_directive,
         is_final=is_final,
     )

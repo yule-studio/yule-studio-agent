@@ -13,6 +13,7 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.bot import (
+    _ENGINEERING_LAST_PROPOSED,
     _checkpoint_window_minutes,
     _default_engineering_conversation_fn,
     _filter_unsent_checkpoints,
@@ -219,4 +220,36 @@ class EngineeringConversationBridgeTestCase(unittest.TestCase):
         self.assertEqual(
             outcome.role_for_research,
             "engineering-agent/product-designer",
+        )
+
+    @patch(
+        "yule_orchestrator.discord.engineering_conversation."
+        "build_engineering_conversation_response"
+    )
+    def test_default_bridge_keeps_last_prompt_for_existing_thread_retry(
+        self,
+        build_response_mock,
+    ) -> None:
+        _ENGINEERING_LAST_PROPOSED[999] = "새로 등록하지 말고 기존 스레드에서 이어가줘"
+        self.addCleanup(_ENGINEERING_LAST_PROPOSED.pop, 999, None)
+        build_response_mock.return_value = SimpleNamespace(
+            content="기존 thread를 찾아 이어갈게요.",
+            intent_id="confirm_intake",
+            ready_to_intake=True,
+            intake_prompt="새로 등록하지 말고 기존 스레드에서 이어가줘",
+            write_likely=False,
+            research_pack=None,
+            collection_outcome=None,
+        )
+
+        _default_engineering_conversation_fn(
+            message_text="이대로 진행",
+            author_user_id=4242,
+            channel_id=999,
+            bot_user=object(),
+        )
+
+        self.assertEqual(
+            _ENGINEERING_LAST_PROPOSED[999],
+            "새로 등록하지 말고 기존 스레드에서 이어가줘",
         )

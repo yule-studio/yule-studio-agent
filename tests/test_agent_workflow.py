@@ -20,6 +20,7 @@ from yule_orchestrator.agents import (
     build_participants_pool,
     extract_urls,
 )
+from yule_orchestrator.agents.workflow_state import find_latest_open_session
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +103,22 @@ class IntakeTestCase(_IsolatedCacheTestCase):
         result = orch.intake(prompt="users API schema 추가", write_requested=False)
         self.assertEqual(result.session.references_suggested, ())
         self.assertIn("이 task_type에는 시각 reference를 강제하지 않습니다", result.message)
+
+    def test_latest_open_session_can_be_found_for_thread_reuse(self) -> None:
+        orch, _ = _build_orchestrator()
+        result = orch.intake(
+            prompt="열려 있는 thread에서 이어갈 작업",
+            write_requested=False,
+            channel_id=111,
+            user_id=222,
+            thread_id=333,
+        )
+
+        found = find_latest_open_session(channel_id=111, user_id=222)
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.session_id, result.session.session_id)
+        self.assertEqual(found.thread_id, 333)
 
 
 class TransitionTestCase(_IsolatedCacheTestCase):

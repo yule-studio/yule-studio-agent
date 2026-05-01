@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Optional, Sequence
 
-from ..storage import load_json_cache, save_json_cache
+from ..storage import list_json_cache_entries, load_json_cache, save_json_cache
 
 
 WORKFLOW_NAMESPACE = "engineering-agent-workflow"
@@ -87,6 +87,54 @@ def load_session(session_id: str) -> Optional[WorkflowSession]:
     if entry is None:
         return None
     return _from_payload(entry.payload)
+
+
+def list_sessions(*, limit: int = 100) -> tuple[WorkflowSession, ...]:
+    """Return recent workflow sessions, newest first.
+
+    The local cache is the only workflow index in the MVP. Listing recent
+    entries lets Discord routing recover an already-open thread when the user
+    explicitly asks to continue instead of registering another task.
+    """
+
+    sessions: list[WorkflowSession] = []
+    for entry in list_json_cache_entries(
+        namespace=WORKFLOW_NAMESPACE,
+        provider="engineering-agent-workflow",
+        include_expired=True,
+        limit=limit,
+    ):
+        try:
+            sessions.append(_from_payload(entry.payload))
+        except Exception:  # noqa: BLE001 - ignore corrupt cache rows
+            continue
+    sessions.sort(key=lambda item: item.updated_at, reverse=True)
+    return tuple(sessions)
+
+
+def find_latest_open_session(
+    *,
+    channel_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    thread_id: Optional[int] = None,
+    exclude_session_id: Optional[str] = None,
+    limit: int = 100,
+) -> Optional[WorkflowSession]:
+    """Find the newest non-closed session matching the given Discord scope."""
+
+    for session in list_sessions(limit=limit):
+        if exclude_session_id and session.session_id == exclude_session_id:
+            continue
+        if session.state in {WorkflowState.COMPLETED, WorkflowState.REJECTED}:
+            continue
+        if thread_id is not None and session.thread_id != thread_id:
+            continue
+        if channel_id is not None and session.channel_id != channel_id:
+            continue
+        if user_id is not None and session.user_id != user_id:
+            continue
+        return session
+    return None
 
 
 def update_session(session: WorkflowSession, *, now: datetime) -> WorkflowSession:

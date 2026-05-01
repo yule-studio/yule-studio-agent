@@ -5,7 +5,9 @@
 ## 1. 범위
 
 - **포함**: thread 안에서 `tech-lead → product-designer → backend-engineer / frontend-engineer → qa-engineer` 처럼 dispatcher가 정한 `role_sequence`를 한 번씩 발화한다.
-- **포함**: 각 발화는 세션 메타데이터(분류, 실행자, 승인 상태, reference)를 반영한 1차 요약이다. 실제 runner(claude/gemini/codex/ollama)를 깊게 호출하지 않는다.
+- **포함**: ResearchPack이 없는 세션의 각 발화는 세션 메타데이터(분류, 실행자, 승인 상태, reference)를 반영한 1차 요약이다.
+- **포함**: ResearchPack이 저장된 세션은 단순 템플릿 대신 deliberation contract(관점 / 근거 / 리스크 / 다음 행동)를 사용하고, 마지막 역할 발화 뒤 tech-lead 종합을 같은 thread에 붙인다.
+- **포함**: 실제 runner(claude/gemini/codex/ollama) 호출은 아직 선택 주입 지점(`runner_fn`)으로만 존재한다. runner가 없거나 실패하면 deterministic fallback으로 역할별 검토를 계속 진행한다.
 - **제외**: 자유 토론, 역할 간 자율 reply, 사용자와의 직접 대화. 이 단계의 member 봇은 dispatch 마커가 본인을 지목할 때만 발화한다.
 
 ## 2. 사전 조건
@@ -33,7 +35,7 @@
 1. 게이트웨이가 thread 를 만들고 `kickoff_directive(session)` 결과를 thread 에 게시한다 (예: `[team-turn:abc123 tech-lead]`).
 2. tech-lead 봇의 `on_message` 가 마커를 감지 → `engineering_team_runtime.handle_team_turn_message` 호출 → 본인의 발화 + 다음 role 의 directive 를 한 메시지로 thread 에 게시.
 3. 다음 봇이 동일하게 동작. 마지막 role 은 directive 를 붙이지 않고 `closing_message(session)` 을 덧붙여 chain 을 닫는다.
-4. 게이트웨이는 각 발화 직후 `mark_turn_played(session, role)` 으로 세션 상태를 갱신한다 — 봇이 같은 thread 에 두 번 발화하지 못하도록 막는 단일 진실 소스.
+4. 멤버 봇은 발화 직후 `mark_turn_played(session, role)` 을 best-effort로 저장한다 — 봇이 같은 thread 에 두 번 발화하지 못하도록 막는 단일 진실 소스.
 
 ## 4. 메시지 포맷
 
@@ -56,7 +58,7 @@
 | 증상 | 원인 후보 | 대응 |
 |---|---|---|
 | chain 이 도중에 멈춤 | 다음 role 봇이 비활성(토큰 미발급) | 운영자가 thread 에 `[team-turn:<sid> <next-role>]` 를 직접 게시하거나, `--dry-run` 으로 활성 상태 확인 |
-| 동일 role 이 두 번 발화 | `mark_turn_played` 가 호출되지 않음 (게이트웨이 wiring 누락) | 게이트웨이 hook 점검; 재현되면 `extra.team_conversation.played_roles` 수동 보정 |
+| 동일 role 이 두 번 발화 | `mark_turn_played` 저장 실패 또는 Discord 이벤트 재전송 | 멤버 봇 로그 점검; 재현되면 `extra.team_conversation.played_roles` 수동 보정 |
 | kickoff 마커에 role 미지정 시 여러 봇이 동시 답변 | role-less 마커는 plan 에 든 모든 활성 봇이 응답 가능 | 운영 규약: 게이트웨이는 항상 role 지정 directive 를 게시한다 (`kickoff_directive` 가 자동으로 해줌) |
 | thread 가 없는 세션에 chain 시도 | dispatcher 만 끝나고 thread 가 아직 생성되지 않은 상태 | `build_turn_plan` 이 `ValueError` 로 차단; 게이트웨이가 thread 생성 → `session.thread_id` 기입 후 재시도 |
 

@@ -140,10 +140,19 @@ def build_engineering_conversation_response(
         intake_prompt = last_proposed_prompt or message_text
         suggested = _suggest_task_type(intake_prompt)
         write_likely = _looks_like_write_request(intake_prompt)
-        body = (
-            "좋습니다. 이대로 작업을 등록할게요.\n"
-            "intake가 만들어지면 세션 ID와 승인 안내를 이어서 드릴게요."
-        )
+        if (
+            _asks_to_continue_existing_thread(intake_prompt, message_text)
+            and not _asks_to_start_new_thread(message_text)
+        ):
+            body = (
+                "좋습니다. 새 작업으로 등록하지 않고, 열려 있는 thread를 찾아 이어갈게요.\n"
+                "찾아낸 세션 ID와 이어갈 위치를 바로 안내드리겠습니다."
+            )
+        else:
+            body = (
+                "좋습니다. 이대로 작업을 등록할게요.\n"
+                "intake가 만들어지면 세션 ID와 승인 안내를 이어서 드릴게요."
+            )
         return EngineeringConversationResponse(
             content=_prepend_mention(body, mention_user_id),
             intent_id=CONFIRM_INTAKE,
@@ -514,6 +523,8 @@ _CONFIRMATION_PHRASES = (
     "좋습니다 진행",
     "오케이 진행",
     "ok 진행",
+    "새 작업으로 진행",
+    "새 작업으로 시작",
     "그렇게 등록",
     "그렇게 진행",
     "진행해줘",
@@ -550,6 +561,49 @@ def _is_confirmation(normalized: str) -> bool:
     if normalized in _CONFIRMATION_STANDALONE:
         return True
     return any(phrase in normalized for phrase in _CONFIRMATION_PHRASES)
+
+
+def _asks_to_continue_existing_thread(*texts: str) -> bool:
+    normalized = " ".join(
+        " ".join(str(text or "").lower().split()) for text in texts
+    )
+    return any(
+        signal in normalized
+        for signal in (
+            "새로 등록하지 말고",
+            "새로 만들지 말고",
+            "새 스레드 만들지",
+            "새 thread 만들지",
+            "기존 스레드",
+            "기존 thread",
+            "열려 있는 스레드",
+            "열려있는 스레드",
+            "열려 있는 thread",
+            "열려있는 thread",
+            "이어가",
+            "이어 가",
+            "이어서",
+            "reuse thread",
+            "same thread",
+        )
+    )
+
+
+def _asks_to_start_new_thread(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    return any(
+        signal in normalized
+        for signal in (
+            "새 작업으로 진행",
+            "새 작업으로 시작",
+            "새로 등록",
+            "새 스레드로",
+            "새 thread로",
+            "새 세션으로",
+            "new thread",
+            "new session",
+        )
+    )
 
 
 _GENERAL_HELP_PHRASES = (

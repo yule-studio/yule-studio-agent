@@ -10,6 +10,12 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.agents.workflow_state import WorkflowSession, WorkflowState
+from yule_orchestrator.agents.research_pack import (
+    ResearchPack,
+    ResearchSource,
+    SourceType,
+    pack_to_dict,
+)
 from yule_orchestrator.discord.engineering_team_runtime import (
     PLAYED_ROLES_KEY,
     TEAM_CONVERSATION_KEY,
@@ -65,6 +71,27 @@ def _make_session(
         write_blocked_reason=write_blocked_reason,
         extra=extra or {},
     )
+
+
+def _research_pack_extra() -> dict:
+    pack = ResearchPack(
+        title="Obsidian agent memory",
+        summary="에이전트 지식 저장 구조 조사",
+        primary_url="https://example.com/obsidian-agent-memory",
+        sources=(
+            ResearchSource(
+                source_url="https://example.com/obsidian-agent-memory",
+                title="Obsidian agent memory pattern",
+                summary="knowledge storage 구조 참고",
+                source_type=SourceType.OFFICIAL_DOCS,
+                extra={
+                    "source_type": "official_docs",
+                    "why_relevant": "역할별 지식 저장 구조 설계 근거",
+                },
+            ),
+        ),
+    )
+    return {"research_pack": pack_to_dict(pack)}
 
 
 class BuildTurnPlanTestCase(unittest.TestCase):
@@ -293,6 +320,23 @@ class HandleTeamTurnMessageTestCase(unittest.TestCase):
         self.assertIn("[tech-lead]", full)
         self.assertIn(outcome.next_directive or "", full)
 
+    def test_research_pack_uses_deliberation_turn_instead_of_opening_template(self) -> None:
+        session = _make_session(
+            role_sequence=("tech-lead", "backend-engineer", "qa-engineer"),
+            extra=_research_pack_extra(),
+        )
+        text = "[team-turn:sess-team-001 backend-engineer]"
+        outcome = handle_team_turn_message(
+            role="backend-engineer",
+            text=text,
+            session_loader=self._loader(session),
+        )
+        assert outcome is not None
+        self.assertIn("**[backend-engineer]**", outcome.message)
+        self.assertIn("관점:", outcome.message)
+        self.assertIn("근거:", outcome.message)
+        self.assertIn("official_docs", outcome.message)
+
     def test_last_role_marks_final(self) -> None:
         session = self.session
         for role in ("tech-lead", "product-designer", "frontend-engineer"):
@@ -307,6 +351,20 @@ class HandleTeamTurnMessageTestCase(unittest.TestCase):
         self.assertTrue(outcome.is_final)
         self.assertIsNone(outcome.next_directive)
         self.assertEqual(outcome.full_post(), outcome.message)
+
+    def test_final_pack_driven_turn_appends_tech_lead_synthesis(self) -> None:
+        session = _make_session(extra=_research_pack_extra())
+        for role in ("tech-lead", "product-designer", "frontend-engineer"):
+            session = mark_turn_played(session, role)
+        text = "[team-turn:sess-team-001 qa-engineer]"
+        outcome = handle_team_turn_message(
+            role="qa-engineer",
+            text=text,
+            session_loader=self._loader(session),
+        )
+        assert outcome is not None
+        self.assertTrue(outcome.is_final)
+        self.assertIn("tech-lead 종합", outcome.message)
 
     def test_marker_without_role_still_lets_owner_speak(self) -> None:
         text = "kickoff [team-turn:sess-team-001]"

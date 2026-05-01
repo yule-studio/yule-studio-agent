@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime
 import sys
 
+from ..agents.workflow_state import load_session, update_session
 from .config import DiscordBotConfig
 from .engineering_team_runtime import (
     ResearchTurnOutcome,
     TeamTurnOutcome,
     handle_research_turn_message,
     handle_team_turn_message,
+    mark_turn_played,
 )
 from .member_bots import GATEWAY_ROLE_KEY, MemberBotProfile
 
@@ -98,6 +101,7 @@ async def _post_team_turn(channel, outcome: TeamTurnOutcome) -> None:
     """
 
     await channel.send(outcome.full_post())
+    _mark_team_turn_persisted(outcome)
 
 
 async def _post_research_turn(channel, outcome: ResearchTurnOutcome) -> None:
@@ -109,3 +113,16 @@ async def _post_research_turn(channel, outcome: ResearchTurnOutcome) -> None:
     """
 
     await channel.send(outcome.message)
+
+
+def _mark_team_turn_persisted(outcome: TeamTurnOutcome) -> None:
+    """Best-effort guard against a member bot posting the same turn twice."""
+
+    try:
+        session = load_session(outcome.turn.session_id)
+        if session is None:
+            return
+        updated = mark_turn_played(session, outcome.turn.role)
+        update_session(updated, now=datetime.now().astimezone())
+    except Exception:  # noqa: BLE001 - posting already succeeded; never crash the bot
+        return

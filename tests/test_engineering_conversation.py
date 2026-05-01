@@ -151,6 +151,23 @@ class ResponseEnvelopeTestCase(unittest.TestCase):
         self.assertEqual(envelope.suggested_task_type, "landing-page")
         self.assertTrue(envelope.write_likely)
 
+    def test_confirm_existing_thread_request_does_not_say_new_registration(self) -> None:
+        envelope = build_engineering_conversation_response(
+            "이대로 진행",
+            last_proposed_prompt="새로 등록하지 말고 열려 있는 스레드에서 리서치 이어가줘",
+        )
+        self.assertTrue(envelope.ready_to_intake)
+        self.assertIn("새 작업으로 등록하지 않고", envelope.content)
+        self.assertNotIn("작업을 등록할게요", envelope.content)
+
+    def test_confirm_can_override_existing_thread_request_with_new_work(self) -> None:
+        envelope = build_engineering_conversation_response(
+            "새 작업으로 진행",
+            last_proposed_prompt="새로 등록하지 말고 열려 있는 스레드에서 리서치 이어가줘",
+        )
+        self.assertTrue(envelope.ready_to_intake)
+        self.assertIn("작업을 등록할게요", envelope.content)
+
     def test_confirm_without_last_prompt_uses_message_text(self) -> None:
         envelope = build_engineering_conversation_response("이대로 진행")
         self.assertEqual(envelope.intent_id, CONFIRM_INTAKE)

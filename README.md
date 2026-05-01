@@ -157,6 +157,37 @@ DISCORD_GUILD_ID=
 # DISCORD_PREPARATION_RETRY_COUNT=2
 # DISCORD_PREPARATION_RETRY_DELAY_SECONDS=15
 
+# Engineering Agent Discord channels
+# DISCORD_ENGINEERING_INTAKE_CHANNEL_ID=
+# DISCORD_ENGINEERING_INTAKE_CHANNEL_NAME=업무-접수
+# DISCORD_ENGINEERING_APPROVAL_CHANNEL_ID=
+# DISCORD_ENGINEERING_APPROVAL_CHANNEL_NAME=승인-대기
+# DISCORD_ENGINEERING_STATUS_CHANNEL_ID=
+# DISCORD_ENGINEERING_STATUS_CHANNEL_NAME=봇-상태
+# DISCORD_ENGINEERING_LAB_CHANNEL_ID=
+# DISCORD_ENGINEERING_LAB_CHANNEL_NAME=실험실
+
+# Cross-agent research forum
+# DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID=
+# DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME=운영-리서치
+
+# Engineering Agent member bots
+# ENGINEERING_AGENT_BOT_GATEWAY_TOKEN=
+# ENGINEERING_AGENT_BOT_TECH_LEAD_TOKEN=
+# ENGINEERING_AGENT_BOT_AI_ENGINEER_TOKEN=
+# ENGINEERING_AGENT_BOT_PRODUCT_DESIGNER_TOKEN=
+# ENGINEERING_AGENT_BOT_BACKEND_ENGINEER_TOKEN=
+# ENGINEERING_AGENT_BOT_FRONTEND_ENGINEER_TOKEN=
+# ENGINEERING_AGENT_BOT_QA_ENGINEER_TOKEN=
+
+# Autonomous research collector
+# ENGINEERING_RESEARCH_AUTO_COLLECT_ENABLED=false
+# ENGINEERING_RESEARCH_PROVIDER=mock
+# ENGINEERING_RESEARCH_MAX_RESULTS=5
+# TAVILY_API_KEY=
+# BRAVE_SEARCH_API_KEY=
+# ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots
+
 # GITHUB_ISSUES_CACHE_SECONDS=300
 # GITHUB_PULL_REQUESTS_CACHE_SECONDS=300
 ```
@@ -216,13 +247,14 @@ DISCORD_GUILD_ID=
   - `#승인-대기` (= `DISCORD_ENGINEERING_APPROVAL_CHANNEL_*`) — write 승인 UX. 현재 예약 슬롯.
   - `#봇-상태` (= `DISCORD_ENGINEERING_STATUS_CHANNEL_*`) — 상태/오류/헬스체크. 현재 예약 슬롯.
   - `#실험실` (= `DISCORD_ENGINEERING_LAB_CHANNEL_*`) — 워크플로/프롬프트 테스트. 현재 예약 슬롯.
-  - `#운영-리서치` Forum (= `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*`) — 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 현재 예약 슬롯이며 게시 규약/댓글 양식/Obsidian export contract는 `policies/runtime/agents/engineering-agent/research-forum.md` 참조.
+  - `#운영-리서치` Forum (= `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_*`) — 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 현재 런타임에서 게시 대상으로 사용하며 게시 규약/댓글 양식/Obsidian export contract는 `policies/runtime/agents/engineering-agent/research-forum.md` 참조.
 - intake 채널은 ID와 NAME 중 하나만 매치돼도 라우팅됩니다. 둘 다 비어 있으면 engineering 라우터가 비활성으로 떨어져 모든 메시지는 기존 planning 흐름으로 처리됩니다. 자세한 매트릭스는 `policies/runtime/agents/engineering-agent/discord-workflow.md` §1.1 참고.
 - `yule discord up`이 두 봇을 띄우면 **planning-bot과 engineering-agent gateway가 별도 프로세스**로 분리됩니다:
   - planning-bot은 자식 프로세스에서 `DISCORD_ENGINEERING_INTAKE_CHANNEL_*`를 빈 값으로 덮어써 `#업무-접수`에 응답하지 않습니다.
   - engineering-agent gateway는 `ENGINEERING_AGENT_BOT_GATEWAY_TOKEN`을 자기 토큰으로 들고 별도 프로세스로 기동되며, 자식 환경에서 `DISCORD_DAILY_*`/`DISCORD_CHECKPOINT_*`/`DISCORD_CONVERSATION_*`/`DISCORD_DEBUG_*`/`DISCORD_NOTIFY_USER_ID`를 비워 planning 채널 동작을 차단합니다 (`DISCORD_CONVERSATION_REPLY_MODE=disabled`).
   - 결과: 두 봇이 같은 메시지에 동시에 응답하지 않고, 서로 자기 채널만 본다는 약속이 강제됩니다. 자세한 분리 동작은 `policies/runtime/agents/engineering-agent/launcher.md`와 supervisor의 `BOT_RUNNER_ENGINEERING_GATEWAY` 분기 참조.
 - engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화되고, kickoff 메시지 끝에 `[team-turn:<session_id> tech-lead]` directive가 자동 부착되어 멤버 봇 chain이 시작될 수 있습니다.
+- 사용자가 `새로 등록하지 말고`, `기존 스레드`, `열려 있는 thread`, `이어가` 같은 표현으로 확인하면 gateway는 새 세션을 만들기 전에 같은 사용자/채널의 열린 engineering thread를 찾아 이어 붙입니다. 찾지 못하면 새 작업 세션을 만들지 않고 재지시를 요청합니다.
 - `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값입니다. 이 모드에서는 gateway가 `#운영-리서치` 포럼 post와 첫 `[research-turn:<session_id> tech-lead]` directive만 남기고, `tech-lead` / `ai-engineer` / `product-designer` / `backend-engineer` / `frontend-engineer` / `qa-engineer` 봇이 자기 계정으로 역할별 의견을 이어 씁니다. `gateway`로 바꾸면 멤버 봇 토큰이 없을 때처럼 gateway가 역할별 코멘트를 대리 게시하는 fallback 모드로 동작합니다. 값을 바꾼 뒤에는 `yule discord up` 프로세스를 재시작해야 합니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
 - 봇은 `YULE_WAKE_TIME`, `YULE_WORK_START_TIME`, `YULE_LUNCH_START_TIME`, `YULE_WORK_END_TIME` 기준으로 snapshot 안의 `morning/work_start/lunch/evening` 4개 브리핑을 자동 전송합니다.
@@ -264,6 +296,10 @@ yule planning snapshot --json
 yule daily warmup --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 yule discord bot
+yule discord up --dry-run
+yule discord member --role tech-lead --dry-run
+yule engineer intake --prompt "랜딩 hero 정리" --write
+yule engineer show --session <session_id>
 ```
 
 로컬 환경에 따라 엔트리포인트 설치가 덜 맞물려 있을 때는 아래처럼 모듈 실행 방식으로 동일하게 사용할 수 있습니다.
@@ -278,6 +314,8 @@ PYTHONPATH=src python3 -m yule_orchestrator planning daily --json
 PYTHONPATH=src python3 -m yule_orchestrator planning snapshot --json
 PYTHONPATH=src python3 -m yule_orchestrator daily warmup --json
 PYTHONPATH=src python3 -m yule_orchestrator discord bot
+PYTHONPATH=src python3 -m yule_orchestrator discord up --dry-run
+PYTHONPATH=src python3 -m yule_orchestrator engineer show --session <session_id>
 ```
 
 기간을 지정해서 일정 데이터를 읽을 수도 있습니다.
@@ -348,10 +386,46 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --json
 yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --json
 ```
 
+## Engineering Agent
+
+Engineering Agent는 `#업무-접수` 채널에서 자유 대화로 작업을 정리하고, 확정되면 workflow session과 작업 thread를 만듭니다. CLI로도 같은 workflow를 직접 조작할 수 있습니다.
+
+```bash
+yule engineer intake --prompt "Obsidian 기반 에이전트 지식 저장 구조 설계" --write
+yule engineer approve --session <session_id>
+yule engineer progress --session <session_id> --note "운영-리서치에 1차 자료 정리"
+yule engineer complete --session <session_id> --summary "설계안 정리 완료"
+yule engineer reject --session <session_id> --reason "요구사항 재정의 필요"
+yule engineer show --session <session_id>
+```
+
+- `intake`는 dispatcher 계획, 역할 순서, 실행자, reference 제안을 포함한 접수 메시지를 생성합니다.
+- `--write`를 붙인 세션은 승인 전까지 쓰기 작업이 차단됩니다.
+- `complete --references-used refs.json`을 쓰면 완료 보고에 실제 반영한 reference를 함께 남길 수 있습니다.
+- Discord 자유 대화에서 `새로 등록하지 말고 기존 스레드에서 이어가`처럼 말하면 열린 thread를 찾아 이어 붙이고, 새 세션은 만들지 않습니다.
+
+Discord slash command는 `yule discord bot` 또는 `yule discord up` 실행 시 guild 단위로 등록됩니다.
+
+```text
+/engineer_intake prompt:"..." task_type:"landing-page" write_requested:true
+/engineer_show session_id:"..."
+/engineer_approve session_id:"..."
+/engineer_reject session_id:"..." reason:"..."
+/engineer_progress session_id:"..." note:"..."
+/engineer_complete session_id:"..." summary:"..."
+/engineer_review session_id:"..." summary:"..." severity:"medium"
+/engineer_review_reply session_id:"..." feedback_id:"..." applied:"..."
+```
+
+- `/engineer_review`는 PR 리뷰, Copilot, 외부 에이전트, 사용자 피드백을 기존 session에 연결하고 역할별 재검토로 라우팅합니다.
+- `/engineer_review_reply`는 적용/제안/남은 이슈를 같은 review cycle에 회신합니다.
+- Discord slash command의 `complete`는 inline `references_used`를 받지 않으므로, reference 인용까지 닫으려면 CLI `yule engineer complete --references-used <json>`을 사용합니다.
+
 ## Discord Bot
 
-- 최소 Discord Bot은 `yule discord bot`으로 실행합니다.
-- 현재 MVP 명령은 `/ping`, `/plan_today`, `/checkpoints_now` 입니다.
+- 단일 Discord Bot은 `yule discord bot`으로 실행합니다.
+- planning-bot, engineering gateway, 멤버 봇을 한 번에 띄우려면 `yule discord up`을 사용합니다.
+- 현재 slash command는 `/ping`, `/plan_today`, `/checkpoints_now`, `/engineer_intake`, `/engineer_show`, `/engineer_review`, `/engineer_review_reply`, `/engineer_approve`, `/engineer_reject`, `/engineer_progress`, `/engineer_complete` 입니다.
 - `/plan_today`는 외부 API를 직접 기다리지 않고 저장된 daily-plan snapshot을 Discord 메시지로 정리해 보여줍니다.
 - `/checkpoints_now`는 지금 시각 기준으로 다가오는 체크포인트를 빠르게 확인할 때 사용합니다.
 - `--use-ollama`와 같은 세부 옵션은 아직 slash command 전체에 다 노출하지 않았고, 먼저 안정적인 최소 흐름에 집중한 상태입니다.
@@ -363,6 +437,9 @@ yule planning checkpoints --at 2026-04-22T09:50:00+09:00 --window-minutes 10 --j
 
 ```bash
 yule discord bot
+yule discord up --dry-run
+yule discord up
+yule discord member --role tech-lead --dry-run
 ```
 
 아침 브리핑 운영 흐름은 먼저 snapshot을 만든 뒤 Discord 봇이 그 결과만 읽는 방식을 권장합니다.
