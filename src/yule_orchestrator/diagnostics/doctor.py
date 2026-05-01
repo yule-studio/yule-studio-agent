@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import urllib.error
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from ..agents.obsidian_writer import ENV_VAULT_PATH
 from ..core.context_loader import ContextError, load_agent_context
 from ..core.tls import apply_ca_bundle_fallback, resolve_ca_bundle
 
@@ -26,6 +28,7 @@ def run_doctor(repo_root: Path, agent_id: str = "engineering-agent") -> Sequence
     checks.extend(_check_commands(["claude", "codex", "gemini", "ollama", "gh", "copilot"]))
     checks.append(_check_github_auth())
     checks.append(_check_discord_tls())
+    checks.append(_check_obsidian_vault())
 
     manifest = _load_manifest_for_agent(repo_root, agent_id, checks)
     ollama_config = _find_ollama_config(manifest)
@@ -128,6 +131,42 @@ def _check_discord_tls() -> DoctorCheck:
     if active_bundle.cafile:
         detail += f" ({active_bundle.cafile})"
     return DoctorCheck(name="discord tls", status="OK", detail=detail)
+
+
+def _check_obsidian_vault() -> DoctorCheck:
+    raw = (os.environ.get(ENV_VAULT_PATH) or "").strip()
+    if not raw:
+        return DoctorCheck(
+            name="obsidian vault",
+            status="SKIP",
+            detail=f"{ENV_VAULT_PATH} not set",
+            hint="Set OBSIDIAN_VAULT_PATH in .env.local to enable `yule obsidian sync`.",
+        )
+
+    expanded = os.path.expanduser(raw)
+    path = Path(expanded)
+    if not path.is_absolute():
+        return DoctorCheck(
+            name="obsidian vault",
+            status="FAIL",
+            detail=f"{ENV_VAULT_PATH} must be absolute (got {raw!r})",
+            hint="Use the full /Users/<you>/... path in .env.local.",
+        )
+    if not path.exists():
+        return DoctorCheck(
+            name="obsidian vault",
+            status="FAIL",
+            detail=f"vault path does not exist: {path}",
+            hint="Open the vault in Obsidian once or fix OBSIDIAN_VAULT_PATH.",
+        )
+    if not path.is_dir():
+        return DoctorCheck(
+            name="obsidian vault",
+            status="FAIL",
+            detail=f"vault path is not a directory: {path}",
+            hint="OBSIDIAN_VAULT_PATH must point to the vault root folder.",
+        )
+    return DoctorCheck(name="obsidian vault", status="OK", detail=str(path))
 
 
 def _load_manifest_for_agent(repo_root: Path, agent_id: str, checks: List[DoctorCheck]) -> Dict[str, Any]:

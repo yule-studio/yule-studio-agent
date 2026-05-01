@@ -17,6 +17,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Sequence, Union
 
+from ..agents.research_persistence import persist_research_artifacts
+
 
 # Single-source confirmation lexicon; the engineering conversation layer
 # may also detect intent and pre-set ``confirmed=True`` itself, in which
@@ -356,6 +358,11 @@ async def route_engineering_message(
             )
         if continuation is not None:
             continued_session = continuation.session
+            continued_session = _maybe_persist_research_pack(
+                continued_session,
+                research_pack=outcome.research_pack,
+                collection_outcome=outcome.collection_outcome,
+            )
             session_id = getattr(continued_session, "session_id", None)
             thread_id = continuation.thread_id
             if continuation.message:
@@ -413,6 +420,12 @@ async def route_engineering_message(
     intake_message = getattr(intake, "message", None)
     session = getattr(intake, "session", None)
     plan = getattr(intake, "plan", None)
+
+    session = _maybe_persist_research_pack(
+        session,
+        research_pack=outcome.research_pack,
+        collection_outcome=outcome.collection_outcome,
+    )
     session_id = getattr(session, "session_id", None)
 
     if intake_message:
@@ -462,6 +475,36 @@ async def route_engineering_message(
         thread_id=thread_id,
         research_loop_report=research_loop_report,
         error=kickoff_error,
+    )
+
+
+def _maybe_persist_research_pack(
+    session: Any,
+    *,
+    research_pack: Any,
+    collection_outcome: Any,
+) -> Any:
+    """Persist the conversation-layer research pack onto a fresh session.
+
+    Called immediately after intake (or thread continuation) creates the
+    session, so the pack lands in ``session.extra["research_pack"]``
+    independently of whether the downstream research loop runs, succeeds,
+    or short-circuits as ``insufficient``. The forum research-loop hook
+    persists again later for synthesis/collection metadata; the helper is
+    idempotent so the double-write is safe.
+
+    Returns the (possibly updated) session. No-op when ``session`` is None
+    or there is nothing to persist.
+    """
+
+    if session is None:
+        return session
+    if research_pack is None and collection_outcome is None:
+        return session
+    return persist_research_artifacts(
+        session,
+        research_pack,
+        collection_outcome=collection_outcome,
     )
 
 

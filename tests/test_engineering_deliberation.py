@@ -35,6 +35,8 @@ from yule_orchestrator.agents.deliberation import (
     run_role_deliberation,
     source_meta,
     source_type,
+    synthesis_from_dict,
+    synthesis_to_dict,
     synthesize,
 )
 from yule_orchestrator.agents.research_pack import (
@@ -294,6 +296,51 @@ class RenderTestCase(unittest.TestCase):
         self.assertIn("더 조사할 것", text)
         self.assertIn("사용자 결정 필요", text)
         self.assertIn("승인 필요: yes", text)
+
+
+class SynthesisRoundTripTestCase(unittest.TestCase):
+    def test_to_dict_then_from_dict_preserves_fields(self) -> None:
+        original = TechLeadSynthesis(
+            consensus="합의안 본문",
+            todos=("todo a", "todo b"),
+            open_research=("자료 보강",),
+            user_decisions_needed=("결정 1",),
+            approval_required=True,
+            approval_reason="쓰기 작업 확인 필요",
+        )
+        restored = synthesis_from_dict(synthesis_to_dict(original))
+        self.assertEqual(restored.consensus, original.consensus)
+        self.assertEqual(tuple(restored.todos), original.todos)
+        self.assertEqual(tuple(restored.open_research), original.open_research)
+        self.assertEqual(
+            tuple(restored.user_decisions_needed), original.user_decisions_needed
+        )
+        self.assertTrue(restored.approval_required)
+        self.assertEqual(restored.approval_reason, original.approval_reason)
+
+    def test_payload_carries_version_marker(self) -> None:
+        payload = synthesis_to_dict(TechLeadSynthesis(consensus="x"))
+        self.assertEqual(payload["v"], 1)
+
+    def test_from_dict_handles_missing_lists(self) -> None:
+        restored = synthesis_from_dict({"consensus": "only"})
+        self.assertEqual(restored.consensus, "only")
+        self.assertEqual(tuple(restored.todos), ())
+        self.assertEqual(tuple(restored.open_research), ())
+        self.assertEqual(tuple(restored.user_decisions_needed), ())
+        self.assertFalse(restored.approval_required)
+        self.assertIsNone(restored.approval_reason)
+
+    def test_from_dict_coerces_non_string_consensus(self) -> None:
+        restored = synthesis_from_dict({"consensus": 123})
+        self.assertEqual(restored.consensus, "123")
+
+    def test_from_dict_blank_approval_reason_becomes_none(self) -> None:
+        restored = synthesis_from_dict(
+            {"consensus": "x", "approval_required": True, "approval_reason": "   "}
+        )
+        self.assertTrue(restored.approval_required)
+        self.assertIsNone(restored.approval_reason)
 
 
 class RuntimeIntegrationTestCase(unittest.TestCase):
