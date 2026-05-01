@@ -440,6 +440,14 @@ yule obsidian sync --session <session_id> --kind reference
 
 vault 안에는 exporter가 정한 `Agents/Engineering/<kind>/YYYY-MM-DD_<slug>.md` 경로로 떨어집니다. 예: `$OBSIDIAN_VAULT_PATH/Agents/Engineering/Research/2026-04-30_stripe-pricing.md`. 같은 날짜·같은 slug로 sync가 반복되면 같은 폴더 안에서 `..._2.md`, `..._3.md` 식으로 자동 suffix가 붙어 기존 노트는 silently 덮이지 않고, `--overwrite`를 명시하면 suffix 없이 원래 파일을 그대로 교체합니다. 자세한 contract와 안전 정책은 `policies/runtime/agents/engineering-agent/obsidian-memory.md`를 참고하세요. `yule doctor`는 `obsidian vault` 체크를 자동 수행합니다.
 
+vault를 git으로 관리한다면 `--git-commit` 옵션으로 sync 직후 자동 commit까지 남길 수 있습니다. 대상은 코드 저장소가 아니라 **Obsidian vault repo**이고, 기본 동작은 **opt-in**, **이번 sync가 만든 그 note 파일 하나만 stage/commit**, **push는 절대 하지 않음**입니다. vault repo에 이미 staged 변경이 있거나 vault가 git repo가 아니면 fail-loud로 종료합니다. `--dry-run --git-commit`은 파일/commit 모두 시뮬레이션만 합니다.
+
+```bash
+yule obsidian sync --session <session_id> --git-commit
+yule obsidian sync --session <session_id> --git-commit --git-message "obsidian sync: hero 회의"
+yule obsidian sync --session <session_id> --git-commit --dry-run
+```
+
 게이트웨이가 deliberation을 끝내면 `TechLeadSynthesis`(합의안/해야 할 일/더 조사할 것/사용자 결정 필요/승인 여부)도 session에 함께 저장되어, sync는 이 값을 복원해 `Agents/Engineering/Decisions/...` 아래에 5개 섹션을 갖춘 결정 노트로 떨어뜨립니다. synthesis 키가 없는 오래된 session은 안전하게 fallback해 `Research` 폴더의 자료 노트로만 떨어집니다.
 
 ## Discord Bot

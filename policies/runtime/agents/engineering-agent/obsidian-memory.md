@@ -231,8 +231,29 @@ Agents/Engineering/Research/2026-04-30_stripe-pricing_3.md    # 3회차
 - `ObsidianWriteResult.original_target_path`/`suffix_applied`로 호출자가 원래 추천 path와 실제 선택된 path를 구분할 수 있다 — CLI는 suffix가 적용되면 `note: applied auto-suffix to avoid clobbering ...` 한 줄을 추가 출력한다.
 - 같은 폴더에 1000개의 후보가 모두 차 있으면 (운영상 도달 불가 수준) `ObsidianWriteError`로 실패해 호출자가 정리 또는 `--overwrite` 결정을 내릴 수 있게 한다.
 
-### 8.8 남은 후속 작업
+### 8.8 vault git auto-commit
 
-1. vault git 통합 — vault를 git으로 관리하고 sync 직후 자동 commit.
-2. `[Obsidian]` 댓글이 달린 forum thread 자동 export pipeline (research-forum.md §4.3와 결합).
-3. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.
+`yule obsidian sync`는 옵션으로 vault repo에 자동 commit을 남길 수 있다. 대상 git repo는 **이 코드 저장소가 아니라** `OBSIDIAN_VAULT_PATH`가 가리키는 Obsidian vault repo다. 코드 진실 소스: `src/yule_orchestrator/agents/obsidian_git.py`.
+
+```bash
+yule obsidian sync --session abc12345 --git-commit
+yule obsidian sync --session abc12345 --git-commit --git-message "obsidian sync: hero 회의"
+yule obsidian sync --session abc12345 --git-commit --dry-run     # commit도 시뮬레이션만
+```
+
+규칙
+- **opt-in**: `--git-commit` 없으면 git 호출이 단 한 번도 일어나지 않는다 (기존 sync 그대로).
+- **단일 파일 commit**: 이번 sync가 만든/덮어쓴 그 note 파일 하나만 `git add -- <abs path>`로 stage하고 `git commit -m <msg> -- <abs path>`로 commit한다. `git add .` / `-A`는 절대 사용하지 않는다.
+- **unrelated 보호**: vault repo에 이미 staged 변경이 있으면 auto-commit은 fail-loud로 중단한다 (`error: vault repo has pre-existing staged changes ...`). 운영자가 그 상태를 인지하지 못한 채 sync commit에 다른 작업이 묶이는 사고를 막는다. unstaged 변경은 그대로 둔다.
+- **vault non-git**: vault root 또는 그 조상에서 `.git`을 못 찾으면 `--git-commit`은 fail-loud (`error: --git-commit requested but vault root ... is not a git repository`). silently skip 하지 않는다 — 사용자가 commit을 의도했는데 안 된 사실을 모르면 더 위험하다. note 파일 자체는 git 단계 직전에 이미 쓰였다.
+- **idempotent sync**: vault HEAD에 같은 내용이 이미 있으면 `git: no changes to commit (file already at vault HEAD)` 한 줄 출력 후 종료 코드 0. 재실행 안전.
+- **dry-run**: `--dry-run --git-commit`은 파일 write도, git add/commit도 실제로 하지 않고 `git: would commit ...` 메시지만 출력한다.
+- **push 금지**: 어떤 코드 경로에서도 `git push`를 호출하지 않는다.
+- **commit message**: 기본값은 `obsidian sync: <session_id> [(<kind>)] <relative_path>`. `--git-message`로 임의 문자열 override 가능. 빈 문자열은 거부.
+- **target outside repo**: writer의 path traversal 가드와 별개로, git 레이어도 commit 대상이 repo root 안인지 `relative_to`로 재검증한다.
+
+### 8.9 남은 후속 작업
+
+1. `[Obsidian]` 댓글이 달린 forum thread 자동 export pipeline (research-forum.md §4.3와 결합).
+2. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.
+3. auto-commit 후 선택적 push hook — 현재 정책은 push 금지. 운영자 수동 push 또는 Obsidian 동기화 플러그인 영역.

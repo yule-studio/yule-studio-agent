@@ -575,6 +575,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Render and validate the path without writing anything.",
     )
+    obsidian_sync_parser.add_argument(
+        "--git-commit",
+        action="store_true",
+        help=(
+            "After writing, stage and commit the synced note in the Obsidian "
+            "vault's git repository. Off by default. Never pushes. Refuses to "
+            "run when the vault repo has pre-existing staged changes."
+        ),
+    )
+    obsidian_sync_parser.add_argument(
+        "--git-message",
+        help="Custom commit message. Defaults to 'obsidian sync: <session_id> ...'.",
+    )
 
     return parser
 
@@ -738,6 +751,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 vault_path=args.vault_path,
                 overwrite=args.overwrite,
                 dry_run=args.dry_run,
+                git_commit=args.git_commit,
+                git_message=args.git_message,
             )
     except ContextError as exc:
         print(f"error: {exc}", file=sys.stderr)

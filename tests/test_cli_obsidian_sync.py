@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -200,6 +202,27 @@ class ObsidianSyncCommandTestCase(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(list(Path(tmp).rglob("*.md")), [])
 
+    def test_default_run_does_not_invoke_git(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ), patch(
+                "yule_orchestrator.cli.obsidian.commit_single_file"
+            ) as commit_spy, patch(
+                "yule_orchestrator.cli.obsidian.find_git_repo_root"
+            ) as find_spy:
+                rc = run_obsidian_sync_command(
+                    session.session_id,
+                    kind=None,
+                    vault_path=tmp,
+                    overwrite=False,
+                    dry_run=False,
+                )
+            self.assertEqual(rc, 0)
+            commit_spy.assert_not_called()
+            find_spy.assert_not_called()
+
     def test_collision_output_reflects_auto_suffix_path(self) -> None:
         session = _session(extra={"research_pack": pack_to_dict(_pack())})
         with tempfile.TemporaryDirectory() as tmp:
@@ -240,6 +263,237 @@ class ObsidianSyncCommandTestCase(unittest.TestCase):
                     "2026-04-30_stripe-pricing-패턴_2.md",
                 ],
             )
+
+
+def _git_available() -> bool:
+    return shutil.which("git") is not None
+
+
+def _init_repo(repo_root: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], check=True, cwd=repo_root)
+    subprocess.run(
+        ["git", "config", "user.email", "obsidian-sync@example.com"],
+        check=True,
+        cwd=repo_root,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "obsidian-sync test"],
+        check=True,
+        cwd=repo_root,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"], check=True, cwd=repo_root
+    )
+
+
+@unittest.skipUnless(_git_available(), "git executable not on PATH")
+class ObsidianSyncGitCommitTestCase(unittest.TestCase):
+    def test_git_commit_in_real_repo_commits_only_target_file(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            _init_repo(vault)
+            unrelated = vault / "untracked.md"
+            unrelated.write_text("noise\n", encoding="utf-8")
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                buf_out = io.StringIO()
+                with redirect_stdout(buf_out):
+                    rc = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=str(vault),
+                        overwrite=False,
+                        dry_run=False,
+                        git_commit=True,
+                    )
+            self.assertEqual(rc, 0)
+            stdout = buf_out.getvalue()
+            self.assertIn("git: committed", stdout)
+
+            tree = subprocess.run(
+                ["git", "-C", str(vault), "show", "--name-only", "--pretty=", "HEAD"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            self.assertIn("Agents/Engineering/Research/", tree)
+            self.assertNotIn("untracked.md", tree)
+
+            status = subprocess.run(
+                ["git", "-C", str(vault), "status", "--porcelain"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            self.assertIn("?? untracked.md", status)
+
+    def test_git_commit_dry_run_does_not_write_or_commit(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            _init_repo(vault)
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                buf_out = io.StringIO()
+                with redirect_stdout(buf_out):
+                    rc = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=str(vault),
+                        overwrite=False,
+                        dry_run=True,
+                        git_commit=True,
+                    )
+            self.assertEqual(rc, 0)
+            stdout = buf_out.getvalue()
+            self.assertIn("dry-run: would write", stdout)
+            self.assertIn("git: would commit", stdout)
+
+            self.assertEqual(list(vault.rglob("*.md")), [])
+            log = subprocess.run(
+                ["git", "-C", str(vault), "log", "--oneline"],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(log.stdout.strip(), "")
+
+    def test_git_commit_fails_when_vault_is_not_a_repo(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                buf_err = io.StringIO()
+                with redirect_stderr(buf_err):
+                    rc = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=str(vault),
+                        overwrite=False,
+                        dry_run=False,
+                        git_commit=True,
+                    )
+            self.assertEqual(rc, 1)
+            self.assertIn("not a git repository", buf_err.getvalue())
+            # Note file was still written (write happens before git step)
+            self.assertEqual(len(list(vault.rglob("*.md"))), 1)
+
+    def test_git_commit_fails_when_repo_has_staged_changes(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            _init_repo(vault)
+            other = vault / "other.md"
+            other.write_text("# other\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", "other.md"], check=True
+            )
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                buf_err = io.StringIO()
+                with redirect_stderr(buf_err):
+                    rc = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=str(vault),
+                        overwrite=False,
+                        dry_run=False,
+                        git_commit=True,
+                    )
+            self.assertEqual(rc, 1)
+            self.assertIn("staged changes", buf_err.getvalue())
+
+    def test_custom_git_message_is_used(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            _init_repo(vault)
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                rc = run_obsidian_sync_command(
+                    session.session_id,
+                    kind=None,
+                    vault_path=str(vault),
+                    overwrite=False,
+                    dry_run=False,
+                    git_commit=True,
+                    git_message="custom obsidian sync message",
+                )
+            self.assertEqual(rc, 0)
+            log = subprocess.run(
+                ["git", "-C", str(vault), "log", "-1", "--pretty=%s"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            self.assertEqual(log, "custom obsidian sync message")
+
+    def test_git_commit_with_overwrite_replaces_and_commits(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            _init_repo(vault)
+
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                rc1 = run_obsidian_sync_command(
+                    session.session_id,
+                    kind=None,
+                    vault_path=str(vault),
+                    overwrite=False,
+                    dry_run=False,
+                    git_commit=True,
+                )
+                self.assertEqual(rc1, 0)
+
+                # Force the rendered file to differ so commit isn't a no-op
+                target = next(vault.rglob("*.md"))
+                target.write_text("# stale\n", encoding="utf-8")
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(vault),
+                        "commit",
+                        "-am",
+                        "stale edit",
+                    ],
+                    check=True,
+                )
+
+                buf_out = io.StringIO()
+                with redirect_stdout(buf_out):
+                    rc2 = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=str(vault),
+                        overwrite=True,
+                        dry_run=False,
+                        git_commit=True,
+                    )
+            self.assertEqual(rc2, 0)
+            self.assertIn("git: committed", buf_out.getvalue())
+            # Three commits total: initial sync, stale edit, overwrite sync
+            log = subprocess.run(
+                ["git", "-C", str(vault), "log", "--oneline"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            self.assertEqual(len(log.strip().splitlines()), 3)
 
 
 if __name__ == "__main__":

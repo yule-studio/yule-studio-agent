@@ -5,6 +5,11 @@ from typing import Optional
 
 from ..agents.deliberation import synthesis_from_dict
 from ..agents.obsidian_export import render_research_note
+from ..agents.obsidian_git import (
+    ObsidianGitError,
+    commit_single_file,
+    find_git_repo_root,
+)
 from ..agents.obsidian_writer import (
     ObsidianWriteError,
     resolve_vault_root,
@@ -24,6 +29,8 @@ def run_obsidian_sync_command(
     vault_path: Optional[str],
     overwrite: bool,
     dry_run: bool,
+    git_commit: bool = False,
+    git_message: Optional[str] = None,
 ) -> int:
     if kind is not None and kind not in VALID_KINDS:
         print(
@@ -99,6 +106,18 @@ def run_obsidian_sync_command(
                 f"note: applied auto-suffix to avoid clobbering "
                 f"{result.original_target_path}"
             )
+        if git_commit:
+            git_rc = _run_git_commit(
+                vault_root=vault_root,
+                target_path=result.target_path,
+                relative=relative,
+                session_id=session_id,
+                kind=kind,
+                git_message=git_message,
+                dry_run=True,
+            )
+            if git_rc != 0:
+                return git_rc
         return 0
     if not result.written:
         print(f"skipped: {result.target_path}")
@@ -112,4 +131,74 @@ def run_obsidian_sync_command(
             f"note: applied auto-suffix to avoid clobbering "
             f"{result.original_target_path}"
         )
+    if git_commit:
+        git_rc = _run_git_commit(
+            vault_root=vault_root,
+            target_path=result.target_path,
+            relative=relative,
+            session_id=session_id,
+            kind=kind,
+            git_message=git_message,
+            dry_run=False,
+        )
+        if git_rc != 0:
+            return git_rc
     return 0
+
+
+def _run_git_commit(
+    *,
+    vault_root,
+    target_path,
+    relative,
+    session_id: str,
+    kind: Optional[str],
+    git_message: Optional[str],
+    dry_run: bool,
+) -> int:
+    repo_root = find_git_repo_root(vault_root)
+    if repo_root is None:
+        print(
+            f"error: --git-commit requested but vault root {vault_root} is not a "
+            "git repository. Initialize it with `git init` or rerun without --git-commit.",
+            file=sys.stderr,
+        )
+        return 1
+
+    message = (git_message or "").strip() or _default_commit_message(
+        session_id=session_id, kind=kind, relative=str(relative)
+    )
+
+    try:
+        commit = commit_single_file(
+            repo_root,
+            target_path,
+            message=message,
+            dry_run=dry_run,
+        )
+    except ObsidianGitError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if commit.dry_run:
+        print(
+            f"git: would commit {commit.target_path} to {commit.repo_root} "
+            f'with message "{commit.message}"'
+        )
+        return 0
+    if commit.no_changes:
+        print(
+            f"git: no changes to commit (file already at vault HEAD): "
+            f"{commit.target_path}"
+        )
+        return 0
+    sha_short = commit.commit_sha[:12] if commit.commit_sha else "(unknown sha)"
+    print(f"git: committed {sha_short} {relative}")
+    return 0
+
+
+def _default_commit_message(
+    *, session_id: str, kind: Optional[str], relative: str
+) -> str:
+    kind_part = f" ({kind})" if kind else ""
+    return f"obsidian sync: {session_id}{kind_part} {relative}"
