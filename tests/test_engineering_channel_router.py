@@ -6,7 +6,7 @@ import unittest
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 try:
     import _bootstrap  # noqa: F401
@@ -664,6 +664,118 @@ class RouteEngineeringMessageWithResearchLoopTests(unittest.TestCase):
                 research_loop_fn=research_loop_fn,
             )
         )
+
+    def test_research_pack_is_persisted_after_intake_even_when_loop_insufficient(
+        self,
+    ) -> None:
+        """Regression: session.extra must contain the research_pack even if
+        the research_loop_fn short-circuits as ``insufficient`` (e.g. when
+        the confirm message text alone is too short to re-collect from).
+        """
+
+        message = _Message(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        pack = object()
+        collection_outcome = object()
+        outcome = EngineeringConversationOutcome(
+            content="좋습니다.",
+            confirmed=True,
+            intake_prompt="Obsidian 지식 저장 구조 리서치",
+            research_pack=pack,
+            collection_outcome=collection_outcome,
+        )
+
+        async def insufficient_loop_fn(**_kwargs):
+            return EngineeringResearchLoopReport(
+                follow_up_message="자료가 부족합니다.",
+                insufficient=True,
+            )
+
+        with patch(
+            "yule_orchestrator.discord.engineering_channel_router."
+            "persist_research_artifacts"
+        ) as persist_spy:
+            persist_spy.side_effect = lambda session, *_a, **_kw: session
+            result = self._route(
+                message=message,
+                research_loop_fn=insufficient_loop_fn,
+                conversation_outcome=outcome,
+            )
+
+        self.assertTrue(result.handled)
+        persist_spy.assert_called_once()
+        call_args = persist_spy.call_args
+        self.assertEqual(call_args.args[0].session_id, "abc")
+        self.assertIs(call_args.args[1], pack)
+        self.assertIs(
+            call_args.kwargs.get("collection_outcome"), collection_outcome
+        )
+
+    def test_research_pack_persisted_when_research_loop_fn_is_none(self) -> None:
+        """Even when no research_loop_fn is wired (forum unconfigured / dev
+        env), pack must still land in session.extra so Obsidian sync works.
+        """
+
+        message = _Message(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        pack = object()
+        outcome = EngineeringConversationOutcome(
+            content="좋습니다.",
+            confirmed=True,
+            intake_prompt="Obsidian 지식 저장 구조 리서치",
+            research_pack=pack,
+        )
+
+        with patch(
+            "yule_orchestrator.discord.engineering_channel_router."
+            "persist_research_artifacts"
+        ) as persist_spy:
+            persist_spy.side_effect = lambda session, *_a, **_kw: session
+            result = self._route(
+                message=message,
+                research_loop_fn=None,
+                conversation_outcome=outcome,
+            )
+
+        self.assertTrue(result.handled)
+        persist_spy.assert_called_once()
+        self.assertIs(persist_spy.call_args.args[1], pack)
+
+    def test_no_persist_call_when_outcome_has_no_research_pack(self) -> None:
+        """A bare confirm without recall context must not invoke the persist
+        helper (nothing to save) — keeps existing intakes side-effect free.
+        """
+
+        message = _Message(
+            content="이대로 진행",
+            channel=_Channel(channel_id=111, name="업무-접수"),
+        )
+        outcome = EngineeringConversationOutcome(
+            content="좋습니다.",
+            confirmed=True,
+            intake_prompt="generic task",
+            research_pack=None,
+            collection_outcome=None,
+        )
+
+        async def loop_fn(**_kwargs):
+            return EngineeringResearchLoopReport()
+
+        with patch(
+            "yule_orchestrator.discord.engineering_channel_router."
+            "persist_research_artifacts"
+        ) as persist_spy:
+            self._route(
+                message=message,
+                research_loop_fn=loop_fn,
+                conversation_outcome=outcome,
+            )
+
+        persist_spy.assert_not_called()
 
     def test_research_loop_status_message_is_sent(self) -> None:
         message = _MessageWithAttachments(

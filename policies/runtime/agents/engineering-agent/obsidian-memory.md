@@ -194,7 +194,21 @@ $OBSIDIAN_VAULT_PATH/Agents/Engineering/References/2026-04-30_landing-references
 - 절대경로 아님 / 디렉터리 없음: `FAIL` + hint.
 - 정상: `OK` + 해석된 절대경로.
 
-### 8.6 synthesis 복원
+### 8.6 research_pack 영속화 (intake 직후)
+
+`yule obsidian sync`는 `session.extra["research_pack"]`를 입력으로 받는다. 이 키가 누락되면 sync 자체가 종료되므로, intake 시점에 안전하게 채워두는 일이 핵심이다.
+
+- 진실 소스: `src/yule_orchestrator/agents/research_persistence.py` (`persist_research_artifacts`).
+- 호출 시점:
+  1. **engineering channel router**가 `intake_fn`(또는 thread continuation)이 세션을 만든 직후, `outcome.research_pack`/`outcome.collection_outcome`이 있으면 즉시 호출.
+  2. **forum research-loop hook**이 deliberation을 마치고 추가로 호출 — synthesis/collection 메타데이터를 함께 저장.
+- 호출 1이 핵심 보장이다: research_loop_fn이 미배선이거나 (`--git-commit` 미사용 같은 경우), `forum_ctx`가 unconfigured거나, 짧은 confirm 메시지(`이대로 진행`)만으로 `run_research_loop`가 `insufficient`로 short-circuit해도 pack은 이미 session.extra에 들어간다.
+- 호출은 **idempotent**: 같은 pack을 두 번 써도 같은 결과. 이를 통해 1과 2의 double-write가 안전.
+- 영속화 실패는 stderr에 `warning:` 한 줄을 남기고 swallow한다 — engineering 흐름은 절대 막지 않는다.
+
+이전 버그: 첫 메시지에서 collector가 만든 pack은 process-local `_ENGINEERING_LAST_RESEARCH_CONTEXT`에만 있었고, persist는 forum hook이 `_run_pack_deliberation_loop`를 통과해야만 일어났다. recall이 실패하거나 (봇 재시작/채널 변경) confirm 텍스트만으로 hook이 insufficient short-circuit하면 session.extra에 pack이 안 들어가서 sync가 영구 실패.
+
+### 8.7 synthesis 복원
 
 게이트웨이가 deliberation을 마치면 `TechLeadSynthesis`(합의안/해야 할 일/더 조사할 것/사용자 결정 필요/승인 여부)는 같은 시점에 ResearchPack과 함께 `session.extra`로 영속화된다. sync는 이 값을 읽어 decision note로 그대로 흘린다.
 
@@ -213,7 +227,7 @@ backward compatibility
 - 저장 payload가 손상되어 `synthesis_from_dict`가 실패하면 `warning: ...`을 stderr에 한 줄 남기고 synthesis 없이 진행한다.
 - `consensus`가 누락되거나 타입이 어긋나면 best-effort로 빈 본문이 들어간 합의안 섹션을 만든다 — sync 자체는 성공.
 
-### 8.7 파일명 충돌 정책
+### 8.8 파일명 충돌 정책
 
 같은 날짜·같은 slug로 export가 반복되면 writer가 같은 폴더 안에서 첫 비어 있는 이름을 자동으로 고른다.
 
@@ -231,7 +245,7 @@ Agents/Engineering/Research/2026-04-30_stripe-pricing_3.md    # 3회차
 - `ObsidianWriteResult.original_target_path`/`suffix_applied`로 호출자가 원래 추천 path와 실제 선택된 path를 구분할 수 있다 — CLI는 suffix가 적용되면 `note: applied auto-suffix to avoid clobbering ...` 한 줄을 추가 출력한다.
 - 같은 폴더에 1000개의 후보가 모두 차 있으면 (운영상 도달 불가 수준) `ObsidianWriteError`로 실패해 호출자가 정리 또는 `--overwrite` 결정을 내릴 수 있게 한다.
 
-### 8.8 vault git auto-commit
+### 8.9 vault git auto-commit
 
 `yule obsidian sync`는 옵션으로 vault repo에 자동 commit을 남길 수 있다. 대상 git repo는 **이 코드 저장소가 아니라** `OBSIDIAN_VAULT_PATH`가 가리키는 Obsidian vault repo다. 코드 진실 소스: `src/yule_orchestrator/agents/obsidian_git.py`.
 
@@ -252,7 +266,7 @@ yule obsidian sync --session abc12345 --git-commit --dry-run     # commit도 시
 - **commit message**: 기본값은 `obsidian sync: <session_id> [(<kind>)] <relative_path>`. `--git-message`로 임의 문자열 override 가능. 빈 문자열은 거부.
 - **target outside repo**: writer의 path traversal 가드와 별개로, git 레이어도 commit 대상이 repo root 안인지 `relative_to`로 재검증한다.
 
-### 8.9 남은 후속 작업
+### 8.10 남은 후속 작업
 
 1. `[Obsidian]` 댓글이 달린 forum thread 자동 export pipeline (research-forum.md §4.3와 결합).
 2. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.

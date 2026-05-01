@@ -50,6 +50,7 @@ from ..agents.research_loop import (
 from ..agents.research_collector import resolve_forum_comment_mode
 from ..agents.deliberation import synthesis_to_dict
 from ..agents.research_pack import pack_to_dict
+from ..agents.research_persistence import persist_research_artifacts
 from ..agents.research_profiles import format_research_hints_block
 from .engineering_team_runtime import kickoff_directive
 from .formatter import (
@@ -1940,42 +1941,22 @@ def _persist_research_pack_for_member_bots(
     synthesis=None,
     synthesis_text=None,
 ):
-    """Persist the collected pack (and optional synthesis) for downstream readers.
+    """Thin wrapper around :func:`persist_research_artifacts`.
 
-    Member bots replay deliberation against the stored ``research_pack``;
-    the Obsidian sync CLI additionally restores ``research_synthesis`` so
-    decision notes ship with 합의안/해야 할 일/승인 여부 sections instead of
-    rendering bare research notes.
+    Kept as a stable name for the forum research-loop hook + tests that
+    already mock this symbol. The router persists the same pack earlier
+    (right after intake) — this call additionally lands synthesis and
+    collection metadata once deliberation finishes. ``persist_research_artifacts``
+    is idempotent so the double-write is safe.
     """
 
-    if session is None:
-        return session
-    if pack is None and synthesis is None:
-        return session
-    try:
-        extra = dict(getattr(session, "extra", None) or {})
-        if pack is not None:
-            extra["research_pack"] = pack_to_dict(pack)
-        if collection_outcome is not None:
-            mode = getattr(collection_outcome, "mode", None)
-            mode_value = getattr(mode, "value", mode)
-            extra["research_collection"] = {
-                "mode": str(mode_value) if mode_value is not None else None,
-                "collector_name": getattr(collection_outcome, "collector_name", None),
-                "query": getattr(collection_outcome, "query", None),
-                "auto_collected_count": getattr(
-                    collection_outcome, "auto_collected_count", None
-                ),
-            }
-        if synthesis is not None:
-            extra["research_synthesis"] = synthesis_to_dict(synthesis)
-        if synthesis_text:
-            extra["research_synthesis_text"] = str(synthesis_text)
-        updated = replace(session, extra=extra)
-        return update_session(updated, now=datetime.now().astimezone())
-    except Exception as exc:  # noqa: BLE001 - forum loop can continue without persisted context
-        print(f"warning: research pack persistence failed: {exc}")
-        return session
+    return persist_research_artifacts(
+        session,
+        pack,
+        collection_outcome=collection_outcome,
+        synthesis=synthesis,
+        synthesis_text=synthesis_text,
+    )
 
 
 def _format_research_forum_disabled_status(outcome) -> str:
