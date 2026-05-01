@@ -138,7 +138,7 @@ def render_daily_plan(envelope: DailyPlanEnvelope) -> str:
             lines.append(f"- {checkpoint.remind_at} | {checkpoint.prompt}")
     lines.append("")
 
-    lines.append("Coding Agent Handoff")
+    lines.append("Engineering Agent Handoff")
     if not plan.coding_agent_handoff:
         lines.append("- no coding handoff candidates")
     else:

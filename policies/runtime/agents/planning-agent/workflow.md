@@ -34,7 +34,7 @@ The Planning Agent creates a daily plan from multiple personal and project data 
    (다음 용도의 출력을 만든다)
    - daily-plan
    - Discord briefing
-   - Coding Agent handoff
+   - Engineering Agent handoff
 
 ## Prioritization Rules
 - Overdue work is ranked above non-overdue work.  
@@ -49,8 +49,8 @@ The Planning Agent creates a daily plan from multiple personal and project data 
 - Completed todos are excluded from candidate work lists.  
   (완료된 todo는 작업 후보 목록에서 제외한다)
 
-- GitHub issues can become Coding Agent handoff targets even when they are not scheduled into today's focus blocks.  
-  (GitHub issue는 오늘 시간 블록에 배치되지 않더라도 Coding Agent handoff 대상이 될 수 있다)
+- GitHub issues can become Engineering Agent handoff targets even when they are not scheduled into today's focus blocks.  
+  (GitHub issue는 오늘 시간 블록에 배치되지 않더라도 Engineering Agent handoff 대상이 될 수 있다)
 
 - Description-based execution blocks refine a fixed event instead of replacing it.  
   (description 기반 세부 실행 블록은 고정 일정을 대체하지 않고 보강한다)

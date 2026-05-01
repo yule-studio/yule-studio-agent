@@ -24,7 +24,7 @@ Naver exposes category colors as numeric codes, not color names. Add confirmed c
 - `label`: Human-readable category label.
 - `priority_boost`: Score added to matching calendar todos.
 - `reason`: Briefing reason shown in Planning output.
-- `coding_candidate`: Whether matching todos can be passed to Coding Agent.
+- `coding_candidate`: Whether matching todos can be passed to Engineering Agent.
 - `alert_policy`: Reminder strategy hint for later Discord notifications.
 - `flexible`: When `true`, matching todos are treated as 상시 작업 (always-available). They still appear in the recommended task list but are excluded from time block assignment so they never lock a specific slot.
 

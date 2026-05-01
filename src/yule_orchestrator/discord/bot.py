@@ -3,10 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import time as time_module
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any, Optional, Sequence
 
+from ..agents import (
+    Dispatcher,
+    WorkflowOrchestrator,
+    build_participants_pool,
+)
+from ..agents.workflow_state import find_latest_open_session, update_session
 from ..integrations.calendar import list_naver_calendar_items
 from ..integrations.calendar.models import build_fallback_item_uid
 from ..integrations.github.issues import list_open_issues
@@ -23,6 +32,25 @@ from .checkpoint_state import (
 from .commands import register_discord_commands
 from .conversation import build_conversation_response_envelope
 from .config import DiscordBotConfig
+from .engineering_channel_router import (
+    EngineeringConversationOutcome,
+    EngineeringResearchLoopReport,
+    EngineeringRouteContext,
+    EngineeringThreadKickoff,
+    EngineeringThreadContinuation,
+    route_engineering_message,
+    should_continue_existing_thread,
+    should_start_new_thread,
+)
+from .research_forum import ResearchForumContext
+from ..agents.research_loop import (
+    publish_research_loop_to_forum,
+    run_research_loop,
+)
+from ..agents.research_collector import resolve_forum_comment_mode
+from ..agents.research_pack import pack_to_dict
+from ..agents.research_profiles import format_research_hints_block
+from .engineering_team_runtime import kickoff_directive
 from .formatter import (
     format_checkpoints_message,
     format_plan_today_message,
@@ -69,6 +97,7 @@ def run_discord_bot(repo_root: Path) -> None:
                 command_prefix=commands.when_mentioned,
                 intents=intents,
             )
+            _set_active_discord_bot(self)
 
         async def setup_hook(self) -> None:
             actual_application_id = self.application_id
@@ -117,6 +146,29 @@ def run_discord_bot(repo_root: Path) -> None:
                 return
             if self.user is None:
                 return
+
+            content_text = str(getattr(message, "content", "") or "").strip()
+            if content_text.startswith("/"):
+                return
+
+            engineering_context = EngineeringRouteContext.from_env()
+            if engineering_context.configured:
+                send_chunks = _make_engineering_send_chunks(discord)
+                engineering_result = await route_engineering_message(
+                    message=message,
+                    bot_user=self.user,
+                    route_context=engineering_context,
+                    extract_prompt=_extract_conversation_prompt,
+                    conversation_fn=_default_engineering_conversation_fn,
+                    intake_fn=_default_engineering_intake_fn,
+                    thread_kickoff_fn=_make_default_thread_kickoff_fn(discord),
+                    send_chunks=send_chunks,
+                    research_loop_fn=_make_default_engineering_research_loop_fn(discord),
+                    thread_continuation_fn=_make_default_thread_continuation_fn(discord),
+                )
+                if engineering_result.handled:
+                    return
+
             if not _should_handle_message(
                 message=message,
                 bot_user=self.user,
@@ -1346,6 +1398,772 @@ def _build_allowed_mentions(discord_module: "discord") -> "discord.AllowedMentio
         everyone=False,
         replied_user=False,
     )
+
+
+def _make_engineering_send_chunks(discord_module: "discord"):
+    allowed_mentions = _build_allowed_mentions(discord_module)
+
+    async def _send(channel, text: str) -> None:
+        if not text:
+            return
+        await _send_channel_message_chunks(
+            channel,
+            text,
+            allowed_mentions=allowed_mentions,
+        )
+
+    return _send
+
+
+_ENGINEERING_LAST_PROPOSED: dict[int, str] = {}
+_ENGINEERING_LAST_RESEARCH_CONTEXT: dict[int, dict[str, Any]] = {}
+
+
+def _remember_engineering_research_context(
+    *,
+    channel_id: int | None,
+    intake_prompt: Any,
+    research_pack: Any,
+    collection_outcome: Any,
+    role_for_research: str,
+) -> None:
+    if channel_id is None:
+        return
+    if research_pack is None and collection_outcome is None:
+        return
+    _ENGINEERING_LAST_RESEARCH_CONTEXT[channel_id] = {
+        "intake_prompt": str(intake_prompt) if intake_prompt else None,
+        "research_pack": research_pack,
+        "collection_outcome": collection_outcome,
+        "role_for_research": role_for_research,
+    }
+
+
+def _recall_engineering_research_context(
+    *,
+    channel_id: int | None,
+    intake_prompt: Any,
+    last_proposed: str | None,
+) -> dict[str, Any]:
+    if channel_id is None:
+        return {}
+    context = _ENGINEERING_LAST_RESEARCH_CONTEXT.get(channel_id) or {}
+    if not context:
+        return {}
+    stored_prompt = context.get("intake_prompt")
+    prompt_candidates = {
+        value
+        for value in (
+            str(intake_prompt) if intake_prompt else None,
+            last_proposed,
+        )
+        if value
+    }
+    if stored_prompt and prompt_candidates and stored_prompt not in prompt_candidates:
+        return {}
+    return context
+
+
+def _default_engineering_conversation_fn(
+    *,
+    message_text: str,
+    author_user_id: int | None,
+    channel_id: int | None,
+    bot_user: object,
+    attachments: Sequence[Any] = (),
+    user_links: Sequence[str] = (),
+    auto_collect: bool = True,
+    role_for_research: str = "engineering-agent/tech-lead",
+    session_id: str | None = None,
+):
+    """Bridge to the engineering free-conversation layer.
+
+    The conversation module is being landed in parallel; if it is not yet
+    importable we degrade to a short fallback that points the user at the
+    manual ``/engineer_intake`` slash command instead of crashing.
+    """
+
+    try:
+        from . import engineering_conversation  # type: ignore
+    except ImportError:
+        return EngineeringConversationOutcome(
+            content=(
+                "엔지니어링 자유 대화 레이어가 아직 준비되지 않았습니다.\n"
+                "지금은 `/engineer_intake` 슬래시 명령으로 작업을 등록해주세요."
+            ),
+        )
+
+    builder = getattr(
+        engineering_conversation,
+        "build_engineering_conversation_response",
+        None,
+    )
+    if builder is None:
+        return EngineeringConversationOutcome(
+            content=(
+                "엔지니어링 대화 모듈이 응답 빌더를 노출하지 않았습니다.\n"
+                "지금은 `/engineer_intake` 로 작업을 등록해주세요."
+            ),
+        )
+
+    last_proposed = (
+        _ENGINEERING_LAST_PROPOSED.get(channel_id) if channel_id is not None else None
+    )
+    response = builder(
+        message_text,
+        author_user_id=author_user_id,
+        mention_user=author_user_id is not None,
+        last_proposed_prompt=last_proposed,
+        auto_collect=auto_collect,
+        user_links=tuple(user_links or ()),
+        user_attachments=tuple(attachments or ()),
+        role_for_research=role_for_research,
+        session_id=session_id,
+    )
+
+    intent_id = getattr(response, "intent_id", "")
+    intake_prompt = getattr(response, "intake_prompt", None)
+    ready_to_intake = bool(getattr(response, "ready_to_intake", False))
+    research_pack = getattr(response, "research_pack", None)
+    collection_outcome = getattr(response, "collection_outcome", None)
+    response_role_for_research = str(
+        getattr(response, "role_for_research", role_for_research)
+        or role_for_research
+    )
+    if channel_id is not None:
+        continuation_requested = bool(intake_prompt) and should_continue_existing_thread(
+            message_text, str(intake_prompt)
+        ) and not should_start_new_thread(message_text)
+        if ready_to_intake and research_pack is None and collection_outcome is None:
+            remembered_context = _recall_engineering_research_context(
+                channel_id=channel_id,
+                intake_prompt=intake_prompt,
+                last_proposed=last_proposed,
+            )
+            if remembered_context:
+                research_pack = remembered_context.get("research_pack")
+                collection_outcome = remembered_context.get("collection_outcome")
+                response_role_for_research = str(
+                    remembered_context.get("role_for_research")
+                    or response_role_for_research
+                )
+        if ready_to_intake and not continuation_requested:
+            _ENGINEERING_LAST_PROPOSED.pop(channel_id, None)
+            _ENGINEERING_LAST_RESEARCH_CONTEXT.pop(channel_id, None)
+        elif intent_id in {
+            "task_intake_candidate",
+            "split_task_proposal",
+            "needs_clarification",
+        } and intake_prompt:
+            _ENGINEERING_LAST_PROPOSED[channel_id] = str(intake_prompt)
+            _remember_engineering_research_context(
+                channel_id=channel_id,
+                intake_prompt=intake_prompt,
+                research_pack=research_pack,
+                collection_outcome=collection_outcome,
+                role_for_research=response_role_for_research,
+            )
+
+    return EngineeringConversationOutcome(
+        content=str(getattr(response, "content", "") or ""),
+        confirmed=ready_to_intake,
+        intake_prompt=str(intake_prompt) if intake_prompt else None,
+        write_requested=bool(getattr(response, "write_likely", False)),
+        research_pack=research_pack,
+        collection_outcome=collection_outcome,
+        role_for_research=response_role_for_research,
+    )
+
+
+def _default_engineering_intake_fn(
+    *,
+    prompt: str,
+    write_requested: bool,
+    channel_id: int | None,
+    user_id: int | None,
+):
+    repo_root = Path(os.environ.get("YULE_REPO_ROOT", ".")).resolve()
+    pool = build_participants_pool(repo_root, "engineering-agent")
+    orchestrator = WorkflowOrchestrator(Dispatcher(pool))
+    return orchestrator.intake(
+        prompt=prompt,
+        write_requested=write_requested,
+        channel_id=channel_id,
+        user_id=user_id,
+    )
+
+
+def _make_default_thread_continuation_fn(discord_module: "discord"):
+    async def _continue(*, message, prompt, write_requested, thread_topic=None):
+        channel = getattr(message, "channel", None)
+        author = getattr(message, "author", None)
+        user_id = getattr(author, "id", None)
+        current_thread_id = _discord_thread_id(channel, discord_module)
+        parent_channel_id = _discord_parent_channel_id(channel)
+        channel_id = parent_channel_id or getattr(channel, "id", None)
+
+        session = None
+        if current_thread_id is not None:
+            session = find_latest_open_session(
+                thread_id=current_thread_id,
+                user_id=user_id,
+            )
+        if session is None:
+            session = find_latest_open_session(
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+        if session is None and current_thread_id is not None:
+            session = find_latest_open_session(thread_id=current_thread_id)
+        if session is None or getattr(session, "thread_id", None) is None:
+            return None
+
+        thread_id = getattr(session, "thread_id", None)
+        thread = await _resolve_thread_channel(
+            thread_id=thread_id,
+            fallback_channel=channel if current_thread_id == thread_id else None,
+        )
+        if thread is None:
+            return None
+
+        continuation_text = _format_engineering_continuation_message(
+            session=session,
+            prompt=prompt,
+            write_requested=write_requested,
+            topic=thread_topic,
+        )
+        await thread.send(continuation_text)
+        _clear_engineering_last_proposed_for_channel(message)
+        status = (
+            "**[engineering-agent] 기존 thread에 이어서 접수**\n"
+            f"세션 ID: `{session.session_id}`\n"
+            f"thread id: `{thread_id}`\n"
+            "새 작업 세션은 만들지 않았습니다."
+        )
+        return EngineeringThreadContinuation(
+            session=session,
+            thread_id=thread_id,
+            message=status,
+        )
+
+    return _continue
+
+
+def _clear_engineering_last_proposed_for_channel(message) -> None:
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    if channel_id is not None:
+        try:
+            normalized_channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            return
+        _ENGINEERING_LAST_PROPOSED.pop(normalized_channel_id, None)
+        _ENGINEERING_LAST_RESEARCH_CONTEXT.pop(normalized_channel_id, None)
+
+
+def _make_default_thread_kickoff_fn(discord_module: "discord"):
+    async def _kickoff(*, channel, session, plan, topic):
+        thread_topic = (topic or "").strip() or _default_engineering_thread_topic(session)
+
+        thread_cls = getattr(discord_module, "Thread", None)
+        if thread_cls is not None and isinstance(channel, thread_cls):
+            thread_id = getattr(channel, "id", None)
+            session_with_thread = _persist_engineering_thread_id(session, thread_id)
+            kickoff_text = _format_engineering_kickoff_message(session_with_thread, plan)
+            await channel.send(_append_team_kickoff_directive(kickoff_text, session_with_thread))
+            return EngineeringThreadKickoff(
+                thread_id=thread_id,
+                message=kickoff_text,
+            )
+
+        thread = await _create_engineering_thread(
+            channel=channel,
+            name=thread_topic,
+            discord_module=discord_module,
+        )
+        if thread is None:
+            kickoff_text = _format_engineering_kickoff_message(session, plan)
+            await channel.send(kickoff_text)
+            return EngineeringThreadKickoff(thread_id=None, message=kickoff_text)
+
+        thread_id = getattr(thread, "id", None)
+        session_with_thread = _persist_engineering_thread_id(session, thread_id)
+        kickoff_text = _format_engineering_kickoff_message(session_with_thread, plan)
+        try:
+            await thread.send(_append_team_kickoff_directive(kickoff_text, session_with_thread))
+        except Exception as exc:  # noqa: BLE001 - report and continue
+            print(f"warning: engineering thread kickoff send failed: {exc}")
+
+        return EngineeringThreadKickoff(
+            thread_id=thread_id,
+            message=kickoff_text,
+        )
+
+    return _kickoff
+
+
+def _persist_engineering_thread_id(session, thread_id):
+    if session is None or thread_id is None:
+        return session
+    try:
+        parsed_thread_id = int(thread_id)
+    except (TypeError, ValueError):
+        return session
+    if getattr(session, "thread_id", None) == parsed_thread_id:
+        return session
+    try:
+        updated = replace(session, thread_id=parsed_thread_id)
+        return update_session(updated, now=datetime.now().astimezone())
+    except Exception as exc:  # noqa: BLE001 - kickoff can still continue without persistence
+        print(f"warning: engineering thread id persistence failed: {exc}")
+        return session
+
+
+def _discord_thread_id(channel, discord_module: "discord") -> int | None:
+    thread_cls = getattr(discord_module, "Thread", None)
+    if thread_cls is not None and isinstance(channel, thread_cls):
+        try:
+            return int(getattr(channel, "id", None))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _discord_parent_channel_id(channel) -> int | None:
+    parent = getattr(channel, "parent", None)
+    raw = getattr(parent, "id", None) or getattr(channel, "parent_id", None)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _resolve_thread_channel(*, thread_id, fallback_channel=None):
+    try:
+        parsed_thread_id = int(thread_id)
+    except (TypeError, ValueError):
+        return None
+    if getattr(fallback_channel, "id", None) == parsed_thread_id:
+        return fallback_channel
+
+    bot = _resolve_active_bot()
+    if bot is not None:
+        thread = bot.get_channel(parsed_thread_id)
+        if thread is not None:
+            return thread
+        try:
+            return await bot.fetch_channel(parsed_thread_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warning: engineering thread fetch failed: {exc}")
+    return None
+
+
+def _format_engineering_continuation_message(
+    *,
+    session,
+    prompt: str,
+    write_requested: bool,
+    topic: str | None,
+) -> str:
+    lines = [
+        "**[engineering-agent] 기존 작업 이어받음**",
+        f"세션 ID: `{getattr(session, 'session_id', '?')}`",
+    ]
+    if topic:
+        lines.append(f"주제: {topic}")
+    lines.extend(
+        [
+            "",
+            "**추가 요청**",
+            _excerpt_text(prompt, limit=900),
+        ]
+    )
+    if write_requested:
+        lines.append("")
+        lines.append("쓰기/수정 가능성이 있어 기존 승인 상태를 유지한 채로 검토를 이어갑니다.")
+    lines.append("")
+    lines.append("이 thread에서 자료 정리와 역할별 검토를 계속 진행합니다.")
+    return "\n".join(lines)
+
+
+def _append_team_kickoff_directive(message: str, session) -> str:
+    if session is None:
+        return message
+    try:
+        directive = kickoff_directive(session)
+    except Exception as exc:  # noqa: BLE001 - keep kickoff visible even if team chain cannot start
+        print(f"warning: engineering team kickoff directive failed: {exc}")
+        return message
+    return f"{message}\n\n{directive}"
+
+
+async def _create_engineering_thread(
+    *,
+    channel,
+    name: str,
+    discord_module: "discord",
+):
+    create_thread = getattr(channel, "create_thread", None)
+    if not callable(create_thread):
+        return None
+
+    channel_type = getattr(discord_module, "ChannelType", None)
+    public_thread_type = getattr(channel_type, "public_thread", None) if channel_type else None
+    auto_archive_minutes = 60 * 24
+
+    try:
+        if public_thread_type is not None:
+            return await create_thread(
+                name=name,
+                type=public_thread_type,
+                auto_archive_duration=auto_archive_minutes,
+            )
+        return await create_thread(name=name, auto_archive_duration=auto_archive_minutes)
+    except TypeError:
+        try:
+            return await create_thread(name=name)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warning: engineering thread creation failed: {exc}")
+            return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: engineering thread creation failed: {exc}")
+        return None
+
+
+def _default_engineering_thread_topic(session) -> str:
+    if session is None:
+        return "engineering-agent 작업"
+    session_id = getattr(session, "session_id", None) or "?"
+    task_type = getattr(session, "task_type", None) or "task"
+    return f"engineer-{task_type}-{session_id}"[:90]
+
+
+def _excerpt_text(text: str, *, limit: int) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned or "(요청 본문 없음)"
+    return cleaned[: max(1, limit - 1)].rstrip() + "…"
+
+
+def _make_default_engineering_research_loop_fn(discord_module: "discord"):
+    """Build the research_loop hook injected into the engineering router.
+
+    Returned coroutine signature mirrors ``ResearchLoopFn`` from the
+    router. On each call we:
+
+      1. Run :func:`run_research_loop` (sync, no I/O).
+      2. If insufficient, surface the Korean follow-up prompt and stop.
+      3. Otherwise publish via :func:`publish_research_loop_to_forum`
+         using a discord.py-backed thread/post pair.
+    """
+
+    forum_ctx = ResearchForumContext.from_env()
+
+    async def _hook(*, session, message_text, attachments, channel, **kwargs):
+        collection_outcome = kwargs.get("collection_outcome")
+        incoming_pack = kwargs.get("research_pack") or getattr(
+            collection_outcome, "pack", None
+        )
+        role_for_research = kwargs.get("role_for_research")
+        forum_comment_mode = resolve_forum_comment_mode()
+
+        try:
+            outcome = await asyncio.to_thread(
+                run_research_loop,
+                session=session,
+                message_text=message_text,
+                attachments=tuple(attachments or ()),
+                research_pack=incoming_pack,
+                collection=collection_outcome,
+            )
+        except Exception as exc:  # noqa: BLE001 - non-fatal; reported by router
+            return EngineeringResearchLoopReport(
+                error=f"research loop 실패: {exc}",
+            )
+
+        if outcome.insufficient:
+            return EngineeringResearchLoopReport(
+                follow_up_message=outcome.follow_up_prompt
+                or "자료가 부족합니다. 참고 링크나 이미지를 올려주세요.",
+                insufficient=True,
+            )
+
+        persisted_session = _persist_research_pack_for_member_bots(
+            outcome.session,
+            outcome.research_pack,
+            collection_outcome=collection_outcome,
+        )
+        if persisted_session is not outcome.session:
+            outcome = replace(outcome, session=persisted_session)
+
+        if not forum_ctx.configured:
+            # Forum disabled — still tell the operator the deliberation
+            # ran so they can pull `outcome.assignments` from logs/CLI.
+            return EngineeringResearchLoopReport(
+                forum_status_message=_format_research_forum_disabled_status(outcome),
+            )
+
+        try:
+            publish = await publish_research_loop_to_forum(
+                outcome,
+                forum_context=forum_ctx,
+                create_thread_fn=_make_default_research_forum_create_thread_fn(discord_module),
+                post_message_fn=_make_default_research_forum_post_message_fn(discord_module),
+                posted_by="bot:engineering-agent",
+                collection_outcome=collection_outcome,
+                collection_role=role_for_research,
+                collection_next_steps=(
+                    "tech-lead가 문제 정의와 조사 범위를 먼저 정리합니다.",
+                    "각 역할 봇이 forum thread에서 순서대로 자기 관점의 검토를 남깁니다.",
+                    "마지막 tech-lead가 합의안과 다음 행동을 종합합니다.",
+                ),
+                comment_mode=forum_comment_mode,
+            )
+        except Exception as exc:  # noqa: BLE001 - reported through router
+            return EngineeringResearchLoopReport(
+                error=f"forum publish 실패: {exc}",
+            )
+
+        return _research_loop_report_from_publish(outcome, publish)
+
+    return _hook
+
+
+def _persist_research_pack_for_member_bots(
+    session,
+    pack,
+    *,
+    collection_outcome=None,
+):
+    """Persist the collected pack so member bots can restore shared evidence."""
+
+    if session is None or pack is None:
+        return session
+    try:
+        extra = dict(getattr(session, "extra", None) or {})
+        extra["research_pack"] = pack_to_dict(pack)
+        if collection_outcome is not None:
+            mode = getattr(collection_outcome, "mode", None)
+            mode_value = getattr(mode, "value", mode)
+            extra["research_collection"] = {
+                "mode": str(mode_value) if mode_value is not None else None,
+                "collector_name": getattr(collection_outcome, "collector_name", None),
+                "query": getattr(collection_outcome, "query", None),
+                "auto_collected_count": getattr(
+                    collection_outcome, "auto_collected_count", None
+                ),
+            }
+        updated = replace(session, extra=extra)
+        return update_session(updated, now=datetime.now().astimezone())
+    except Exception as exc:  # noqa: BLE001 - forum loop can continue without persisted context
+        print(f"warning: research pack persistence failed: {exc}")
+        return session
+
+
+def _format_research_forum_disabled_status(outcome) -> str:
+    """Status line we show when ResearchForumContext is unconfigured.
+
+    The deliberation already ran, so the operator gets the synthesis +
+    assignment count without forum publication.
+    """
+
+    assignments = list(outcome.assignments)
+    parts = [
+        "ℹ️ 운영-리서치 forum env 미설정 — deliberation 결과는 로컬에 보존됩니다.",
+        f"역할 배정 {len(assignments)}건"
+        + (f" · 실행 후보 `{outcome.session.executor_role}`" if outcome.session.executor_role else ""),
+    ]
+    hints = _format_research_hints_for_outcome(outcome)
+    if hints:
+        parts.append(hints)
+    return "\n".join(parts)
+
+
+def _format_research_hints_for_outcome(outcome) -> str:
+    """Format per-role research hints derived from research_profiles.
+
+    Glue between :mod:`agents.research_profiles` and the live engineering
+    research loop output. When the loop already knows the session role
+    sequence and task_type, we can show the operator which source types,
+    queries, and reference categories each role should pull next. Empty
+    string is returned when no role yields hints (unknown roles, no
+    sequence, ...) so callers can append it unconditionally.
+    """
+
+    session = getattr(outcome, "session", None)
+    if session is None:
+        return ""
+    role_sequence = tuple(getattr(session, "role_sequence", ()) or ())
+    task_type = getattr(session, "task_type", None)
+    return format_research_hints_block(role_sequence, task_type)
+
+
+def _research_loop_report_from_publish(
+    outcome, publish
+) -> EngineeringResearchLoopReport:
+    if publish.skipped_reason:
+        return EngineeringResearchLoopReport(
+            forum_status_message=f"ℹ️ forum 게시 생략 — {publish.skipped_reason}",
+        )
+
+    thread = publish.thread
+    if thread is None:
+        return EngineeringResearchLoopReport(
+            error="forum thread 생성 결과가 비어 있습니다.",
+        )
+
+    if not thread.posted:
+        fallback_text = thread.fallback_markdown or thread.error or "forum 게시 실패"
+        return EngineeringResearchLoopReport(
+            forum_status_message=f"⚠️ 운영-리서치 forum 게시 실패 — fallback markdown:\n{fallback_text}",
+            error=thread.error,
+        )
+
+    role_count = len(publish.role_comments)
+    decision_ok = bool(publish.decision_comment and publish.decision_comment.posted)
+    lines = ["✅ 운영-리서치 forum 게시 완료"]
+    if thread.thread_url:
+        lines.append(f"thread: {thread.thread_url}")
+    elif thread.thread_id:
+        lines.append(f"thread id: {thread.thread_id}")
+    lines.append(
+        f"역할별 댓글 {role_count}건 · tech-lead 종합 {'기록' if decision_ok else '미기록'}"
+    )
+    if outcome.assignments:
+        executor = next((a for a in outcome.assignments if a.is_executor), None)
+        if executor:
+            lines.append(
+                f"실행 후보 `{executor.role}` 작업 {len(executor.actions)}건 배정 완료"
+            )
+
+    hints = _format_research_hints_for_outcome(outcome)
+    if hints:
+        lines.append(hints)
+
+    return EngineeringResearchLoopReport(
+        forum_status_message="\n".join(lines),
+        forum_thread_id=thread.thread_id,
+        forum_thread_url=thread.thread_url,
+    )
+
+
+def _make_default_research_forum_create_thread_fn(discord_module: "discord"):
+    """Wrap discord.py forum-channel thread creation for research_forum."""
+
+    async def _create(*, channel_id, channel_name, name, content, **_):
+        bot = _resolve_active_bot()
+        if bot is None:
+            raise RuntimeError("discord bot client not ready")
+        channel = await _resolve_research_forum_channel(
+            bot=bot,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            discord_module=discord_module,
+        )
+        if channel is None:
+            raise RuntimeError(
+                f"research forum channel not found (id={channel_id}, name={channel_name})"
+            )
+        create_thread = getattr(channel, "create_thread", None)
+        if not callable(create_thread):
+            raise RuntimeError("research forum channel does not support create_thread")
+        thread_result = await create_thread(name=name, content=content)
+        # discord.py returns ``ThreadWithMessage`` for forums; pull the thread.
+        thread = getattr(thread_result, "thread", thread_result)
+        return {
+            "id": getattr(thread, "id", None),
+            "url": getattr(thread, "jump_url", None) or getattr(thread, "url", None),
+        }
+
+    return _create
+
+
+def _make_default_research_forum_post_message_fn(discord_module: "discord"):
+    """Wrap discord.py thread-message send for research_forum comments."""
+
+    async def _post(*, thread_id, content, **_):
+        bot = _resolve_active_bot()
+        if bot is None:
+            raise RuntimeError("discord bot client not ready")
+        thread = bot.get_channel(int(thread_id))
+        if thread is None:
+            try:
+                thread = await bot.fetch_channel(int(thread_id))
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"thread {thread_id} not reachable: {exc}") from exc
+        message = await thread.send(content)
+        return {"id": getattr(message, "id", None)}
+
+    return _post
+
+
+_ACTIVE_DISCORD_BOT: Any = None
+
+
+def _set_active_discord_bot(bot: Any) -> None:
+    """Register the running bot so research_forum wrappers can find it.
+
+    ``run_discord_bot`` is the only caller that constructs a real bot,
+    and it does so once per process; we keep the slot at module level so
+    the deeply-nested research_loop hooks can fetch it without weaving the
+    bot reference through every closure.
+    """
+
+    global _ACTIVE_DISCORD_BOT
+    _ACTIVE_DISCORD_BOT = bot
+
+
+def _resolve_active_bot() -> Any:
+    return _ACTIVE_DISCORD_BOT
+
+
+async def _resolve_research_forum_channel(
+    *,
+    bot: Any,
+    channel_id: Optional[int],
+    channel_name: Optional[str],
+    discord_module: "discord",
+):
+    """Find the configured forum channel by id, then by name fallback."""
+
+    if channel_id is not None:
+        channel = bot.get_channel(int(channel_id))
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(int(channel_id))
+            except Exception:  # noqa: BLE001
+                channel = None
+        if channel is not None:
+            return channel
+    if channel_name:
+        target = str(channel_name).strip().lstrip("#").lower()
+        for guild in bot.guilds:
+            for ch in getattr(guild, "channels", []):
+                if str(getattr(ch, "name", "")).strip().lower() == target:
+                    return ch
+    return None
+
+
+def _format_engineering_kickoff_message(session, plan) -> str:
+    lines: list[str] = ["**[engineering-agent] 작업 thread 시작**"]
+    if session is not None:
+        session_id = getattr(session, "session_id", None)
+        if session_id:
+            lines.append(f"세션 ID: `{session_id}`")
+        task_type = getattr(session, "task_type", None)
+        if task_type:
+            lines.append(f"분류: {task_type}")
+        executor_role = getattr(session, "executor_role", None)
+        executor_runner = getattr(session, "executor_runner", None)
+        if executor_role:
+            lines.append(f"실행 후보: {executor_role} ({executor_runner or '?'})")
+    if plan is not None:
+        role_sequence = getattr(plan, "role_sequence", None)
+        if role_sequence:
+            lines.append(f"참여 후보: {', '.join(role_sequence)}")
+    lines.append("")
+    lines.append("이 thread에서 각 멤버 봇의 조사, 실행 메모, 결과 회신을 이어 갑니다.")
+    return "\n".join(lines)
 
 
 def _checkpoint_window_minutes(window_start: datetime, window_end: datetime) -> int:

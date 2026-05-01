@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -12,7 +13,10 @@ except ModuleNotFoundError:
     from tests import _bootstrap  # noqa: F401
 
 from yule_orchestrator.discord.bot import (
+    _ENGINEERING_LAST_PROPOSED,
+    _ENGINEERING_LAST_RESEARCH_CONTEXT,
     _checkpoint_window_minutes,
+    _default_engineering_conversation_fn,
     _filter_unsent_checkpoints,
     _mark_checkpoints_sent,
     _next_checkpoint_scan,
@@ -167,3 +171,131 @@ class DiscordBotRuntimeTestCase(unittest.TestCase):
                 self.envelope = Envelope(due_checkpoints)
 
         return Snapshot(checkpoints)
+
+
+class EngineeringConversationBridgeTestCase(unittest.TestCase):
+    @patch(
+        "yule_orchestrator.discord.engineering_conversation."
+        "build_engineering_conversation_response"
+    )
+    def test_default_bridge_accepts_and_forwards_research_context(
+        self,
+        build_response_mock,
+    ) -> None:
+        self.addCleanup(_ENGINEERING_LAST_PROPOSED.pop, 999, None)
+        self.addCleanup(_ENGINEERING_LAST_RESEARCH_CONTEXT.pop, 999, None)
+        pack = object()
+        collection = object()
+        build_response_mock.return_value = SimpleNamespace(
+            content="좋아요. 먼저 1차 자료를 모아볼게요.",
+            intent_id="task_intake_candidate",
+            ready_to_intake=False,
+            intake_prompt="Obsidian memory 설계",
+            write_likely=False,
+            research_pack=pack,
+            collection_outcome=collection,
+        )
+
+        outcome = _default_engineering_conversation_fn(
+            message_text="Obsidian memory 설계",
+            author_user_id=4242,
+            channel_id=999,
+            bot_user=object(),
+            attachments=("image.png",),
+            user_links=("https://example.com/ref",),
+            auto_collect=True,
+            role_for_research="engineering-agent/product-designer",
+            session_id="sess-1",
+        )
+
+        build_response_mock.assert_called_once()
+        _, kwargs = build_response_mock.call_args
+        self.assertEqual(kwargs["user_attachments"], ("image.png",))
+        self.assertEqual(kwargs["user_links"], ("https://example.com/ref",))
+        self.assertTrue(kwargs["auto_collect"])
+        self.assertEqual(
+            kwargs["role_for_research"],
+            "engineering-agent/product-designer",
+        )
+        self.assertEqual(kwargs["session_id"], "sess-1")
+        self.assertIs(outcome.research_pack, pack)
+        self.assertIs(outcome.collection_outcome, collection)
+        self.assertEqual(
+            outcome.role_for_research,
+            "engineering-agent/product-designer",
+        )
+
+    @patch(
+        "yule_orchestrator.discord.engineering_conversation."
+        "build_engineering_conversation_response"
+    )
+    def test_default_bridge_reuses_research_context_on_confirmation(
+        self,
+        build_response_mock,
+    ) -> None:
+        pack = object()
+        collection = object()
+        _ENGINEERING_LAST_PROPOSED[999] = "Obsidian memory 설계"
+        _ENGINEERING_LAST_RESEARCH_CONTEXT[999] = {
+            "intake_prompt": "Obsidian memory 설계",
+            "research_pack": pack,
+            "collection_outcome": collection,
+            "role_for_research": "engineering-agent/tech-lead",
+        }
+        self.addCleanup(_ENGINEERING_LAST_PROPOSED.pop, 999, None)
+        self.addCleanup(_ENGINEERING_LAST_RESEARCH_CONTEXT.pop, 999, None)
+        build_response_mock.return_value = SimpleNamespace(
+            content="좋습니다. 이대로 작업을 등록할게요.",
+            intent_id="confirm_intake",
+            ready_to_intake=True,
+            intake_prompt="Obsidian memory 설계",
+            write_likely=False,
+            research_pack=None,
+            collection_outcome=None,
+        )
+
+        outcome = _default_engineering_conversation_fn(
+            message_text="이대로 진행",
+            author_user_id=4242,
+            channel_id=999,
+            bot_user=object(),
+        )
+
+        self.assertIs(outcome.research_pack, pack)
+        self.assertIs(outcome.collection_outcome, collection)
+        self.assertEqual(outcome.role_for_research, "engineering-agent/tech-lead")
+        self.assertNotIn(999, _ENGINEERING_LAST_PROPOSED)
+        self.assertNotIn(999, _ENGINEERING_LAST_RESEARCH_CONTEXT)
+
+    @patch(
+        "yule_orchestrator.discord.engineering_conversation."
+        "build_engineering_conversation_response"
+    )
+    def test_default_bridge_keeps_last_prompt_for_existing_thread_retry(
+        self,
+        build_response_mock,
+    ) -> None:
+        _ENGINEERING_LAST_PROPOSED[999] = "새로 등록하지 말고 기존 스레드에서 이어가줘"
+        self.addCleanup(_ENGINEERING_LAST_PROPOSED.pop, 999, None)
+        self.addCleanup(_ENGINEERING_LAST_RESEARCH_CONTEXT.pop, 999, None)
+        build_response_mock.return_value = SimpleNamespace(
+            content="기존 thread를 찾아 이어갈게요.",
+            intent_id="confirm_intake",
+            ready_to_intake=True,
+            intake_prompt="새로 등록하지 말고 기존 스레드에서 이어가줘",
+            write_likely=False,
+            research_pack=None,
+            collection_outcome=None,
+        )
+
+        _default_engineering_conversation_fn(
+            message_text="이대로 진행",
+            author_user_id=4242,
+            channel_id=999,
+            bot_user=object(),
+        )
+
+        self.assertEqual(
+            _ENGINEERING_LAST_PROPOSED[999],
+            "새로 등록하지 말고 기존 스레드에서 이어가줘",
+        )

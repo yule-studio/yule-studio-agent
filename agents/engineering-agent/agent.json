@@ -1,0 +1,124 @@
+{
+  "id": "engineering-agent",
+  "name": "Engineering Agent (Engineering Department)",
+  "type": "department",
+  "description": "Engineering department gateway under the future CTO organization. Receives requests from upstream agents (planning-agent, orchestrator, eventually cto-agent) and posts work for role members (tech-lead, ai-engineer, product-designer, backend-engineer, frontend-engineer, qa-engineer). Members should behave like autonomous employees: inspect the work, gather role-specific context, propose or execute next steps within approval gates, and collaborate through Discord/GitHub artifacts.",
+  "members": [
+    "tech-lead",
+    "ai-engineer",
+    "product-designer",
+    "backend-engineer",
+    "frontend-engineer",
+    "qa-engineer"
+  ],
+  "execution_mode": "autonomous_member_team_with_approval_gates",
+  "default_executor": "claude",
+  "instruction_entry": "agents/engineering-agent/CLAUDE.md",
+  "policies": [
+    "policies/runtime/common/safety.md",
+    "policies/runtime/common/context-loading.md",
+    "policies/runtime/agents/engineering-agent/team-structure.md",
+    "policies/runtime/agents/engineering-agent/mvp-scope.md",
+    "policies/runtime/agents/engineering-agent/role-weights-v0.md",
+    "policies/runtime/agents/engineering-agent/runners.md",
+    "policies/runtime/agents/engineering-agent/env-strategy.md",
+    "policies/runtime/agents/engineering-agent/multi-bot-launcher.md",
+    "policies/runtime/agents/engineering-agent/dispatcher.md",
+    "policies/runtime/agents/engineering-agent/discord-workflow.md",
+    "policies/runtime/agents/engineering-agent/message-protocol.md",
+    "policies/runtime/agents/engineering-agent/version-control.md",
+    "policies/runtime/agents/engineering-agent/workflow.md",
+    "policies/runtime/agents/engineering-agent/testing.md"
+  ],
+  "write_policy": {
+    "max_write_executors_per_run": 1,
+    "require_user_approval_before_write": true,
+    "allow_advisor_patch_proposals": true,
+    "allow_parallel_writes": false,
+    "require_human_review_before_publish": true
+  },
+  "participants": [
+    {
+      "id": "claude",
+      "provider": "anthropic",
+      "roles": ["executor", "planner"],
+      "permissions": ["read", "propose", "write"],
+      "allowed_tools": [
+        "filesystem.read",
+        "filesystem.write_after_approval",
+        "git.status",
+        "git.diff",
+        "git.branch",
+        "tests.run",
+        "github.issue.read",
+        "github.pull_request.prepare"
+      ],
+      "notes": "Primary coding partner for implementation work during the initial MVP."
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "roles": ["advisor", "reviewer", "patch_proposer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.status",
+        "git.diff",
+        "tests.run",
+        "github.issue.read"
+      ],
+      "notes": "Used for implementation review, patch suggestions, and test-focused feedback."
+    },
+    {
+      "id": "gemini",
+      "provider": "google",
+      "roles": ["requirements_reviewer", "long_context_advisor", "planner"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.status",
+        "git.diff",
+        "github.issue.read"
+      ],
+      "notes": "Used for long-context analysis, requirement review, and planning support."
+    },
+    {
+      "id": "ollama",
+      "provider": "local",
+      "model": "gemma3:latest",
+      "endpoint": "http://localhost:11434",
+      "roles": ["local_private_assistant", "classifier", "summarizer"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "filesystem.read",
+        "git.diff"
+      ],
+      "notes": "Runs on the user's machine or home server for private local assistance."
+    }
+  ],
+  "integrations": [
+    {
+      "id": "github-copilot",
+      "provider": "github",
+      "type": "github_workflow_assistant",
+      "roles": ["github_native_executor"],
+      "permissions": ["read", "propose"],
+      "allowed_tools": [
+        "github.issue.read",
+        "github.pull_request.prepare"
+      ],
+      "notes": "Works through GitHub issue, branch, and pull request workflows rather than direct local execution."
+    }
+  ],
+  "tool_catalog": [
+    "filesystem.read",
+    "filesystem.write_after_approval",
+    "git.status",
+    "git.diff",
+    "git.branch",
+    "tests.run",
+    "github.issue.read",
+    "github.issue.prepare",
+    "github.pull_request.prepare"
+  ]
+}
