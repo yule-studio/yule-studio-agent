@@ -1971,7 +1971,7 @@ def _format_research_forum_disabled_status(outcome) -> str:
     parts = [
         "ℹ️ 운영-리서치 forum env 미설정 — deliberation 결과는 로컬에 보존됩니다.",
         f"역할 배정 {len(assignments)}건"
-        + (f" · 실행자 `{outcome.session.executor_role}`" if outcome.session.executor_role else ""),
+        + (f" · 실행 후보 `{outcome.session.executor_role}`" if outcome.session.executor_role else ""),
     ]
     hints = _format_research_hints_for_outcome(outcome)
     if hints:
@@ -2033,7 +2033,7 @@ def _research_loop_report_from_publish(
         executor = next((a for a in outcome.assignments if a.is_executor), None)
         if executor:
             lines.append(
-                f"실행자 `{executor.role}` 작업 {len(executor.actions)}건 배정 완료"
+                f"실행 후보 `{executor.role}` 작업 {len(executor.actions)}건 배정 완료"
             )
 
     hints = _format_research_hints_for_outcome(outcome)
@@ -2156,13 +2156,13 @@ def _format_engineering_kickoff_message(session, plan) -> str:
         executor_role = getattr(session, "executor_role", None)
         executor_runner = getattr(session, "executor_runner", None)
         if executor_role:
-            lines.append(f"실행자: {executor_role} ({executor_runner or '?'})")
+            lines.append(f"실행 후보: {executor_role} ({executor_runner or '?'})")
     if plan is not None:
         role_sequence = getattr(plan, "role_sequence", None)
         if role_sequence:
-            lines.append(f"역할 순서: {' → '.join(role_sequence)}")
+            lines.append(f"참여 후보: {', '.join(role_sequence)}")
     lines.append("")
-    lines.append("이 thread에서 진행 메모와 결과 회신을 이어 가겠습니다.")
+    lines.append("이 thread에서 각 멤버 봇의 조사, 실행 메모, 결과 회신을 이어 갑니다.")
     return "\n".join(lines)
 
 

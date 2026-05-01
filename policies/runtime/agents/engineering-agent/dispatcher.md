@@ -1,6 +1,6 @@
 # Engineering Agent Gateway Dispatcher (v0)
 
-이 문서는 engineering-agent 게이트웨이가 들어온 요청 하나를 받아 **역할 순서, executor/advisor 모델, 참고 reference, write 게이트**를 결정하는 디스패처의 정책 기준선이다. 코드 진실 소스는 `src/yule_orchestrator/agents/dispatcher.py`이며, 본 문서는 운영자가 읽고 수정 절차를 따르는 규약이다.
+이 문서는 engineering-agent 게이트웨이가 들어온 요청 하나를 받아 **참여 후보, 실행 후보/검토 후보 모델, 참고 reference, write 게이트**를 결정하는 디스패처의 정책 기준선이다. 코드 진실 소스는 `src/yule_orchestrator/agents/dispatcher.py`이며, 본 문서는 운영자가 읽고 수정 절차를 따르는 규약이다.
 
 ## 1. 입력과 출력
 
@@ -13,7 +13,7 @@
 
 ### 출력 — `DispatchPlan`
 - `task_type` — 최종 분류.
-- `role_sequence: tuple[str, ...]` — tech-lead로 시작하는 역할 호출 순서.
+- `role_sequence: tuple[str, ...]` — 참여 후보 목록. legacy 이름은 유지하지만 forum에서는 순번표로 쓰지 않는다.
 - `assignments: tuple[RoleAssignment, ...]` — 역할마다 (runner_id, is_executor, score, rationale).
 - `reference_sources: tuple[str, ...]` — task_type에 매핑된 추천 소스.
 - `write_blocked: bool`, `write_block_reason: str | None`.
@@ -34,7 +34,7 @@
 
 이유: `히어로 visual polish 정리`처럼 두 개 이상 시그널이 섞이면 더 구체적인 의도가 우선되어야 한다.
 
-## 3. 역할 순서
+## 3. 참여 후보와 실행 후보
 
 | task_type | sequence | executor |
 |---|---|---|
@@ -49,8 +49,9 @@
 | unknown | tech-lead | tech-lead |
 
 원칙
-- tech-lead는 **항상** 첫 자리. 작업 분해와 의존 순서를 책임진다.
-- executor는 task_type별로 정확히 1명. 나머지는 advisor.
+- `role_sequence`는 DB/API 호환을 위해 남은 이름이다. 운영-리서치 forum에서는 이 값을 순서표로 렌더링하지 않고, open-call을 본 멤버 봇들이 각자 응답한다.
+- tech-lead는 참여 후보에 항상 포함된다. 작업 분해와 의존성 관점을 책임진다.
+- executor는 task_type별 실행 후보 1명이다. 나머지는 검토 후보이며, 승인된 실행 루프가 붙기 전까지는 독립 조사와 검토 take를 남긴다.
 - visual-polish의 executor는 frontend-engineer (코드 산출물). product-designer는 advisor로 시각 결정만 한다. 향후 design-agent가 분리되면 visual-only 작업의 executor 위임은 그쪽으로 이전한다.
 
 ## 4. 모델 선택

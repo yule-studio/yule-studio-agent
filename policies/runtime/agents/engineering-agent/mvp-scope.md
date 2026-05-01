@@ -38,7 +38,21 @@ Engineering Agent는 회사 전체 agent platform의 **첫 번째 실행 부서(
 - cto-agent / platform / security / data-ai 도입 시 어디가 변경되는지 표기
 - product-designer → design-agent 분기 시점과 절차 메모
 
-## Out of Scope (MVP에서 하지 않는 일)
+## Scope Correction (2026-05-01)
+
+초기 MVP 문서는 "single executor + multi advisor"를 안전한 시작점으로 잡았지만, 실제 제품 목표는 **직원형 autonomous engineering team**이다. 따라서 Discord member-bot은 단순 순번표를 따라 말하는 보조자가 아니라, gateway가 게시한 작업을 보고 각자 조사/검토/실행 후보를 제안하는 부서 구성원으로 진화해야 한다.
+
+현재 반영된 조정:
+- 운영-리서치 forum은 `[research-open:<session_id>]` 공개 호출을 기본으로 사용한다.
+- 각 멤버 봇은 open call을 보고 자기 role profile에 맞춰 추가 조사 후 독립 take를 남긴다.
+- 기존 `team-turn` 순차 체인은 작업 thread handoff/복구용 legacy protocol로 남긴다.
+
+아직 남은 autonomous-team 마일스톤:
+- GitHub issue 생성, branch 생성, PR 생성/리뷰 요청을 멤버 봇 실행 루프에 연결한다.
+- 역할별 장기 메모리/정책/성과 기록을 두어 다음 작업에서 자기 경험을 재사용한다.
+- 코드 write는 user approval과 PR review gate를 지키되, 승인 후에는 지정된 봇이 직접 실행할 수 있게 한다.
+
+## Out of Scope (초기 MVP에서 하지 않는 일)
 
 다음은 별도 마일스톤 (Phase 2)에서 다룬다:
 

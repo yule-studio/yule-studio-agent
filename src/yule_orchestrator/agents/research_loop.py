@@ -128,8 +128,7 @@ class ForumPublicationOutcome:
     ``thread`` is the create_research_post outcome (or None when skipped).
     ``role_comments`` is per-role comment outcomes keyed by role.
     ``kickoff_comment`` is set in ``member-bots`` mode when the gateway
-    posts only the first research-turn directive instead of impersonating
-    every role.
+    posts one open-call directive instead of impersonating every role.
     ``decision_comment`` is the tech-lead synthesis comment outcome.
     ``skipped_reason`` is filled when publication was skipped (e.g.
     insufficient research, no thread id from the create call).
@@ -394,7 +393,7 @@ async def _post_research_kickoff_comment(
     post_message_fn: PostMessageFn,
 ) -> ForumCommentOutcome:
     try:
-        from ..discord.engineering_team_runtime import research_kickoff_directive
+        from ..discord.engineering_team_runtime import research_open_call_directive
     except Exception as exc:  # noqa: BLE001
         return ForumCommentOutcome(
             posted=False,
@@ -403,7 +402,7 @@ async def _post_research_kickoff_comment(
         )
 
     try:
-        directive = research_kickoff_directive(session)
+        directive = research_open_call_directive(session)
     except Exception as exc:  # noqa: BLE001
         return ForumCommentOutcome(
             posted=False,
@@ -412,7 +411,8 @@ async def _post_research_kickoff_comment(
         )
 
     body = (
-        "자료 수집을 마쳤어요. 이제 각 역할이 차례대로 자기 관점으로 검토합니다.\n\n"
+        "자료 수집 seed를 올렸어요. 이제 각 멤버 봇이 자기 정책에 맞게 "
+        "추가 조사하고, 필요한 take를 독립적으로 남깁니다.\n\n"
         f"{directive}"
     )
     try:

@@ -1,15 +1,12 @@
-"""Sequential team conversation runtime for engineering-agent member bots.
+"""Team conversation runtime for engineering-agent member bots.
 
-MVP scope: once a workflow session has a Discord ``thread_id``, walk the
-``role_sequence`` in order and let each role bot post one short, role-shaped
-message in that thread. tech-lead opens, then product-designer / backend-engineer
-/ frontend-engineer / qa-engineer follow whichever order the dispatcher picked.
-
-This is *not* a free discussion layer. Each role utterance is a templated
-opening based on the session metadata (task type, executor role, write gate
-status, references). The point of the MVP is to prove the thread can carry
-multi-bot dialogue at all, so a tech lead reading the channel sees something
-that resembles a team handoff instead of one silent gateway monologue.
+The original MVP walked ``role_sequence`` in a fixed chain. That path still
+exists for backwards-compatible ``team-turn`` directives, but research forum
+work now uses an open-call marker: the gateway posts one job brief and each
+member bot decides from its own role policy whether to respond. This is closer
+to an autonomous department: gateway publishes the work; members gather their
+own evidence and post their own take without being handed a rigid speaking
+order.
 
 The runtime is pure-Python so it can be exercised without a Discord client:
 - ``build_turn_plan`` returns the ordered turn list for a session.
@@ -52,6 +49,9 @@ DISPATCH_MARKER_RE = re.compile(
 
 RESEARCH_DISPATCH_MARKER_RE = re.compile(
     r"\[research-turn:(?P<sid>[A-Za-z0-9_\-]+)(?:\s+(?P<role>[A-Za-z0-9_\-]+))?\]"
+)
+RESEARCH_OPEN_MARKER_RE = re.compile(
+    r"\[research-open:(?P<sid>[A-Za-z0-9_\-]+)\]"
 )
 
 
@@ -165,7 +165,7 @@ class _TurnContext:
 
 def _tech_lead_body(ctx: _TurnContext) -> str:
     lines = [
-        f"분류: `{ctx.task_type}` · 실행자: `{ctx.executor_role}`.",
+        f"분류: `{ctx.task_type}` · 실행 후보: `{ctx.executor_role}`.",
         f"요청: {ctx.prompt_excerpt}",
     ]
     if ctx.session.write_requested and ctx.session.write_blocked_reason:
@@ -178,13 +178,13 @@ def _tech_lead_body(ctx: _TurnContext) -> str:
         )
     else:
         lines.append("자료 reference는 따로 없습니다. 각자 도메인 기준으로 시작합시다.")
-    lines.append("순서대로 한 마디씩 받겠습니다.")
+    lines.append("필요한 역할이 각자 판단해서 메모를 남깁니다.")
     return "\n".join(lines)
 
 
 def _product_designer_body(ctx: _TurnContext) -> str:
     refs = ", ".join(ctx.references[:3]) if ctx.references else "(reference 없음)"
-    role_self = "내가 실행자" if ctx.is_executor else f"실행자({ctx.executor_role})"
+    role_self = "내가 실행 후보" if ctx.is_executor else f"실행 후보({ctx.executor_role})"
     return (
         f"reference 검토: {refs}.\n"
         f"{role_self}에게 톤·레이아웃 가이드 1차 정리해서 thread에 붙이겠습니다."
@@ -192,7 +192,7 @@ def _product_designer_body(ctx: _TurnContext) -> str:
 
 
 def _frontend_engineer_body(ctx: _TurnContext) -> str:
-    role_self = "본인 영역" if ctx.is_executor else f"실행자({ctx.executor_role})"
+    role_self = "본인 영역" if ctx.is_executor else f"실행 후보({ctx.executor_role})"
     return (
         "컴포넌트/레이아웃 분해 검토 시작합니다.\n"
         f"{role_self} 합류 시 협업 포인트(상태 / 데이터 바인딩)는 thread에서 동기화하겠습니다."
@@ -200,7 +200,7 @@ def _frontend_engineer_body(ctx: _TurnContext) -> str:
 
 
 def _backend_engineer_body(ctx: _TurnContext) -> str:
-    role_self = "내가 실행자" if ctx.is_executor else f"실행자({ctx.executor_role})"
+    role_self = "내가 실행 후보" if ctx.is_executor else f"실행 후보({ctx.executor_role})"
     return (
         "도메인 / API 영향 검토 들어갑니다.\n"
         f"{role_self}와 schema·migration 충돌 여부 thread에 메모로 남기겠습니다."
@@ -208,7 +208,7 @@ def _backend_engineer_body(ctx: _TurnContext) -> str:
 
 
 def _qa_engineer_body(ctx: _TurnContext) -> str:
-    role_self = "내가 실행자" if ctx.is_executor else f"실행자({ctx.executor_role})"
+    role_self = "내가 실행 후보" if ctx.is_executor else f"실행 후보({ctx.executor_role})"
     return (
         "테스트 시나리오 초안 잡습니다.\n"
         f"{role_self} 작업이 끝나면 회귀 영향 점검 결과를 같은 thread에 회신하겠습니다."
@@ -225,7 +225,7 @@ _ROLE_BODY_BUILDERS = {
 
 
 def _generic_body(ctx: _TurnContext) -> str:
-    role_self = "내가 실행자" if ctx.is_executor else f"실행자({ctx.executor_role})"
+    role_self = "내가 실행 후보" if ctx.is_executor else f"실행 후보({ctx.executor_role})"
     return f"{ctx.role} 관점에서 검토 들어가겠습니다. {role_self} 기준으로 thread 회신 이어가겠습니다."
 
 
@@ -381,10 +381,30 @@ def parse_research_dispatch_marker(
     return match.group("sid"), match.group("role")
 
 
+def parse_research_open_marker(text: str) -> Optional[str]:
+    """Parse ``[research-open:<sid>]`` out of a forum message.
+
+    Open-call markers are intentionally role-less. Every active member bot
+    can see the same job brief and decide whether its role belongs in the
+    session's participant set.
+    """
+
+    match = RESEARCH_OPEN_MARKER_RE.search(text or "")
+    if not match:
+        return None
+    return match.group("sid")
+
+
 def research_dispatch_directive(session_id: str, role: str) -> str:
     """Marker that hands the next research turn to *role* in the forum thread."""
 
     return f"[research-turn:{session_id} {role}]"
+
+
+def research_open_call_directive(session: WorkflowSession) -> str:
+    """Marker the gateway posts when member bots should self-start research."""
+
+    return f"[research-open:{session.session_id}]"
 
 
 def deliberation_research_role_sequence(
@@ -440,9 +460,9 @@ def research_kickoff_directive(session: WorkflowSession) -> str:
 class ResearchTurnOutcome:
     """What the bot for one role should post into the operations forum.
 
-    ``message`` contains the rendered role take. ``next_directive`` is
-    appended in the same comment so the next bot wakes up; ``None`` for
-    the last role before the synthesis sentinel kicks in.
+    ``message`` contains the rendered role take. Legacy ``research-turn``
+    chains may still use ``next_directive``; open-call research leaves it
+    empty so each member bot speaks independently.
     """
 
     role: str
@@ -472,6 +492,15 @@ def handle_research_turn_message(
     the take unsafe to post — keeping the forum clean of half-baked
     comments.
     """
+
+    open_session_id = parse_research_open_marker(text)
+    if open_session_id is not None:
+        return _handle_research_open_call(
+            role=role,
+            session_id=open_session_id,
+            session_loader=session_loader,
+            pack_loader=pack_loader,
+        )
 
     parsed = parse_research_dispatch_marker(text)
     if parsed is None:
@@ -543,6 +572,75 @@ def handle_research_turn_message(
         next_directive=next_directive,
         is_synthesis=False,
     )
+
+
+def _handle_research_open_call(
+    *,
+    role: str,
+    session_id: str,
+    session_loader: Optional[Callable[[str], Optional[WorkflowSession]]],
+    pack_loader: Optional[Callable[[WorkflowSession], Any]],
+) -> Optional[ResearchTurnOutcome]:
+    if role == RESEARCH_SYNTHESIS_ROLE:
+        return None
+
+    loader = session_loader or load_session
+    session = loader(session_id)
+    if session is None:
+        return None
+
+    sequence = deliberation_research_role_sequence(session)
+    if role not in sequence:
+        return None
+
+    research_pack = _collect_role_research_pack(session=session, role=role)
+    if research_pack is None:
+        research_pack = _maybe_load_pack(pack_loader, session)
+
+    take, rendered = deliberation_role_turn(
+        session,
+        _role_address(role),
+        research_pack=research_pack,
+        previous_turns=(),
+    )
+    message = (
+        f"{rendered}\n\n"
+        "자율 조사 메모: 이 댓글은 gateway가 정한 순번이 아니라, "
+        "해당 역할 봇이 공개 research 요청을 보고 독립적으로 제출한 take입니다."
+    )
+    return ResearchTurnOutcome(
+        role=role,
+        session_id=session_id,
+        message=message,
+        next_directive=None,
+        is_synthesis=False,
+    )
+
+
+def _collect_role_research_pack(*, session: WorkflowSession, role: str) -> Any:
+    """Best-effort per-role collection for open-call research.
+
+    The gateway persists its first pack, but autonomous member bots should not
+    be limited to that shared seed. Each bot gets one cheap collection pass
+    with its own role profile; if the collector is disabled or empty, we fall
+    back to the shared pack.
+    """
+
+    try:
+        from ..agents.research_collector import auto_collect_or_request_more_input
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        outcome = auto_collect_or_request_more_input(
+            role=_role_address(role),
+            prompt=getattr(session, "prompt", "") or "",
+            task_type=getattr(session, "task_type", None),
+            user_links=tuple(getattr(session, "references_user", ()) or ()),
+            session_id=getattr(session, "session_id", None),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(outcome, "pack", None)
 
 
 def _next_research_role(sequence: Sequence[str], current: str) -> Optional[str]:

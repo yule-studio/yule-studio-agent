@@ -157,7 +157,7 @@ class FormatTurnTextTestCase(unittest.TestCase):
             session, "qa-engineer", is_executor=False
         )
         self.assertIn("본인", executor_body)
-        self.assertIn("실행자(frontend-engineer)", advisor_body)
+        self.assertIn("실행 후보(frontend-engineer)", advisor_body)
 
 
 class PlayedRolesTestCase(unittest.TestCase):

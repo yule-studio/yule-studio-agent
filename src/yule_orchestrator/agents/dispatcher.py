@@ -1,7 +1,7 @@
 """Engineering-agent gateway dispatcher.
 
-Decides, for one incoming request, the role sequence, the executor/advisor
-runner picks, the reference pack to consult, and whether a write may proceed.
+Decides, for one incoming request, the participant candidates, the execution
+candidate / reviewer runner picks, the reference pack to consult, and whether a write may proceed.
 
 Single-executor, multi-advisor: at most one role writes; everyone else
 proposes patches or reviews. Source-of-truth for default weights is
@@ -382,7 +382,7 @@ def render_plan_summary(plan: DispatchPlan) -> str:
 
     lines: list[str] = [
         f"task_type: {plan.task_type.value}",
-        f"role sequence: {' → '.join(plan.role_sequence)}",
+        f"participant candidates: {', '.join(plan.role_sequence)}",
     ]
     for assignment in plan.assignments:
         marker = "[exec]" if assignment.is_executor else "[advisor]"

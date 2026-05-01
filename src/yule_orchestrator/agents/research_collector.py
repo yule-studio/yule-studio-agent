@@ -75,8 +75,8 @@ ENV_FORUM_COMMENT_MODE = "ENGINEERING_RESEARCH_FORUM_COMMENT_MODE"
 
 
 # Forum comment publishing modes:
-# - "member-bots" (default): gateway posts the forum thread + first
-#   research-turn directive, and each member bot adds its own role
+# - "member-bots" (default): gateway posts the forum thread + one
+#   research-open directive, and each member bot adds its own role
 #   comment from its own account so the team feels real.
 # - "gateway": legacy fallback — gateway posts every role comment
 #   itself. Used during Phase 1 / when member bots aren't booted.

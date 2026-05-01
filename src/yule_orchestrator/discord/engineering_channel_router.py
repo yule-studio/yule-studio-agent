@@ -543,11 +543,11 @@ async def make_default_research_loop(
        publish the collection summary to ``#운영-리서치``. The publisher
        is expected to return a value with ``.thread_id`` / ``.thread_url``
        / ``.error`` (e.g. :class:`ForumPostOutcome`).
-    2. ``forum_comment_mode``:
+      2. ``forum_comment_mode``:
        - ``"member-bots"`` (default) — after the forum post lands, the
-         gateway posts only the first ``[research-turn:<sid> tech-lead]``
-         directive. Each member bot's ``on_message`` handler picks the
-         marker up and posts its own role comment from its own account.
+         gateway posts one open-call ``[research-open:<sid>]`` directive.
+         Each member bot's ``on_message`` handler sees the same job brief,
+         gathers its own role-shaped evidence, and posts its own take.
        - ``"gateway"`` (legacy) — gateway runs the whole deliberation
          and pipes role takes back into the working thread (preserves
          pre-multi-bot behaviour for tests/operators without member tokens).
@@ -606,9 +606,9 @@ async def make_default_research_loop(
                     + (f" — {fail_reason}." if fail_reason else ".")
                 )
 
-        # member-bots mode: drop only the first research-turn directive into
-        # the freshly-created forum thread. Each member bot's on_message
-        # handler picks it up and posts its own comment from its own account.
+        # member-bots mode: post one open-call directive into the freshly
+        # created forum thread. Each member bot decides independently whether
+        # to contribute, instead of following a gateway-authored speaking order.
         if (
             forum_comment_mode == "member-bots"
             and posted
@@ -617,17 +617,18 @@ async def make_default_research_loop(
             and session is not None
         ):
             try:
-                from .engineering_team_runtime import research_kickoff_directive
+                from .engineering_team_runtime import research_open_call_directive
             except Exception:  # noqa: BLE001
                 kickoff = None
             else:
                 try:
-                    kickoff = research_kickoff_directive(session)
+                    kickoff = research_open_call_directive(session)
                 except Exception:  # noqa: BLE001
                     kickoff = None
             if kickoff:
                 kickoff_message = (
-                    "자료 수집을 마쳤어요. 이제 각 역할이 차례대로 자기 관점으로 검토합니다.\n\n"
+                    "자료 수집 seed를 올렸어요. 이제 각 멤버 봇이 자기 정책에 맞게 "
+                    "추가 조사하고, 필요한 take를 독립적으로 남깁니다.\n\n"
                     f"{kickoff}"
                 )
                 try:
@@ -639,7 +640,7 @@ async def make_default_research_loop(
 
     # 2. Deliberation in the working thread — gateway mode only.
     # member-bots mode hands the deliberation to each member bot via the
-    # research-turn protocol, so the gateway does not impersonate them here.
+    # open-call protocol, so the gateway does not impersonate them here.
     should_run_gateway_deliberation = (
         has_pack
         and session is not None

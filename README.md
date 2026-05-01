@@ -253,9 +253,9 @@ DISCORD_GUILD_ID=
   - planning-bot은 자식 프로세스에서 `DISCORD_ENGINEERING_INTAKE_CHANNEL_*`를 빈 값으로 덮어써 `#업무-접수`에 응답하지 않습니다.
   - engineering-agent gateway는 `ENGINEERING_AGENT_BOT_GATEWAY_TOKEN`을 자기 토큰으로 들고 별도 프로세스로 기동되며, 자식 환경에서 `DISCORD_DAILY_*`/`DISCORD_CHECKPOINT_*`/`DISCORD_CONVERSATION_*`/`DISCORD_DEBUG_*`/`DISCORD_NOTIFY_USER_ID`를 비워 planning 채널 동작을 차단합니다 (`DISCORD_CONVERSATION_REPLY_MODE=disabled`).
   - 결과: 두 봇이 같은 메시지에 동시에 응답하지 않고, 서로 자기 채널만 본다는 약속이 강제됩니다. 자세한 분리 동작은 `policies/runtime/agents/engineering-agent/launcher.md`와 supervisor의 `BOT_RUNNER_ENGINEERING_GATEWAY` 분기 참조.
-- engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화되고, kickoff 메시지 끝에 `[team-turn:<session_id> tech-lead]` directive가 자동 부착되어 멤버 봇 chain이 시작될 수 있습니다.
+- engineering-agent gateway가 작업 thread를 만들면 thread id가 `WorkflowSession.thread_id`로 영속화됩니다. 작업 thread는 진행 메모와 결과 회신 공간이며, research forum의 멤버 봇 발화는 별도의 open-call 프로토콜로 시작됩니다.
 - 사용자가 `새로 등록하지 말고`, `기존 스레드`, `열려 있는 thread`, `이어가` 같은 표현으로 확인하면 gateway는 새 세션을 만들기 전에 같은 사용자/채널의 열린 engineering thread를 찾아 이어 붙입니다. 찾지 못하면 새 작업 세션을 만들지 않고 재지시를 요청합니다.
-- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값입니다. 이 모드에서는 gateway가 `#운영-리서치` 포럼 post와 첫 `[research-turn:<session_id> tech-lead]` directive만 남기고, `tech-lead` / `ai-engineer` / `product-designer` / `backend-engineer` / `frontend-engineer` / `qa-engineer` 봇이 자기 계정으로 역할별 의견을 이어 씁니다. `gateway`로 바꾸면 멤버 봇 토큰이 없을 때처럼 gateway가 역할별 코멘트를 대리 게시하는 fallback 모드로 동작합니다. 값을 바꾼 뒤에는 `yule discord up` 프로세스를 재시작해야 합니다.
+- `ENGINEERING_RESEARCH_FORUM_COMMENT_MODE=member-bots`가 기본 권장값입니다. 이 모드에서는 gateway가 `#운영-리서치` 포럼 post와 `[research-open:<session_id>]` open-call directive를 남기고, 각 멤버 봇이 자기 정책에 맞게 추가 조사한 뒤 자기 계정으로 독립 take를 남깁니다. `gateway`로 바꾸면 멤버 봇 토큰이 없을 때처럼 gateway가 역할별 코멘트를 대리 게시하는 fallback 모드로 동작합니다. 값을 바꾼 뒤에는 `yule discord up` 프로세스를 재시작해야 합니다.
 - 멤버 봇이 실제로 의견을 이어 쓰려면 **각 멤버 봇 앱마다** Discord Developer Portal에서 `Message Content Intent`를 켜고, 서버/채널 권한으로 `View Channel`, `Read Message History`, `Send Messages`, `Send Messages in Threads`를 부여해야 합니다. 대상은 `#운영-리서치` Forum과 `#업무-접수`의 작업 thread parent 둘 다입니다.
 - 멤버 봇은 로그인 직후 위 채널 권한을 점검해 stderr에 `permissions OK` 또는 `missing ... permissions` 경고를 남깁니다. 단, Developer Portal의 `Message Content Intent` 토글은 Discord 런타임 API로 검증할 수 없어서 로그에는 확인 안내만 표시됩니다.
 - 자동 브리핑 시각은 Discord Bot이 아니라 Planning Agent가 관리합니다.
@@ -401,7 +401,7 @@ yule engineer reject --session <session_id> --reason "요구사항 재정의 필
 yule engineer show --session <session_id>
 ```
 
-- `intake`는 dispatcher 계획, 역할 순서, 실행자, reference 제안을 포함한 접수 메시지를 생성합니다.
+- `intake`는 dispatcher 계획, 참여 후보, 실행 후보, reference 제안을 포함한 접수 메시지를 생성합니다.
 - `--write`를 붙인 세션은 승인 전까지 쓰기 작업이 차단됩니다.
 - `complete --references-used refs.json`을 쓰면 완료 보고에 실제 반영한 reference를 함께 남길 수 있습니다.
 - Discord 자유 대화에서 `새로 등록하지 말고 기존 스레드에서 이어가`처럼 말하면 열린 thread를 찾아 이어 붙이고, 새 세션은 만들지 않습니다.

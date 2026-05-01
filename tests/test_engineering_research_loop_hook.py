@@ -131,7 +131,7 @@ class ResearchLoopReportFromPublishTestCase(unittest.TestCase):
         self.assertIn("`product-designer`", report.forum_status_message)
         self.assertIn("우선 자료:", report.forum_status_message)
         self.assertIn(
-            "실행자 `frontend-engineer` 작업 1건 배정 완료",
+            "실행 후보 `frontend-engineer` 작업 1건 배정 완료",
             report.forum_status_message,
         )
 
@@ -169,7 +169,7 @@ class FormatResearchForumDisabledStatusTestCase(unittest.TestCase):
 
         self.assertIn("forum env 미설정", text)
         self.assertIn("`product-designer`", text)
-        self.assertIn("실행자 `frontend-engineer`", text)
+        self.assertIn("실행 후보 `frontend-engineer`", text)
 
     def test_disabled_status_omits_hints_when_sequence_empty(self) -> None:
         outcome = _Outcome(session=_Session(role_sequence=(), task_type="unknown"))

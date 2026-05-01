@@ -380,18 +380,18 @@ def format_intake_message(session: WorkflowSession, plan: DispatchPlan) -> str:
         "**[engineering-agent] 새 작업 접수**",
         f"세션 ID: `{session.session_id}`",
         f"분류: {plan.task_type.value}",
-        f"역할 순서: {' → '.join(plan.role_sequence)}",
+        f"참여 후보: {', '.join(plan.role_sequence)}",
     ]
     executor = plan.executor()
     if executor:
         runner = executor.runner_id or "<no runner>"
-        lines.append(f"실행자: {executor.role} ({runner}, score={executor.score})")
+        lines.append(f"실행 후보: {executor.role} ({runner}, score={executor.score})")
     advisors = plan.advisors()
     if advisors:
         advisor_text = ", ".join(
             f"{a.role}/{a.runner_id or '?'}" for a in advisors
         )
-        lines.append(f"어드바이저: {advisor_text}")
+        lines.append(f"검토 후보: {advisor_text}")
 
     lines.append("")
     lines.append("**참고 레퍼런스 (제안)**")
@@ -424,7 +424,7 @@ def format_progress_message(session: WorkflowSession) -> str:
         "**[engineering-agent] 진행 상황**",
         f"세션 ID: `{session.session_id}`",
         f"상태: {session.state.value}",
-        f"실행자: {session.executor_role} ({session.executor_runner or '?'})",
+        f"실행 후보: {session.executor_role} ({session.executor_runner or '?'})",
     ]
     if session.progress_notes:
         lines.append("")
@@ -439,7 +439,7 @@ def format_completion_message(session: WorkflowSession) -> str:
         "**[engineering-agent] 완료 보고**",
         f"세션 ID: `{session.session_id}`",
         f"분류: {session.task_type}",
-        f"실행자: {session.executor_role} ({session.executor_runner or '?'})",
+        f"실행 후보: {session.executor_role} ({session.executor_runner or '?'})",
     ]
     if session.summary:
         lines.append("")

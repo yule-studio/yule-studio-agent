@@ -335,7 +335,8 @@ class PublishResearchLoopToForumTestCase(unittest.TestCase):
         self.assertTrue(result.kickoff_comment.posted)
         posts = captured.get("posts", [])
         self.assertEqual(len(posts), 1)
-        self.assertIn("[research-turn:sid-1 tech-lead]", posts[0]["content"])
+        self.assertIn("[research-open:sid-1]", posts[0]["content"])
+        self.assertNotIn("[research-turn:", posts[0]["content"])
 
     def test_publish_includes_collection_summary_when_provided(self) -> None:
         captured: dict = {}

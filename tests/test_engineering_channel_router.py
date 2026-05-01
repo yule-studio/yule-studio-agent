@@ -1180,9 +1180,9 @@ class CentralisedLabelTestCase(unittest.TestCase):
 
 
 class ResearchTurnKickoffInForumTestCase(unittest.TestCase):
-    """member-bots mode posts only the kickoff directive into the forum thread."""
+    """member-bots mode posts one open-call directive into the forum thread."""
 
-    def test_member_bots_mode_posts_kickoff_directive_only(self) -> None:
+    def test_member_bots_mode_posts_open_call_directive_only(self) -> None:
         from yule_orchestrator.discord.engineering_channel_router import (
             make_default_research_loop,
         )
@@ -1243,11 +1243,12 @@ class ResearchTurnKickoffInForumTestCase(unittest.TestCase):
         self.assertEqual(len(forum_posts), 1)
         thread_id, content = forum_posts[0]
         self.assertEqual(thread_id, 7777)
-        # Gateway speaks like a facilitator, not a clerk
-        self.assertIn("자료 수집을 마쳤어요", content)
-        # And drops only the first directive — tech-lead is always first
-        self.assertIn("[research-turn:sess-9 tech-lead]", content)
-        # ai-engineer/qa-engineer/synthesis directives must NOT show up here
+        # Gateway speaks like a facilitator, not a clerk.
+        self.assertIn("자료 수집 seed를 올렸어요", content)
+        # And drops one role-less open call, not a forced speaking order.
+        self.assertIn("[research-open:sess-9]", content)
+        self.assertNotIn("[research-turn:", content)
+        # ai-engineer/qa-engineer/synthesis directives must NOT show up here.
         self.assertNotIn("ai-engineer]", content)
         self.assertNotIn("qa-engineer]", content)
         self.assertNotIn("tech-lead-synthesis]", content)
@@ -1277,6 +1278,16 @@ class ResearchTurnProtocolTestCase(unittest.TestCase):
         # team-turn marker must not match research-turn parser
         self.assertIsNone(
             parse_research_dispatch_marker("[team-turn:abc qa-engineer]")
+        )
+
+    def test_parse_open_marker_extracts_session(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            parse_research_open_marker,
+        )
+
+        self.assertEqual(
+            parse_research_open_marker("job [research-open:sess-1]"),
+            "sess-1",
         )
 
     def test_dispatch_directive_format(self) -> None:
@@ -1381,6 +1392,37 @@ class HandleResearchTurnMessageTestCase(unittest.TestCase):
             text="[research-turn:sess-1 ai-engineer]",
             session_loader=lambda _sid: self._session(),
         )
+        self.assertIsNone(outcome)
+
+    def test_open_call_for_own_role_renders_independent_take(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="ai-engineer",
+            text="[research-open:sess-1]",
+            session_loader=lambda _sid: self._session(),
+        )
+
+        self.assertIsNotNone(outcome)
+        self.assertEqual(outcome.role, "ai-engineer")
+        self.assertIn("**[ai-engineer]**", outcome.message)
+        self.assertIn("독립적으로 제출한 take", outcome.message)
+        self.assertNotIn("[research-turn:", outcome.message)
+        self.assertIsNone(outcome.next_directive)
+
+    def test_open_call_for_non_participant_returns_none(self) -> None:
+        from yule_orchestrator.discord.engineering_team_runtime import (
+            handle_research_turn_message,
+        )
+
+        outcome = handle_research_turn_message(
+            role="security-engineer",
+            text="[research-open:sess-1]",
+            session_loader=lambda _sid: self._session(),
+        )
+
         self.assertIsNone(outcome)
 
     def test_marker_for_own_role_renders_take_and_next_directive(self) -> None:

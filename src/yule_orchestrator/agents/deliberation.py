@@ -615,11 +615,11 @@ def _fallback_tech_lead_opening(ctx: DeliberationContext) -> TechLeadOpening:
     session = ctx.session
     pack = ctx.research_pack
     breakdown = [
-        f"분류 `{session.task_type}` · 실행자 `{session.executor_role or 'tech-lead'}`",
+        f"분류 `{session.task_type}` · 실행 후보 `{session.executor_role or 'tech-lead'}`",
         f"요청 본문: {_excerpt(session.prompt, 80)}",
     ]
     if session.role_sequence:
-        breakdown.append("역할 순서: " + " → ".join(session.role_sequence))
+        breakdown.append("참여 후보: " + ", ".join(session.role_sequence))
 
     dependencies: list[str] = []
     if session.references_user:
@@ -640,12 +640,12 @@ def _fallback_tech_lead_opening(ctx: DeliberationContext) -> TechLeadOpening:
         decisions_needed.append("reference 추가 수집 여부")
 
     perspective = (
-        f"`{session.task_type}` 작업 — 실행자 `{session.executor_role or 'tech-lead'}` "
-        "가 주도하고 advisor 역할은 thread에서 검토 의견 제출."
+        f"`{session.task_type}` 작업 — 실행 후보 `{session.executor_role or 'tech-lead'}` "
+        "를 기준으로 각 멤버가 자기 정책에 맞게 검토 의견 제출."
     )
     evidence = evidence_lines_for_role(pack, ctx.role)
     risks: list[str] = [
-        "역할별 의견 수렴 지연 — thread 응답이 늦어지면 실행자 작업이 막힘",
+        "멤버별 의견 수렴 지연 — thread 응답이 늦어지면 실행 후보 작업이 막힘",
     ]
     if session.write_requested and not _session_approved(session):
         risks.append("승인 전 쓰기 진행 시 정책 위반 — write 게이트 차단 유지")
@@ -747,7 +747,7 @@ def _fallback_backend_engineer(ctx: DeliberationContext) -> BackendEngineerTake:
 
     perspective = (
         "데이터 모델, 외부 API 계약, 인증/권한, 저장소 영향을 점검해 "
-        "실행자가 안전하게 변경을 적용할 수 있는지 판단한다."
+        "실행 후보가 안전하게 변경을 적용할 수 있는지 판단한다."
     )
 
     next_actions: list[str] = [
@@ -835,13 +835,13 @@ def _fallback_qa_engineer(ctx: DeliberationContext) -> QaEngineerTake:
         )
 
     perspective = (
-        "수용 기준과 회귀 영향을 정의해 실행자가 만든 변경이 "
+        "수용 기준과 회귀 영향을 정의해 실행 후보가 만든 변경이 "
         "기존 사용자/플로우를 깨뜨리지 않는지 검증한다."
     )
 
     next_actions: list[str] = [
         "수용 기준 thread에 commit-by-commit 매핑",
-        "회귀 묶음 영향 확인 — 실행자 PR에 라벨 부착",
+        "회귀 묶음 영향 확인 — 실행 후보 PR에 라벨 부착",
     ]
     backend_data = _previous_field(ctx.previous_turns, BackendEngineerTake, "data_impact")
     if backend_data:
@@ -1103,8 +1103,8 @@ def _consensus_summary(session: WorkflowSession, takes: Sequence[RoleTake]) -> s
     role_names = [_short_role(getattr(take, "role", "")) for take in takes]
     role_text = ", ".join(r for r in role_names if r) or "tech-lead"
     return (
-        f"{session.task_type} 작업을 {role_text} 순서로 검토했습니다 — "
-        f"실행자 `{session.executor_role or 'tech-lead'}`가 결정 사항을 반영해 진행."
+        f"{session.task_type} 작업에 {role_text}가 참여해 검토했습니다 — "
+        f"실행 후보 `{session.executor_role or 'tech-lead'}`가 결정 사항을 반영해 진행."
     )
 
 

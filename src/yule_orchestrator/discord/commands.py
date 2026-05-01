@@ -180,7 +180,7 @@ def register_discord_commands(
             f"세션 ID: `{session.session_id}`\n"
             f"상태: {session.state.value}\n"
             f"분류: {session.task_type}\n"
-            f"실행자: {session.executor_role} ({session.executor_runner or '?'})"
+            f"실행 후보: {session.executor_role} ({session.executor_runner or '?'})"
         )
         if session.write_blocked_reason:
             summary += f"\n승인 대기: {session.write_blocked_reason}"
@@ -580,7 +580,7 @@ def _format_engineer_approve_message(session) -> str:
         "**[engineering-agent] 세션 승인 완료**",
         f"세션 ID: `{session.session_id}`",
         f"상태: {session.state.value}",
-        f"실행자: {session.executor_role} ({session.executor_runner or '?'})",
+        f"실행 후보: {session.executor_role} ({session.executor_runner or '?'})",
         "",
         "이제 `/engineer_progress`로 진행 메모를 남기거나 `/engineer_complete`로 마무리할 수 있습니다.",
     ]

@@ -23,7 +23,7 @@
 | `#승인-대기` | `DISCORD_ENGINEERING_APPROVAL_CHANNEL_ID`, `DISCORD_ENGINEERING_APPROVAL_CHANNEL_NAME` | **예약** — 런타임 미연결 | write 승인 UX 자동화(예: 접수 메시지 미러링, ✅ 반응 승인)에서 사용 예정. |
 | `#봇-상태` | `DISCORD_ENGINEERING_STATUS_CHANNEL_ID`, `DISCORD_ENGINEERING_STATUS_CHANNEL_NAME` | **예약** — 런타임 미연결 | 헬스체크/오류 알림/봇 가동 상태 broadcast 예정. |
 | `#실험실` | `DISCORD_ENGINEERING_LAB_CHANNEL_ID`, `DISCORD_ENGINEERING_LAB_CHANNEL_NAME` | **예약** — 런타임 미연결 | 신규 워크플로/프롬프트 실험용 sandbox. |
-| `#운영-리서치` (Forum) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID`, `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | **활성** — `ResearchForumContext.from_env()`가 직접 읽는다 | 부서 공통 research/deliberation inbox. 자료 수집 → 역할별 검토 → tech-lead 종합 → Obsidian 후보 선정. 운영 규약은 `research-forum.md` 참조. |
+| `#운영-리서치` (Forum) | `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_ID`, `DISCORD_AGENT_RESEARCH_FORUM_CHANNEL_NAME` | **활성** — `ResearchForumContext.from_env()`가 직접 읽는다 | 부서 공통 research/deliberation inbox. gateway 자료 seed 게시 → `[research-open:<session_id>]` 공개 호출 → 멤버 봇별 독립 조사/검토. 운영 규약은 `research-forum.md` 참조. |
 
 규약
 - intake 채널 키는 ID/NAME 둘 다 같은 채널을 가리키는 게 권장이다. 한쪽만 채워도 라우팅은 동작하지만, 채널 ID가 바뀌었을 때 NAME fallback이 있으면 무중단 복구가 쉽다.
@@ -45,7 +45,7 @@
 
 ### 3.1 접수 메시지 (`format_intake_message`)
 표준 섹션:
-1. 헤더: `**[engineering-agent] 새 작업 접수**`, 세션 ID, 분류, 역할 순서, 실행자, 어드바이저.
+1. 헤더: `**[engineering-agent] 새 작업 접수**`, 세션 ID, 분류, 참여 후보, 실행 후보, 검토 후보.
 2. **참고 레퍼런스 (제안)**:
    - 사용자 제공 (1순위): prompt 안의 URL을 추출해 노출 (`extract_urls`).
    - task_type 추천 카테고리: dispatcher가 매핑한 소스 이름.
@@ -53,11 +53,11 @@
 3. **승인 필요** 섹션: write 게이트 차단 시 사유 + 승인 명령 안내.
 
 ### 3.2 진행 메시지 (`format_progress_message`)
-- 상태, 실행자, 최근 메모 5건 (FIFO 누적).
+- 상태, 실행 후보, 최근 메모 5건 (FIFO 누적).
 - 메모는 짧게(한 줄). 자세한 내용은 thread 또는 PR 링크로 풀어쓴다.
 
 ### 3.3 완료 메시지 (`format_completion_message`)
-- 분류, 실행자, **요약**, **반영한 레퍼런스**.
+- 분류, 실행 후보, **요약**, **반영한 레퍼런스**.
 - 반영한 레퍼런스는 `{title, source, url, rationale}` 키 4종을 가진 객체 배열. rationale은 "차용한 패턴 + 어떻게 재구성했는지" 한 줄.
 - 제안된 reference가 있었지만 실제 인용이 없으면 `- (없음 — 본 작업은 reference를 직접 인용하지 않았습니다)`로 명시 (감추지 않는다).
 
@@ -135,6 +135,6 @@ reaction-기반 승인은 후속 이슈에서 추가한다. thread 자동 생성
 
 1. **승인 reaction 핸들러** — 접수 메시지의 ✅ 반응으로 승인, ❌로 거절.
 2. **Thread continuation UX 강화** — 열린 thread 후보가 여러 개일 때 선택지를 보여주는 복구 UI.
-3. **멤버 봇 IPC 연결** — approve된 세션이 dispatcher의 executor_role 멤버 봇 큐에 흘러들어가 실제 실행. write 게이트는 실행 시점에서 한 번 더 검사.
+3. **멤버 봇 실행 루프 연결** — approve된 세션이 각 멤버 봇의 작업 큐에 흘러들어가 GitHub issue/branch/PR 단위 실행으로 이어진다. write 게이트는 실행 시점에서 한 번 더 검사.
 4. **Reference fetcher** — `REFERENCE_*` env 슬롯이 채워졌을 때만 동작. fetch 결과를 references_suggested에 채운다.
 5. **PR 본문 자동 생성** — 완료 메시지 포맷을 그대로 PR description으로 옮기는 헬퍼 (reference-pack.md §산출 양식과 일치).
