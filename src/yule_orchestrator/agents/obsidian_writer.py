@@ -11,8 +11,13 @@ Safety guarantees:
 - The resolved file path must remain inside the vault root (no traversal
   via ``..`` or symlinks resolving outside).
 - Parent directories are created automatically.
-- Overwrite of an existing file is refused unless ``overwrite=True``.
-- ``dry_run=True`` performs all checks but never writes.
+- When the recommended path already exists and ``overwrite`` is False,
+  the writer auto-appends ``_2``, ``_3``, ... before the ``.md`` suffix
+  inside the same folder so existing notes are never silently clobbered
+  and the new write is never silently skipped.
+- ``overwrite=True`` keeps the recommended filename and replaces it.
+- ``dry_run=True`` performs all checks (including suffix selection) but
+  never writes.
 """
 
 from __future__ import annotations
@@ -32,18 +37,26 @@ class ObsidianWriteError(RuntimeError):
     """Raised when an Obsidian write request cannot be honored safely."""
 
 
+MAX_SUFFIX_ATTEMPTS = 1000
+
+
 @dataclass(frozen=True)
 class ObsidianWriteResult:
     """Outcome of one write attempt.
 
-    ``written`` is False for dry-runs and for skipped overwrites; the
-    caller can still report ``target_path`` to the user.
+    ``target_path`` is always the real path that was (or would be) written
+    — including any auto-suffix applied. ``original_target_path`` is the
+    untouched recommendation from the exporter; ``suffix_applied`` is True
+    iff the writer had to pick a different filename to avoid a collision.
+    ``written`` is False only for dry-runs.
     """
 
     target_path: Path
     written: bool
     dry_run: bool
     overwrite: bool
+    original_target_path: Optional[Path] = None
+    suffix_applied: bool = False
     skipped_reason: Optional[str] = None
 
 
@@ -93,9 +106,11 @@ def write_note(
 ) -> ObsidianWriteResult:
     """Write *note.content* to ``<vault_root>/<note.path.full>``.
 
-    Returns an :class:`ObsidianWriteResult` describing what happened.
-    Caller is expected to surface ``target_path`` and ``skipped_reason``
-    to the user.
+    When the recommended path already exists and *overwrite* is False,
+    the writer auto-appends ``_2``, ``_3``, ... before the file suffix
+    until it finds a free name in the same folder. The returned
+    :class:`ObsidianWriteResult` always reports the real path that was
+    selected, so the caller can echo it back to the user.
     """
 
     vault_root_resolved = vault_root.resolve()
@@ -110,14 +125,11 @@ def write_note(
             f"vault={vault_root_resolved} target={target}"
         ) from exc
 
+    original_target = target
+    suffix_applied = False
     if target.exists() and not overwrite:
-        return ObsidianWriteResult(
-            target_path=target,
-            written=False,
-            dry_run=dry_run,
-            overwrite=overwrite,
-            skipped_reason="file already exists; pass --overwrite to replace it",
-        )
+        target = _resolve_collision_free_target(target, vault_root_resolved)
+        suffix_applied = True
 
     if dry_run:
         return ObsidianWriteResult(
@@ -125,6 +137,8 @@ def write_note(
             written=False,
             dry_run=True,
             overwrite=overwrite,
+            original_target_path=original_target,
+            suffix_applied=suffix_applied,
         )
 
     try:
@@ -146,4 +160,36 @@ def write_note(
         written=True,
         dry_run=False,
         overwrite=overwrite,
+        original_target_path=original_target,
+        suffix_applied=suffix_applied,
+    )
+
+
+def _resolve_collision_free_target(target: Path, vault_root: Path) -> Path:
+    """Return ``target`` with ``_<n>`` appended before the suffix until free.
+
+    Searches the same folder for ``stem_2.<suffix>``, ``stem_3.<suffix>``,
+    ... (capped at :data:`MAX_SUFFIX_ATTEMPTS`). Each candidate is
+    re-validated against the vault root so symlinks or odd filesystem
+    states cannot drag the write outside the vault.
+    """
+
+    parent = target.parent
+    stem = target.stem
+    suffix = target.suffix
+    for index in range(2, MAX_SUFFIX_ATTEMPTS + 2):
+        candidate = (parent / f"{stem}_{index}{suffix}").resolve()
+        try:
+            candidate.relative_to(vault_root)
+        except ValueError as exc:
+            raise ObsidianWriteError(
+                f"Refusing to write outside the vault root. "
+                f"vault={vault_root} target={candidate}"
+            ) from exc
+        if not candidate.exists():
+            return candidate
+    raise ObsidianWriteError(
+        f"Could not find a free filename near {target} after "
+        f"{MAX_SUFFIX_ATTEMPTS} attempts. Run with --overwrite or "
+        "clean up old notes."
     )

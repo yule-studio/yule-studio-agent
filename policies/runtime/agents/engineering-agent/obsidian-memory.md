@@ -170,10 +170,10 @@ CLI는 다음 순서로 동작한다.
 ### 8.3 안전 정책
 
 - vault root는 절대경로여야 하고 디렉터리로 존재해야 한다.
-- 최종 target path는 `vault_root.resolve() / note.path.full`을 다시 resolve한 뒤 `relative_to(vault_root)`로 검증 — 즉 symlink 등으로 vault 밖으로 나가는 path traversal은 거부된다.
+- 최종 target path는 `vault_root.resolve() / note.path.full`을 다시 resolve한 뒤 `relative_to(vault_root)`로 검증 — 즉 symlink 등으로 vault 밖으로 나가는 path traversal은 거부된다. auto-suffix가 만든 후보 경로도 같은 검증을 다시 통과해야 한다.
 - parent 디렉터리는 `mkdir(parents=True, exist_ok=True)`로 자동 생성한다.
-- 기본은 **overwrite 금지**: 같은 path가 이미 있으면 `skipped` 결과를 반환하고 사유를 출력한다. 덮어쓰려면 `--overwrite`를 명시해야 한다.
-- `--dry-run`은 모든 검증을 수행하지만 파일은 만들지 않는다.
+- 같은 path가 이미 있으면 기본 동작은 **자동 suffix**다 — 같은 폴더 안에서 `<name>_2.md`, `<name>_3.md` … 순으로 비어 있는 첫 후보를 골라 새 파일로 저장한다. 기존 노트는 절대 silently 덮이지 않고, 새 sync는 silently skip되지 않는다. `--overwrite`를 명시하면 suffix 없이 원래 파일명을 그대로 덮어쓴다.
+- `--dry-run`은 auto-suffix 선택까지 포함한 모든 검증을 수행하지만 파일은 만들지 않는다 — 출력되는 target path가 실제 sync 결과와 동일하다.
 - 실패 시 `error: ...` 형식으로 stderr에 사람이 이해 가능한 메시지를 남긴다.
 
 ### 8.4 출력 경로 예시
@@ -213,9 +213,26 @@ backward compatibility
 - 저장 payload가 손상되어 `synthesis_from_dict`가 실패하면 `warning: ...`을 stderr에 한 줄 남기고 synthesis 없이 진행한다.
 - `consensus`가 누락되거나 타입이 어긋나면 best-effort로 빈 본문이 들어간 합의안 섹션을 만든다 — sync 자체는 성공.
 
-### 8.7 남은 후속 작업
+### 8.7 파일명 충돌 정책
+
+같은 날짜·같은 slug로 export가 반복되면 writer가 같은 폴더 안에서 첫 비어 있는 이름을 자동으로 고른다.
+
+```
+Agents/Engineering/Research/2026-04-30_stripe-pricing.md      # 1회차
+Agents/Engineering/Research/2026-04-30_stripe-pricing_2.md    # 2회차
+Agents/Engineering/Research/2026-04-30_stripe-pricing_3.md    # 3회차
+```
+
+규칙
+- suffix는 `.md` 앞에 붙는다 (`<stem>_<n>.<suffix>`).
+- 같은 폴더 안에서만 검색한다.
+- `--overwrite`가 있으면 suffix를 적용하지 않고 원래 파일을 그대로 덮어쓴다.
+- `--dry-run`은 auto-suffix 후보 선택까지 미리 수행해 실제 sync와 같은 target path를 출력한다.
+- `ObsidianWriteResult.original_target_path`/`suffix_applied`로 호출자가 원래 추천 path와 실제 선택된 path를 구분할 수 있다 — CLI는 suffix가 적용되면 `note: applied auto-suffix to avoid clobbering ...` 한 줄을 추가 출력한다.
+- 같은 폴더에 1000개의 후보가 모두 차 있으면 (운영상 도달 불가 수준) `ObsidianWriteError`로 실패해 호출자가 정리 또는 `--overwrite` 결정을 내릴 수 있게 한다.
+
+### 8.8 남은 후속 작업
 
 1. vault git 통합 — vault를 git으로 관리하고 sync 직후 자동 commit.
 2. `[Obsidian]` 댓글이 달린 forum thread 자동 export pipeline (research-forum.md §4.3와 결합).
-3. 파일명 충돌 정책 확장 — 같은 날짜·같은 slug일 때 `_2.md` 같은 suffix 자동 부여 (현재는 `--overwrite` 명시 또는 skip).
-4. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.
+3. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.

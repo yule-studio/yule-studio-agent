@@ -200,6 +200,47 @@ class ObsidianSyncCommandTestCase(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(list(Path(tmp).rglob("*.md")), [])
 
+    def test_collision_output_reflects_auto_suffix_path(self) -> None:
+        session = _session(extra={"research_pack": pack_to_dict(_pack())})
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "yule_orchestrator.cli.obsidian.load_session", return_value=session
+            ):
+                first_buf = io.StringIO()
+                with redirect_stdout(first_buf):
+                    rc1 = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=tmp,
+                        overwrite=False,
+                        dry_run=False,
+                    )
+                self.assertEqual(rc1, 0)
+                self.assertNotIn("auto-suffix", first_buf.getvalue())
+
+                second_buf = io.StringIO()
+                with redirect_stdout(second_buf):
+                    rc2 = run_obsidian_sync_command(
+                        session.session_id,
+                        kind=None,
+                        vault_path=tmp,
+                        overwrite=False,
+                        dry_run=False,
+                    )
+                self.assertEqual(rc2, 0)
+                stdout = second_buf.getvalue()
+                self.assertIn("_2.md", stdout)
+                self.assertIn("auto-suffix", stdout)
+
+            written = sorted(p.name for p in Path(tmp).rglob("*.md"))
+            self.assertEqual(
+                written,
+                [
+                    "2026-04-30_stripe-pricing-패턴.md",
+                    "2026-04-30_stripe-pricing-패턴_2.md",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

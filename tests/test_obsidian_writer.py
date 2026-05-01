@@ -90,15 +90,69 @@ class WriteNoteTestCase(unittest.TestCase):
             write_note(_note(), vault)
             self.assertTrue((vault / "Agents/Engineering/Research").is_dir())
 
-    def test_refuses_overwrite_by_default(self) -> None:
+    def test_first_collision_auto_suffixes_to_2(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             first = write_note(_note(), vault)
             self.assertTrue(first.written)
+            self.assertFalse(first.suffix_applied)
+
             second = write_note(_note(), vault)
-            self.assertFalse(second.written)
-            self.assertIsNotNone(second.skipped_reason)
-            self.assertIn("already exists", second.skipped_reason or "")
+            self.assertTrue(second.written)
+            self.assertTrue(second.suffix_applied)
+            self.assertEqual(second.target_path.name, "2026-04-30_stripe_2.md")
+            self.assertEqual(
+                second.original_target_path,
+                (vault / "Agents/Engineering/Research/2026-04-30_stripe.md").resolve(),
+            )
+            # Original file is untouched
+            self.assertEqual(
+                first.target_path.read_text(encoding="utf-8"),
+                "---\ntitle: Stripe\n---\n\n# Stripe\n",
+            )
+
+    def test_second_collision_auto_suffixes_to_3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            write_note(_note(), vault)
+            write_note(_note(), vault)  # creates _2.md
+
+            third = write_note(_note(), vault)
+            self.assertTrue(third.written)
+            self.assertTrue(third.suffix_applied)
+            self.assertEqual(third.target_path.name, "2026-04-30_stripe_3.md")
+
+    def test_overwrite_keeps_original_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            first = write_note(_note(), vault)
+            replacement = ObsidianNote(
+                path=ExportPath(folder="Agents/Engineering/Research", filename="2026-04-30_stripe.md"),
+                content="---\ntitle: Stripe v2\n---\n\n# Stripe v2\n",
+                frontmatter={"title": "Stripe v2"},
+            )
+            result = write_note(replacement, vault, overwrite=True)
+            self.assertTrue(result.written)
+            self.assertFalse(result.suffix_applied)
+            self.assertEqual(result.target_path, first.target_path)
+            self.assertIn("Stripe v2", result.target_path.read_text(encoding="utf-8"))
+            # No _2.md was created
+            self.assertFalse(
+                (vault / "Agents/Engineering/Research/2026-04-30_stripe_2.md").exists()
+            )
+
+    def test_dry_run_with_collision_reports_final_suffixed_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            write_note(_note(), vault)  # occupy original name
+
+            result = write_note(_note(), vault, dry_run=True)
+            self.assertFalse(result.written)
+            self.assertTrue(result.dry_run)
+            self.assertTrue(result.suffix_applied)
+            self.assertEqual(result.target_path.name, "2026-04-30_stripe_2.md")
+            # Dry-run must not create the suffixed file
+            self.assertFalse(result.target_path.exists())
 
     def test_overwrite_replaces_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

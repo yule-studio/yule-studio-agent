@@ -86,10 +86,19 @@ def run_obsidian_sync_command(
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    relative = note.path.full
+    try:
+        relative = result.target_path.relative_to(vault_root)
+    except ValueError:
+        relative = result.target_path
+
     if result.dry_run:
         print(f"dry-run: would write {result.target_path}")
         print(f"vault={vault_root} relative={relative}")
+        if result.suffix_applied and result.original_target_path is not None:
+            print(
+                f"note: applied auto-suffix to avoid clobbering "
+                f"{result.original_target_path}"
+            )
         return 0
     if not result.written:
         print(f"skipped: {result.target_path}")
@@ -98,4 +107,9 @@ def run_obsidian_sync_command(
         return 0
     print(f"wrote: {result.target_path}")
     print(f"vault={vault_root} relative={relative}")
+    if result.suffix_applied and result.original_target_path is not None:
+        print(
+            f"note: applied auto-suffix to avoid clobbering "
+            f"{result.original_target_path}"
+        )
     return 0
