@@ -194,9 +194,28 @@ $OBSIDIAN_VAULT_PATH/Agents/Engineering/References/2026-04-30_landing-references
 - 절대경로 아님 / 디렉터리 없음: `FAIL` + hint.
 - 정상: `OK` + 해석된 절대경로.
 
-### 8.6 남은 후속 작업
+### 8.6 synthesis 복원
+
+게이트웨이가 deliberation을 마치면 `TechLeadSynthesis`(합의안/해야 할 일/더 조사할 것/사용자 결정 필요/승인 여부)는 같은 시점에 ResearchPack과 함께 `session.extra`로 영속화된다. sync는 이 값을 읽어 decision note로 그대로 흘린다.
+
+저장 키
+- `session.extra["research_synthesis"]` — `synthesis_to_dict`가 만든 dict (`v: 1` + 6필드).
+- `session.extra["research_synthesis_text"]` — 사람이 읽기 쉬운 렌더 텍스트(현재 sync는 사용 안 하지만 외부 디버그용으로 함께 보존).
+
+복원 순서 (`yule obsidian sync`):
+1. session.extra에 `research_synthesis`가 있으면 `synthesis_from_dict`로 `TechLeadSynthesis` 복원.
+2. 복원된 synthesis를 `render_research_note(pack, session=session, synthesis=synthesis, kind=...)`로 전달.
+3. exporter contract에 따라 kind 미지정 시 자동 `decision`으로 분류되어 `Agents/Engineering/Decisions/...`에 떨어진다.
+4. 본문에 `## 합의안 / ## 해야 할 일 / ## 더 조사할 것 / ## 사용자 결정 필요 / ## 승인 필요 여부` 5개 섹션이 모두 들어간다.
+
+backward compatibility
+- 저장 키가 없는 옛 session은 sync가 정상 동작하되 `research` 노트로만 떨어진다(synthesis 섹션 없음). crash하지 않는다.
+- 저장 payload가 손상되어 `synthesis_from_dict`가 실패하면 `warning: ...`을 stderr에 한 줄 남기고 synthesis 없이 진행한다.
+- `consensus`가 누락되거나 타입이 어긋나면 best-effort로 빈 본문이 들어간 합의안 섹션을 만든다 — sync 자체는 성공.
+
+### 8.7 남은 후속 작업
 
 1. vault git 통합 — vault를 git으로 관리하고 sync 직후 자동 commit.
 2. `[Obsidian]` 댓글이 달린 forum thread 자동 export pipeline (research-forum.md §4.3와 결합).
 3. 파일명 충돌 정책 확장 — 같은 날짜·같은 slug일 때 `_2.md` 같은 suffix 자동 부여 (현재는 `--overwrite` 명시 또는 skip).
-4. synthesis 영속화 — 현재 `WorkflowSession`에는 `TechLeadSynthesis`가 저장되지 않으므로 sync도 synthesis 본문 없이 진행된다. 필요해지면 session.extra에 함께 round-trip.
+4. RoleTake 영속화 — 현재 sync는 synthesis까지만 복원한다. 역할별 의견 본문(role takes)을 Obsidian에 남기려면 별도 round-trip이 필요하다.

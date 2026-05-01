@@ -251,6 +251,67 @@ class TechLeadSynthesis:
     approval_reason: Optional[str] = None
 
 
+SYNTHESIS_PERSIST_VERSION = 1
+
+
+def synthesis_to_dict(synthesis: TechLeadSynthesis) -> dict:
+    """Serialize a :class:`TechLeadSynthesis` for ``session.extra``.
+
+    The ``v`` key lets future readers branch on schema changes; current
+    consumers read ``v=1``.
+    """
+
+    return {
+        "v": SYNTHESIS_PERSIST_VERSION,
+        "consensus": synthesis.consensus,
+        "todos": list(synthesis.todos),
+        "open_research": list(synthesis.open_research),
+        "user_decisions_needed": list(synthesis.user_decisions_needed),
+        "approval_required": bool(synthesis.approval_required),
+        "approval_reason": synthesis.approval_reason,
+    }
+
+
+def synthesis_from_dict(data: Mapping[str, Any]) -> TechLeadSynthesis:
+    """Reverse :func:`synthesis_to_dict` — best-effort reconstruction.
+
+    Missing/malformed lists fall back to empty tuples. ``consensus`` is
+    coerced to ``str`` so a malformed payload still produces a usable
+    synthesis (the export will simply have an empty consensus block).
+    """
+
+    consensus = data.get("consensus")
+    consensus_text = str(consensus) if consensus is not None else ""
+    return TechLeadSynthesis(
+        consensus=consensus_text,
+        todos=tuple(_synthesis_str_list(data.get("todos"))),
+        open_research=tuple(_synthesis_str_list(data.get("open_research"))),
+        user_decisions_needed=tuple(
+            _synthesis_str_list(data.get("user_decisions_needed"))
+        ),
+        approval_required=bool(data.get("approval_required")),
+        approval_reason=_synthesis_optional_str(data.get("approval_reason")),
+    )
+
+
+def _synthesis_str_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    try:
+        return [str(item) for item in value if item is not None]
+    except TypeError:
+        return []
+
+
+def _synthesis_optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 @dataclass(frozen=True)
 class DeliberationContext:
     """Bundled inputs for one role's deliberation turn."""

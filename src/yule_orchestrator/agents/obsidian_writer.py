@@ -127,8 +127,20 @@ def write_note(
             overwrite=overwrite,
         )
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(note.content, encoding="utf-8")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ObsidianWriteError(
+            f"Could not prepare parent directories for {target}: {exc}"
+        ) from exc
+
+    try:
+        target.write_text(note.content, encoding="utf-8")
+    except OSError as exc:
+        raise ObsidianWriteError(
+            f"Could not write Obsidian note to {target}: {exc}"
+        ) from exc
+
     return ObsidianWriteResult(
         target_path=target,
         written=True,

@@ -48,6 +48,7 @@ from ..agents.research_loop import (
     run_research_loop,
 )
 from ..agents.research_collector import resolve_forum_comment_mode
+from ..agents.deliberation import synthesis_to_dict
 from ..agents.research_pack import pack_to_dict
 from ..agents.research_profiles import format_research_hints_block
 from .engineering_team_runtime import kickoff_directive
@@ -1892,6 +1893,8 @@ def _make_default_engineering_research_loop_fn(discord_module: "discord"):
             outcome.session,
             outcome.research_pack,
             collection_outcome=collection_outcome,
+            synthesis=getattr(outcome, "synthesis", None),
+            synthesis_text=getattr(outcome, "synthesis_text", None),
         )
         if persisted_session is not outcome.session:
             outcome = replace(outcome, session=persisted_session)
@@ -1934,14 +1937,25 @@ def _persist_research_pack_for_member_bots(
     pack,
     *,
     collection_outcome=None,
+    synthesis=None,
+    synthesis_text=None,
 ):
-    """Persist the collected pack so member bots can restore shared evidence."""
+    """Persist the collected pack (and optional synthesis) for downstream readers.
 
-    if session is None or pack is None:
+    Member bots replay deliberation against the stored ``research_pack``;
+    the Obsidian sync CLI additionally restores ``research_synthesis`` so
+    decision notes ship with 합의안/해야 할 일/승인 여부 sections instead of
+    rendering bare research notes.
+    """
+
+    if session is None:
+        return session
+    if pack is None and synthesis is None:
         return session
     try:
         extra = dict(getattr(session, "extra", None) or {})
-        extra["research_pack"] = pack_to_dict(pack)
+        if pack is not None:
+            extra["research_pack"] = pack_to_dict(pack)
         if collection_outcome is not None:
             mode = getattr(collection_outcome, "mode", None)
             mode_value = getattr(mode, "value", mode)
@@ -1953,6 +1967,10 @@ def _persist_research_pack_for_member_bots(
                     collection_outcome, "auto_collected_count", None
                 ),
             }
+        if synthesis is not None:
+            extra["research_synthesis"] = synthesis_to_dict(synthesis)
+        if synthesis_text:
+            extra["research_synthesis_text"] = str(synthesis_text)
         updated = replace(session, extra=extra)
         return update_session(updated, now=datetime.now().astimezone())
     except Exception as exc:  # noqa: BLE001 - forum loop can continue without persisted context

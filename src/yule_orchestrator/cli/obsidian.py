@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from typing import Optional
 
+from ..agents.deliberation import synthesis_from_dict
 from ..agents.obsidian_export import render_research_note
 from ..agents.obsidian_writer import (
     ObsidianWriteError,
@@ -54,13 +55,25 @@ def run_obsidian_sync_command(
         print(f"error: could not parse stored research_pack: {exc}", file=sys.stderr)
         return 1
 
+    synthesis = None
+    synthesis_payload = (session.extra or {}).get("research_synthesis")
+    if synthesis_payload:
+        try:
+            synthesis = synthesis_from_dict(synthesis_payload)
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully for older payloads
+            print(
+                f"warning: could not parse stored research_synthesis ({exc}); "
+                "exporting research note without synthesis sections.",
+                file=sys.stderr,
+            )
+
     try:
         vault_root = resolve_vault_root(override=vault_path)
     except ObsidianWriteError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    note = render_research_note(pack, session=session, kind=kind)
+    note = render_research_note(pack, session=session, synthesis=synthesis, kind=kind)
 
     try:
         result = write_note(

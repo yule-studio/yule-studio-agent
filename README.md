@@ -440,6 +440,8 @@ yule obsidian sync --session <session_id> --kind reference
 
 vault 안에는 exporter가 정한 `Agents/Engineering/<kind>/YYYY-MM-DD_<slug>.md` 경로로 떨어집니다. 예: `$OBSIDIAN_VAULT_PATH/Agents/Engineering/Research/2026-04-30_stripe-pricing.md`. 자세한 contract와 안전 정책은 `policies/runtime/agents/engineering-agent/obsidian-memory.md`를 참고하세요. `yule doctor`는 `obsidian vault` 체크를 자동 수행합니다.
 
+게이트웨이가 deliberation을 끝내면 `TechLeadSynthesis`(합의안/해야 할 일/더 조사할 것/사용자 결정 필요/승인 여부)도 session에 함께 저장되어, sync는 이 값을 복원해 `Agents/Engineering/Decisions/...` 아래에 5개 섹션을 갖춘 결정 노트로 떨어뜨립니다. synthesis 키가 없는 오래된 session은 안전하게 fallback해 `Research` 폴더의 자료 노트로만 떨어집니다.
+
 ## Discord Bot
 
 - 단일 Discord Bot은 `yule discord bot`으로 실행합니다.

@@ -150,6 +150,27 @@ class WriteNoteTestCase(unittest.TestCase):
             with self.assertRaises(ObsidianWriteError):
                 write_note(note, vault)
 
+    def test_parent_directory_creation_failure_is_wrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "Agents").write_text("not a directory", encoding="utf-8")
+
+            with self.assertRaises(ObsidianWriteError) as ctx:
+                write_note(_note(), vault)
+
+            self.assertIn("Could not prepare parent directories", str(ctx.exception))
+
+    def test_write_failure_is_wrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            target = vault / "Agents/Engineering/Research/2026-04-30_stripe.md"
+            target.mkdir(parents=True)
+
+            with self.assertRaises(ObsidianWriteError) as ctx:
+                write_note(_note(), vault, overwrite=True)
+
+            self.assertIn("Could not write Obsidian note", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
